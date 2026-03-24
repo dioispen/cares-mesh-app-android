@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter run:*)",
+      "Bash(ipconfig getifaddr:*)",
+      "Bash(rsync -a --delete /Users/penny/disaster_app/ ~/Desktop/disaster_app/)",
+      "Bash(/Users/penny/Desktop/專題/flutter/bin/flutter run:*)",
+      "Bash(source ~/.zshrc)",
+      "Bash(source ~/.zprofile)",
+      "Bash(/Users/penny/flutter_sdk/bin/flutter run:*)",
+      "Bash(osascript -e 'tell application \"\"Terminal\"\":*)",
+      "Bash(~/Desktop/專題/flutter/bin/flutter --version)"
+    ]
+  }
+}
