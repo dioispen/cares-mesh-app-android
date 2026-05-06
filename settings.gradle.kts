@@ -1,5 +1,3 @@
-import org.gradle.api.initialization.resolve.RepositoriesMode
-
 pluginManagement {
     repositories {
         google()
@@ -12,6 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        gradlePluginPortal()
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
 
         // Guardian Project raw GitHub Maven (hosts info.guardianproject:arti-mobile-ex)
@@ -19,12 +18,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "bitchat-android_dioispen_project"
+rootProject.name = "bitchat-android"
 include(":app")
-
 // Using published Arti AAR; local module not included
-setBinding(new Binding([gradle: this]))
-evaluate(new File(
-settingsDir.parentFile,
-rootProject.name + '/flutter_module/.android/include_flutter.groovy'
-))
