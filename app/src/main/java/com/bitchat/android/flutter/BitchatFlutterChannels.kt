@@ -58,41 +58,16 @@ class BitchatFlutterChannels(
         }
         context.registerReceiver(statusReceiver, filter)
 
-        // 監聽來自 Mesh 的封包
+        // 監聽來自 Mesh 的封包，統一格式轉發給 Flutter 自行解析
         MeshServiceHolder.onPacketReceived = { packet: BitchatPacket ->
-            Log.d("BitchatBridge", "📨 收到封包，類型: ${packet.type} (HEALTH_REPORT=${MessageType.HEALTH_REPORT.value}), 大小: ${packet.payload.size}")
-            if (packet.type == MessageType.HEALTH_REPORT.value) {
-                Log.d("BitchatBridge", "🎯 這是 HEALTH_REPORT，開始解碼...")
-                try {
-                    // 嘗試解碼二進制格式
-                    val report = com.bitchat.android.protocol.HealthReportPayload.decode(packet.payload)
-                    if (report != null) {
-                        Log.d("BitchatBridge", "✅ HEALTH_REPORT 解碼成功: ${report.name} (${report.status}), lat=${report.lat}, lng=${report.lng}")
-                        val reportMap = mapOf(
-                            "reporterId" to report.reporterId,
-                            "name" to report.name,
-                            "phone" to report.phone,
-                            "bloodType" to report.bloodType,
-                            "status" to report.status,
-                            "description" to report.description,
-                            "lat" to report.lat,
-                            "lng" to report.lng,
-                            "reportTime" to report.reportTime
-                        )
-                        Log.d("BitchatBridge", "📤 正在發送事件給 Flutter...")
-                        emitEvent(mapOf(
-                            "type" to "health_report",
-                            "report" to reportMap,
-                            "senderId" to packet.senderID.toHexString()
-                        ))
-                        Log.d("BitchatBridge", "✨ 事件已發送給 Flutter")
-                    } else {
-                        Log.w("BitchatBridge", "❌ 無法解碼健康報告封包 (二進制格式)")
-                    }
-                } catch (e: Exception) {
-                    Log.e("BitchatBridge", "❌ 解析健康報告封包時出錯", e)
-                }
-            }
+            Log.d("BitchatBridge", "📨 收到封包，類型: 0x${packet.type.toString(16).uppercase()}, 大小: ${packet.payload.size}")
+            emitEvent(mapOf(
+                "type"       to "packet",
+                "packetType" to packet.type.toInt(),
+                "senderId"   to packet.senderID.toHexString(),
+                "timestamp"  to packet.timestamp.toLong(),
+                "payload"    to packet.payload.map { it.toInt() and 0xFF }
+            ))
         }
     }
 

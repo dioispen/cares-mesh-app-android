@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
 import '../bridge/bitchat_bridge.dart';
+import '../protocol/ble_packet_decoder.dart';
 
 class HealthService {
   String status = 'unknown';
@@ -120,45 +121,52 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
 
   void _listenToBridge() {
     _bridgeSubscription = BitchatBridge.events().listen((event) {
-      if (event['type'] == 'disaster_report') {
-        final reportData = event['report'];
-        if (reportData != null) {
-          final report = HealthReport.fromJson(Map<String, dynamic>.from(reportData));
-          if (report.reporterId == _currentUserId) return;
+      // 統一封包格式：Android 直接轉發原始封包，Flutter 負責解析
+      if (event['type'] == 'packet' &&
+          (event['packetType'] as num?)?.toInt() == BlePacketType.healthReport) {
+        final rawPayload = event['payload'];
+        if (rawPayload == null) return;
 
-          setState(() {
-            // 檢查是否已存在
-            final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
-            
-            double distanceKm = 0;
-            if (report.lat != null && report.lng != null && _currentPosition != null) {
-              final meters = Geolocator.distanceBetween(
-                _currentPosition!.latitude, _currentPosition!.longitude,
-                report.lat!, report.lng!,
-              );
-              distanceKm = meters / 1000;
-            }
+        final payload = List<int>.from(rawPayload as List);
+        final decoded = HealthReportPayload.decode(payload);
+        if (decoded == null) return;
 
-            final newTask = MutualAidTask(
-              id: 'ble_${report.reporterId}',
-              name: report.name,
-              userId: report.reporterId,
-              injury: report.status,
-              location: report.lat != null && report.lng != null
-                  ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
-                  : '位置未提供',
-              distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
-              note: report.description ?? '來自 BLE 廣播',
-              isBle: true,
+        // 不顯示自己發出的報告
+        if (decoded.reporterId == _currentUserId) return;
+
+        final report = decoded.toHealthReport();
+
+        setState(() {
+          final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
+
+          double distanceKm = 0;
+          if (report.lat != null && report.lng != null && _currentPosition != null) {
+            final meters = Geolocator.distanceBetween(
+              _currentPosition!.latitude, _currentPosition!.longitude,
+              report.lat!, report.lng!,
             );
+            distanceKm = meters / 1000;
+          }
 
-            if (index >= 0) {
-              _bleTasks[index] = newTask;
-            } else {
-              _bleTasks.add(newTask);
-            }
-          });
-        }
+          final newTask = MutualAidTask(
+            id: 'ble_${report.reporterId}',
+            name: report.name,
+            userId: report.reporterId,
+            injury: report.status,
+            location: report.lat != null && report.lng != null
+                ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
+                : '位置未提供',
+            distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
+            note: report.description ?? '來自 BLE 廣播',
+            isBle: true,
+          );
+
+          if (index >= 0) {
+            _bleTasks[index] = newTask;
+          } else {
+            _bleTasks.add(newTask);
+          }
+        });
       }
     });
   }
@@ -240,9 +248,11 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
     
     allTasks.addAll(firestoreTasks);
 
-    // 加入 BLE 任務 (去重：如果同一個 UserID 已經有 Firestore 任務，以 Firestore 為主)
+    // 加入 BLE 任務（只顯示需要協助的傷亡，安全狀態不列入）
+    // 去重：如果同一個 UserID 已有 Firestore 任務，以 Firestore 為主
     for (var bleTask in _bleTasks) {
-      if (!allTasks.any((t) => t.userId == bleTask.userId)) {
+      if ((bleTask.injury == '輕傷' || bleTask.injury == '重傷') &&
+          !allTasks.any((t) => t.userId == bleTask.userId)) {
         bleTask.status = _taskStatusOverrides[bleTask.id] ?? TaskStatus.waiting;
         allTasks.add(bleTask);
       }
@@ -313,10 +323,8 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
 
       final reportJson = report.toJson();
 
-      // 如果受傷，則透過 BLE 廣播
-      if (status == '輕傷' || status == '重傷') {
-        await BitchatBridge.sendHealthReport(reportJson);
-      }
+      // 所有狀態都透過 BLE 廣播，讓附近裝置知道你的狀態
+      await BitchatBridge.sendHealthReport(reportJson);
 
       // 上傳到 Firebase (原本邏輯保留)
       await FirebaseFirestore.instance
