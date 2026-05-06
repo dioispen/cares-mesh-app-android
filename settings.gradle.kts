@@ -21,3 +21,8 @@ dependencyResolutionManagement {
 rootProject.name = "bitchat-android"
 include(":app")
 // Using published Arti AAR; local module not included
+
+val flutterProjectDir = settingsDir.parentFile.resolve("${rootProject.name}/flutter_ui")
+
+// 2. 執行 Flutter 專案中的配置腳本
+apply(from = File(flutterProjectDir, ".android/include_flutter.groovy"))
