@@ -7,110 +7,100 @@ class DisasterReportTest {
 
     @Test
     fun testPayloadEncodingAndDecoding() {
-        // 1. Prepare sample data
-        val originalHealth = HealthAssessment(
-            consciousness = 0, // Alert
-            bleeding = 2,      // Moderate
-            breathing = 1      // Labored
-        )
-        
-        val originalPayload = DisasterReportPayload(
-            messageID = "TEST-ID-999",
-            timestamp = 1625097600000L,
-            severity = 2, // Critical
-            latitude = 25.0330,
-            longitude = 121.5654,
-            health = originalHealth,
-            otherMessage = "Need immediate assistance and water."
+        val original = HealthReportPayload(
+            reporterId = "TEST-ID-999",
+            name = "Test User",
+            phone = "0912345678",
+            bloodType = "A",
+            status = "輕傷",
+            description = "Need immediate assistance and water.",
+            lat = 25.0330,
+            lng = 121.5654,
+            reportTime = "2021-07-01T00:00:00Z"
         )
 
-        // 2. Encode to binary
-        val encoded = originalPayload.encode()
+        val encoded = original.encode()
         assertNotNull(encoded)
-        assertTrue(encoded.size > 0)
+        assertTrue(encoded.isNotEmpty())
 
-        // 3. Decode back to object
-        val decoded = DisasterReportPayload.decode(encoded)
-        
-        // 4. Verify all fields match
+        val decoded = HealthReportPayload.decode(encoded)
+
         assertNotNull(decoded)
-        assertEquals(originalPayload.messageID, decoded?.messageID)
-        assertEquals(originalPayload.timestamp, decoded?.timestamp)
-        assertEquals(originalPayload.severity, decoded?.severity)
-        assertEquals(originalPayload.latitude, decoded?.latitude)
-        assertEquals(originalPayload.longitude, decoded?.longitude)
-        assertEquals(originalPayload.health.consciousness, decoded?.health?.consciousness)
-        assertEquals(originalPayload.health.bleeding, decoded?.health?.bleeding)
-        assertEquals(originalPayload.health.breathing, decoded?.health?.breathing)
-        assertEquals(originalPayload.otherMessage, decoded?.otherMessage)
+        assertEquals(original.reporterId, decoded?.reporterId)
+        assertEquals(original.name, decoded?.name)
+        assertEquals(original.phone, decoded?.phone)
+        assertEquals(original.bloodType, decoded?.bloodType)
+        assertEquals(original.status, decoded?.status)
+        assertEquals(original.description, decoded?.description)
+        assertEquals(original.lat, decoded?.lat)
+        assertEquals(original.lng, decoded?.lng)
+        assertEquals(original.reportTime, decoded?.reportTime)
     }
 
     @Test
     fun testBitchatPacketIntegration() {
-        val payload = DisasterReportPayload(
-            messageID = "MSG-001",
-            timestamp = System.currentTimeMillis(),
-            severity = 1,
-            latitude = 25.0,
-            longitude = 121.0,
-            health = HealthAssessment(0, 0, 0),
-            otherMessage = "Relay test"
+        val payload = HealthReportPayload(
+            reporterId = "MSG-001",
+            name = "User",
+            phone = "0900000000",
+            bloodType = null,
+            status = "安全",
+            description = "Relay test",
+            lat = 25.0,
+            lng = 121.0,
+            reportTime = "2021-07-01T00:00:00Z"
         )
-        
+
         val senderID = ByteArray(8) { 0x01.toByte() }
         val encodedPayload = payload.encode()
-        
-        // Create a BitchatPacket containing the disaster report
-        // Using Type 0x30 for DISASTER_REPORT as defined in MessageType
+
         val packet = BitchatPacket(
             version = 1u,
-            type = MessageType.DISASTER_REPORT.value,
+            type = MessageType.HEALTH_REPORT.value,
             senderID = senderID,
-            recipientID = null, // Broadcast
+            recipientID = null,
             timestamp = System.currentTimeMillis().toULong(),
             payload = encodedPayload,
             ttl = 7u
         )
 
-        // Use toInt() to avoid UByte boxing issues with JUnit's assertEquals(Object, Object)
-        assertEquals(0x30, MessageType.DISASTER_REPORT.value.toInt())
-        assertEquals(MessageType.DISASTER_REPORT.value.toInt(), packet.type.toInt())
+        assertEquals(0x30, MessageType.HEALTH_REPORT.value.toInt())
+        assertEquals(MessageType.HEALTH_REPORT.value.toInt(), packet.type.toInt())
 
-        // Decode inner disaster payload
-        val decodedDisaster = DisasterReportPayload.decode(packet.payload)
-        assertNotNull(decodedDisaster)
-        assertEquals("MSG-001", decodedDisaster?.messageID)
-        assertEquals(1, decodedDisaster?.severity)
-
-        // Verify formatted content string (as used in MessageHandler)
-        val expectedContentPrefix = "[DISASTER REPORT]"
-        val formattedContent = "[DISASTER REPORT] Severity: ${decodedDisaster?.severity}\nLocation: ${decodedDisaster?.latitude}, ${decodedDisaster?.longitude}"
-        assertTrue(formattedContent.startsWith(expectedContentPrefix))
+        val decodedPayload = HealthReportPayload.decode(packet.payload)
+        assertNotNull(decodedPayload)
+        assertEquals("MSG-001", decodedPayload?.reporterId)
+        assertEquals("安全", decodedPayload?.status)
     }
 
     @Test
-    fun testEdgeCaseEmptyMessage() {
-        val payload = DisasterReportPayload(
-            messageID = "ID",
-            timestamp = 0L,
-            severity = 0,
-            latitude = -90.0,
-            longitude = 180.0,
-            health = HealthAssessment(3, 3, 3),
-            otherMessage = ""
+    fun testEdgeCaseEmptyOptionalFields() {
+        val payload = HealthReportPayload(
+            reporterId = "ID",
+            name = "N",
+            phone = "P",
+            bloodType = null,
+            status = "重傷",
+            description = null,
+            lat = null,
+            lng = null,
+            reportTime = "2000-01-01T00:00:00Z"
         )
-        
+
         val encoded = payload.encode()
-        val decoded = DisasterReportPayload.decode(encoded)
-        
-        assertEquals("", decoded?.otherMessage)
-        assertEquals(-90.0, decoded?.latitude ?: 0.0, 0.0)
+        val decoded = HealthReportPayload.decode(encoded)
+
+        assertNotNull(decoded)
+        assertNull(decoded?.bloodType)
+        assertNull(decoded?.description)
+        assertNull(decoded?.lat)
+        assertNull(decoded?.lng)
     }
 
     @Test
     fun testInvalidDataDecoding() {
         val junkData = byteArrayOf(0x01, 0x02, 0x03)
-        val decoded = DisasterReportPayload.decode(junkData)
+        val decoded = HealthReportPayload.decode(junkData)
         assertNull(decoded)
     }
 }

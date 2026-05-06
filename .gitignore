@@ -43,6 +43,7 @@ dependency-reduced-pom.xml
 # Other
 *.log
 .cxx/
+*.hprof
 # Gradle/Android build directories (but not tools/arti-build/)
 **/build/
 !tools/arti-build/
