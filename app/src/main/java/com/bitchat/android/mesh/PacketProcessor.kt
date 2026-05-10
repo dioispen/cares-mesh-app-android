@@ -95,6 +95,17 @@ class PacketProcessor(private val myPeerID: String) {
     }
     
     /**
+     * Release the actor for a peer that has disconnected.
+     * Prevents unbounded growth of the actors map when peers come and go.
+     */
+    fun cleanupPeer(peerID: String) {
+        actors.remove(peerID)?.let { channel ->
+            try { channel.close() } catch (_: Exception) { }
+            Log.d(TAG, "🎭 Cleaned up packet actor for departed peer $peerID")
+        }
+    }
+
+    /**
      * Set up the packet relay manager with its delegate
      */
     fun setupRelayManager() {

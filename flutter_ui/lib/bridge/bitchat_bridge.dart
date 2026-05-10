@@ -5,13 +5,20 @@ class BitchatBridge {
   static const MethodChannel _method = MethodChannel('com.bitchat/bridge/methods');
   static const EventChannel _events = EventChannel('com.bitchat/bridge/events');
 
+  // Cached broadcast stream — receiveBroadcastStream() must only be called once
+  // per EventChannel; a second call creates a conflicting platform listener.
+  static Stream<Map<String, dynamic>>? _cachedEventStream;
+
   static Stream<Map<String, dynamic>> events() {
-    return _events.receiveBroadcastStream().map((dynamic e) {
-      if (e is Map) {
-        return e.map((k, v) => MapEntry(k.toString(), v));
-      }
-      return <String, dynamic>{'type': 'unknown', 'raw': e};
-    });
+    return _cachedEventStream ??= _events
+        .receiveBroadcastStream()
+        .map((dynamic e) {
+          if (e is Map) {
+            return e.map((k, v) => MapEntry(k.toString(), v));
+          }
+          return <String, dynamic>{'type': 'unknown', 'raw': e};
+        })
+        .asBroadcastStream();
   }
 
   /// 獲取當前系統狀態 (藍牙、位置、權限)

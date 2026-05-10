@@ -196,6 +196,9 @@ class BluetoothMeshService(private val context: Context) {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to remove Noise session for $peerID: ${e.message}")
                 }
+
+                // Release the per-peer coroutine actor so it doesn't leak memory
+                try { packetProcessor.cleanupPeer(peerID) } catch (_: Exception) { }
             }
         }
         
@@ -938,17 +941,6 @@ class BluetoothMeshService(private val context: Context) {
     fun sendReadReceipt(messageID: String, recipientPeerID: String, readerNickname: String) {
         serviceScope.launch {
             Log.d(TAG, "📖 Sending read receipt for message $messageID to $recipientPeerID")
-
-            // Route geohash read receipts via MessageRouter instead of here
-            val geo = runCatching { com.bitchat.android.services.MessageRouter.tryGetInstance() }.getOrNull()
-            val isGeoAlias = try {
-                val map = com.bitchat.android.nostr.GeohashAliasRegistry.snapshot()
-                map.containsKey(recipientPeerID)
-            } catch (_: Exception) { false }
-            if (isGeoAlias && geo != null) {
-                geo.sendReadReceipt(com.bitchat.android.model.ReadReceipt(messageID), recipientPeerID)
-                return@launch
-            }
 
             try {
                 // Avoid duplicate read receipts: check persistent store first

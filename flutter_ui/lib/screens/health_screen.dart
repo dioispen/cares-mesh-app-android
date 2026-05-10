@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,6 +9,10 @@ import '../models/user.dart';
 import '../models/health_report.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
+
+// Top-level function required by compute() — must live outside any class.
+HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
+    HealthReportPayload.decode(payload);
 
 class HealthService {
   String status = 'unknown';
@@ -120,54 +125,57 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   }
 
   void _listenToBridge() {
-    _bridgeSubscription = BitchatBridge.events().listen((event) {
+    _bridgeSubscription = BitchatBridge.events().listen((event) async {
       // 統一封包格式：Android 直接轉發原始封包，Flutter 負責解析
-      if (event['type'] == 'packet' &&
-          (event['packetType'] as num?)?.toInt() == BlePacketType.healthReport) {
-        final rawPayload = event['payload'];
-        if (rawPayload == null) return;
+      if (event['type'] != 'packet') return;
+      if ((event['packetType'] as num?)?.toInt() != BlePacketType.healthReport) return;
 
-        final payload = List<int>.from(rawPayload as List);
-        final decoded = HealthReportPayload.decode(payload);
-        if (decoded == null) return;
+      final rawPayload = event['payload'];
+      if (rawPayload == null) return;
 
-        // 不顯示自己發出的報告
-        if (decoded.reporterId == _currentUserId) return;
+      final payload = List<int>.from(rawPayload as List);
 
-        final report = decoded.toHealthReport();
+      // 在背景 isolate 解碼二進位 payload，避免佔用 UI thread
+      final decoded = await compute(_decodeHealthReportPayload, payload);
+      if (decoded == null) return;
+      if (!mounted) return;
 
-        setState(() {
-          final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
+      // 不顯示自己發出的報告
+      if (decoded.reporterId == _currentUserId) return;
 
-          double distanceKm = 0;
-          if (report.lat != null && report.lng != null && _currentPosition != null) {
-            final meters = Geolocator.distanceBetween(
-              _currentPosition!.latitude, _currentPosition!.longitude,
-              report.lat!, report.lng!,
-            );
-            distanceKm = meters / 1000;
-          }
+      final report = decoded.toHealthReport();
+      final position = _currentPosition;
 
-          final newTask = MutualAidTask(
-            id: 'ble_${report.reporterId}',
-            name: report.name,
-            userId: report.reporterId,
-            injury: report.status,
-            location: report.lat != null && report.lng != null
-                ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
-                : '位置未提供',
-            distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
-            note: report.description ?? '來自 BLE 廣播',
-            isBle: true,
-          );
-
-          if (index >= 0) {
-            _bleTasks[index] = newTask;
-          } else {
-            _bleTasks.add(newTask);
-          }
-        });
+      double distanceKm = 0;
+      if (report.lat != null && report.lng != null && position != null) {
+        final meters = Geolocator.distanceBetween(
+          position.latitude, position.longitude,
+          report.lat!, report.lng!,
+        );
+        distanceKm = meters / 1000;
       }
+
+      final newTask = MutualAidTask(
+        id: 'ble_${report.reporterId}',
+        name: report.name,
+        userId: report.reporterId,
+        injury: report.status,
+        location: report.lat != null && report.lng != null
+            ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
+            : '位置未提供',
+        distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
+        note: report.description ?? '來自 BLE 廣播',
+        isBle: true,
+      );
+
+      setState(() {
+        final index = _bleTasks.indexWhere((t) => t.userId == newTask.userId);
+        if (index >= 0) {
+          _bleTasks[index] = newTask;
+        } else {
+          _bleTasks.add(newTask);
+        }
+      });
     });
   }
 
@@ -193,7 +201,8 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
       }
       if (permission == LocationPermission.whileInUse ||
           permission == LocationPermission.always) {
-        final position = await Geolocator.getCurrentPosition();
+        final position = await Geolocator.getCurrentPosition()
+            .timeout(const Duration(seconds: 5));
         if (mounted) setState(() => _currentPosition = position);
       }
     } catch (_) {}

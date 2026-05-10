@@ -22,7 +22,7 @@ class NostrRelayManager private constructor() {
     
     companion object {
         @JvmStatic
-        val shared = NostrRelayManager()
+        val shared: NostrRelayManager by lazy { NostrRelayManager() }
         
         private const val TAG = "NostrRelayManager"
         
