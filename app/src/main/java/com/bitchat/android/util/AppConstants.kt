@@ -89,6 +89,9 @@ object AppConstants {
     }
 
     object Nostr {
+        // Set to false to disable all Nostr relay connections (unrelated to BLE mesh)
+        const val ENABLED = false
+
         // Relay backoff
         const val INITIAL_BACKOFF_INTERVAL_MS: Long = 1_000L
         const val MAX_BACKOFF_INTERVAL_MS: Long = 300_000L

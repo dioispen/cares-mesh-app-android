@@ -14,8 +14,8 @@ import android.util.Log
 import android.bluetooth.BluetoothAdapter
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.bitchat.android.MainActivity
 import com.bitchat.android.R
+import com.bitchat.android.flutter.FlutterChatActivity
 import com.bitchat.android.mesh.BluetoothMeshService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -260,7 +260,7 @@ class MeshForegroundService : Service() {
     }
 
     private fun buildNotification(activePeers: Int): Notification {
-        val openIntent = Intent(this, MainActivity::class.java)
+        val openIntent = Intent(this, FlutterChatActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)

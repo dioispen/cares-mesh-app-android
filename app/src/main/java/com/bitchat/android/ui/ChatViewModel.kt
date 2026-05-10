@@ -296,11 +296,13 @@ class ChatViewModel(
         verificationHandler.loadVerifiedFingerprints()
 
 
-        // Ensure NostrTransport knows our mesh peer ID for embedded packets
-        try {
-            val nostrTransport = com.bitchat.android.nostr.NostrTransport.getInstance(getApplication())
-            nostrTransport.senderPeerID = meshService.myPeerID
-        } catch (_: Exception) { }
+        // Nostr is disabled (ENABLED = false); skip NostrTransport initialization
+        if (com.bitchat.android.util.AppConstants.Nostr.ENABLED) {
+            try {
+                val nostrTransport = com.bitchat.android.nostr.NostrTransport.getInstance(getApplication())
+                nostrTransport.senderPeerID = meshService.myPeerID
+            } catch (_: Exception) { }
+        }
 
         // Note: Mesh service is now started by MainActivity
 
@@ -636,7 +638,7 @@ class ChatViewModel(
                             nickname,
                             java.util.UUID.randomUUID().toString()
                         )
-                    } else {
+                    } else if (com.bitchat.android.util.AppConstants.Nostr.ENABLED) {
                         val nostrTransport = com.bitchat.android.nostr.NostrTransport.getInstance(getApplication())
                         nostrTransport.senderPeerID = meshService.myPeerID
                         nostrTransport.sendFavoriteNotification(peerID, isNowFavorite)

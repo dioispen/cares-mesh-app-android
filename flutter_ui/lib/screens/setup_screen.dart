@@ -19,9 +19,10 @@ class SetupScreen extends StatefulWidget {
 
 class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   String _statusText = '正在初始化...';
-  bool _isSearching = false;
+  bool _isChecking = false;
   bool _hasError = false;
   bool _needsPermissions = false;
+  bool _meshStarted = false;
   Map<String, String> _nearbyPeers = {};
   Timer? _searchTimer;
 
@@ -42,7 +43,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   void _stopTasks() {
     _searchTimer?.cancel();
     _searchTimer = null;
-    _isSearching = false;
+    _isChecking = false;
   }
 
   @override
@@ -53,11 +54,14 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startSetup() async {
-    if (_isSearching) return;
+    if (_isChecking) return;
 
     setState(() {
       _hasError = false;
       _needsPermissions = false;
+      _meshStarted = false;
+      _nearbyPeers = {};
+      _isChecking = true;
       _statusText = '檢查必要權限與服務狀態...';
     });
 
@@ -74,7 +78,8 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       setState(() {
         _hasError = true;
         _needsPermissions = true;
-        _statusText = '權限未開啟。\n請確保已授權相關權限以維持運行。';
+        _isChecking = false;
+        _statusText = '藍牙與位置權限未開啟。\n請授權後點擊「授權權限」繼續。';
       });
       await BitchatBridge.requestPermissions();
       return;
@@ -86,27 +91,26 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     if (!started) {
       setState(() {
         _hasError = true;
+        _isChecking = false;
         _statusText = '啟動 Mesh 失敗。\n請確認藍牙已開啟，且通知權限已允許。';
       });
       return;
     }
 
-    // 3. 開始搜尋附近裝置並進行註冊檢查
     setState(() {
-      _isSearching = true;
-      _statusText = '正在搜尋附近裝置...';
+      _meshStarted = true;
+      _statusText = '正在搜尋附近 Bitchat 節點...';
     });
 
+    // 3. 開始搜尋附近裝置並進行註冊檢查
     _searchTimer?.cancel();
     _searchTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       final peers = await BitchatBridge.getNearbyPeers();
       if (mounted) {
-        setState(() {
-          _nearbyPeers = peers;
-        });
+        setState(() => _nearbyPeers = peers);
       }
 
-      // 搜尋滿 2 秒（即第一次 Tick）後，就開始執行註冊狀態檢查，不用等待太久
+      // 搜尋滿一次 tick 後即可進行身份驗證
       if (timer.tick >= 1) {
         _checkRegistration();
       }
@@ -115,11 +119,11 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
 
   Future<void> _checkRegistration() async {
     if (!mounted) return;
-    
-    // 導航前停止 Timer
+
     _stopTasks();
-    
+
     setState(() {
+      _isChecking = true;
       _statusText = '驗證身分中...';
     });
 
@@ -127,13 +131,11 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     bool hasLocalData = false;
 
     try {
-      // Step A: 檢查原生層密鑰 或 Firebase Auth 登入狀態
       bool nativeRegistered = await BitchatBridge.isRegistered();
       final firebaseUser = FirebaseAuth.instance.currentUser;
       debugPrint('DEBUG: Native: $nativeRegistered, FirebaseUser: ${firebaseUser?.uid}');
 
       if (nativeRegistered || firebaseUser != null) {
-        // Step B: 檢查本地 SharedPreferences 資料
         final prefs = await SharedPreferences.getInstance();
         final userJson = prefs.getString('app_user');
 
@@ -142,7 +144,6 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
           final user = AppUser.fromJson(jsonDecode(userJson));
           debugPrint('DEBUG: Local user found: ${user.id}');
 
-          // Step C: 比對 Cloud Firestore
           final cloudDoc = await FirebaseFirestore.instance
               .collection('users')
               .doc(user.id)
@@ -154,7 +155,6 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
             debugPrint('DEBUG: Cloud registration verified.');
           }
         } else if (firebaseUser != null) {
-          // Firebase Auth 有 session 但本地無資料，嘗試從 Firestore 還原
           debugPrint('DEBUG: No local data, trying to restore from Firestore...');
           final cloudDoc = await FirebaseFirestore.instance
               .collection('users')
@@ -173,24 +173,24 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       debugPrint('DEBUG: Registration check failed or timed out: $e');
-      // 網路超時但本地已有資料，允許離線模式
       if (hasLocalData) {
         debugPrint('DEBUG: Proceeding in offline mode with local data.');
         isRegisteredInCloud = true;
       }
     }
 
-    if (mounted) {
-      if (isRegisteredInCloud) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      } else {
-        // 若完全沒有雲端紀錄且非離線寬鬆情況，導向註冊頁
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-        );
-      }
+    if (!mounted) return;
+
+    setState(() => _isChecking = false);
+
+    if (isRegisteredInCloud) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    } else {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
     }
   }
 
@@ -198,6 +198,8 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     const brown = Color(0xFF5C3D2E);
     const bg = Color(0xFFF7F3EC);
+
+    final bool showSpinner = _isChecking && !_hasError;
 
     return Scaffold(
       backgroundColor: bg,
@@ -208,26 +210,33 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                _hasError ? Icons.error_outline_rounded : Icons.bluetooth_searching_rounded, 
-                size: 80, 
-                color: _hasError ? Colors.redAccent : brown
+                _hasError
+                    ? Icons.error_outline_rounded
+                    : (_meshStarted
+                        ? Icons.bluetooth_searching_rounded
+                        : Icons.bluetooth_rounded),
+                size: 80,
+                color: _hasError ? Colors.redAccent : brown,
               ),
               const SizedBox(height: 32),
               Text(
                 _statusText,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 18, 
-                  fontWeight: FontWeight.bold, 
-                  color: _hasError ? Colors.redAccent : brown
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: _hasError ? Colors.redAccent : brown,
                 ),
               ),
               const SizedBox(height: 24),
-              if (_isSearching) ...[
+              if (showSpinner) ...[
                 const CircularProgressIndicator(color: brown),
                 const SizedBox(height: 32),
                 if (_nearbyPeers.isNotEmpty) ...[
-                  const Text('附近已發現裝置：', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                  const Text(
+                    '附近已發現裝置：',
+                    style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 12),
                   Container(
                     constraints: const BoxConstraints(maxHeight: 200),
@@ -245,27 +254,38 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ] else ...[
-                  const Text('正在尋找其他 Bitchat 節點...', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey)),
+                  const Text(
+                    '正在尋找其他 Bitchat 節點...',
+                    style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
+                  ),
                 ],
               ],
-              if (_hasError) ...[
-                const SizedBox(height: 32),
-                ElevatedButton(
-                  onPressed: () {
-                    if (_needsPermissions) {
-                      BitchatBridge.requestPermissions();
-                    } else {
-                      _startSetup();
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: brown,
-                    foregroundColor: bg,
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                  ),
-                  child: Text(_needsPermissions ? '授權權限' : '重新檢查狀態'),
+              const SizedBox(height: 32),
+              // 手動檢查按鈕：不管狀態如何都顯示（非 checking 狀態下可點）
+              ElevatedButton.icon(
+                onPressed: _isChecking
+                    ? null
+                    : () {
+                        if (_needsPermissions) {
+                          BitchatBridge.requestPermissions();
+                        } else {
+                          _startSetup();
+                        }
+                      },
+                icon: Icon(_needsPermissions ? Icons.lock_open_rounded : Icons.refresh_rounded),
+                label: Text(
+                  _isChecking
+                      ? '檢查中...'
+                      : (_needsPermissions ? '授權權限' : '重新檢查並啟動'),
                 ),
-              ],
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: brown,
+                  foregroundColor: bg,
+                  disabledBackgroundColor: brown.withValues(alpha: 0.4),
+                  disabledForegroundColor: bg,
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                ),
+              ),
             ],
           ),
         ),
