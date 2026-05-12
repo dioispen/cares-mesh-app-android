@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../services/mascot_service.dart';
 
 // ── 物資資料模型 ────────────────────────────────────────────────
 class _SupplyItem {
@@ -90,7 +91,7 @@ class SupplyScreen extends StatefulWidget {
   State<SupplyScreen> createState() => _SupplyScreenState();
 }
 
-class _SupplyScreenState extends State<SupplyScreen> {
+class _SupplyScreenState extends State<SupplyScreen> with RouteAware {
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _brown = Color(0xFF5C3D2E);
@@ -119,11 +120,24 @@ class _SupplyScreenState extends State<SupplyScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
   void dispose() {
+    mascotRouteObserver.unsubscribe(this);
     _itemsSub?.cancel();
     _myPledgesSub?.cancel();
     super.dispose();
   }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = supplyOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = supplyOptions;
 
   Future<void> _loadUser() async {
     final prefs = await SharedPreferences.getInstance();

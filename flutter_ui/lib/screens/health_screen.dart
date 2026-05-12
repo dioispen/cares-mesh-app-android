@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
 import '../bridge/bitchat_bridge.dart';
+import '../services/mascot_service.dart';
 
 class HealthService {
   String status = 'unknown';
@@ -47,7 +48,8 @@ class HealthScreen extends StatefulWidget {
   State<HealthScreen> createState() => _HealthScreenState();
 }
 
-class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderStateMixin {
+class _HealthScreenState extends State<HealthScreen>
+    with SingleTickerProviderStateMixin, RouteAware {
   final HealthService _healthService = HealthService();
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
@@ -111,12 +113,25 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
   void dispose() {
+    mascotRouteObserver.unsubscribe(this);
     _tasksSubscription?.cancel();
     _bridgeSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = healthOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = healthOptions;
 
   void _listenToBridge() {
     _bridgeSubscription = BitchatBridge.events().listen((event) {

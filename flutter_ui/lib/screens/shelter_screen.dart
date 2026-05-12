@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../services/mascot_service.dart';
 
 const _kShelterUrl = 'https://kiang.github.io/air_raid_shelter/';
 
@@ -12,7 +13,7 @@ class ShelterScreen extends StatefulWidget {
   State<ShelterScreen> createState() => _ShelterScreenState();
 }
 
-class _ShelterScreenState extends State<ShelterScreen> {
+class _ShelterScreenState extends State<ShelterScreen> with RouteAware {
   static const _bg         = Color(0xFFF7F3EC);
   static const _textPrimary= Color(0xFF3D2C1E);
   static const _brown      = Color(0xFF5C3D2E);
@@ -20,6 +21,24 @@ class _ShelterScreenState extends State<ShelterScreen> {
   InAppWebViewController? _webController;
   bool _isLoading = true;
   double _loadProgress = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
+  void dispose() {
+    mascotRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = shelterOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = shelterOptions;
 
   @override
   Widget build(BuildContext context) {

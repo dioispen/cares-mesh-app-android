@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../services/mascot_service.dart';
 import 'knowledge_screen.dart';
 import 'shelter_screen.dart';
 import 'sos_screen.dart';
@@ -21,7 +22,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -34,7 +35,26 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadUser();
+    mascotOptionsNotifier.value = homeOptions;
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
+  void dispose() {
+    mascotRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = homeOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = homeOptions;
 
   Future<void> _loadUser() async {
     final prefs = await SharedPreferences.getInstance();

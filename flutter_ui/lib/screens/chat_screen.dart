@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/message_test.dart';
+import '../services/mascot_service.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -8,7 +9,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with RouteAware {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final String _currentUser = '我';
@@ -26,11 +27,24 @@ class _ChatScreenState extends State<ChatScreen> {
   ];
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
   void dispose() {
+    mascotRouteObserver.unsubscribe(this);
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
   }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = chatOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = chatOptions;
 
   void _sendMessage() {
     final text = _controller.text.trim();
