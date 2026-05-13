@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
+import 'onboarding_screen.dart';
 
 class VerifyEmailScreen extends StatefulWidget {
   final AppUser pendingUser;
@@ -47,7 +48,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
 
         if (mounted) {
           Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
+            MaterialPageRoute(builder: (_) => const OnboardingScreen()),
           );
         }
       } else {

@@ -35,7 +35,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void initState() {
     super.initState();
     _loadUser();
-    mascotOptionsNotifier.value = homeOptions;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) mascotOptionsNotifier.value = homeOptions;
+    });
   }
 
   @override
@@ -142,7 +144,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     ),
                     const SizedBox(width: 10),
                     const Text(
-                      '防災 APP',
+                      '防災小助理',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
@@ -168,7 +170,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      '平安是福',
+                      '平安是福，互CARES',
                       style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w800,
@@ -178,7 +180,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '做好準備，守護自己與家人',
+                      '從「Who cares？」到「互 CARES」，讓每一個求助不被忽略',
                       style: TextStyle(fontSize: 14, color: _textSecondary),
                     ),
                   ],
