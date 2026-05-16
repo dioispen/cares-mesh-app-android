@@ -17,42 +17,47 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
 
+  // ★ 把這個數值改成你的 GIF 實際時長（毫秒）
+  static const int _gifDurationMs = 3000;
+
   final FlutterTts _tts = FlutterTts();
   int _scene = 0;
   double _sceneOpacity = 0.0;
   bool _showStartBtn = false;
   bool _done = false;
-  // 雙重門控：TTS 講完 + 最短顯示時間到，兩個都滿足才自動跳幕
   bool _ttsComplete = false;
   bool _minTimeReached = false;
   Timer? _minTimer;
 
+  // Scene 0：GIF 播完一次後切靜止圖
+  bool _gifDone = false;
+  Timer? _gifTimer;
+
   late final AnimationController _ctrl;
   late final AnimationController _pulseCtrl;
-  late final AnimationController _waveCtrl;
-  late final AnimationController _talkCtrl; // 嘴巴開合
+  late final AnimationController _talkCtrl;
 
-  late final Animation<double> _mascotEntrance; // 場景0：小助理從底部蹦出
-  late final Animation<double> _zoomAnim;       // 場景2：鏡頭放大至右下角
-  late final Animation<double> _waveAngle;
+  late final Animation<double> _mascotEntrance;
+  late final Animation<double> _zoomAnim;
   late final Animation<double> _fadeA;
   late final Animation<double> _fadeB;
   late final Animation<double> _fadeC;
   late final Animation<double> _pulse;
-  final List<Animation<double>> _cardFades = [];
+
+  // Scene 3 六項功能逐條淡入
+  final List<Animation<double>> _featureFades = [];
 
   static const _scripts = [
     '嗨！我是你的防災小助理！很高興認識你！',
     '主畫面有六大功能，包括緊急求救、防空洞地圖、健康回報、防災知識、聊天室，還有物資捐贈，都是關鍵時刻最需要的工具！',
     '不管你在哪個畫面，我都會在右下角等你喔！',
-    '有任何問題，點一下我，就知道怎麼解決！準備好了嗎？讓我們開始吧！',
+    '有任何問題，點一下我，我就能告訴你每個功能怎麼使用！在任何頁面，我都在右下角等著你。準備好了嗎？讓我們開始吧！',
   ];
 
   @override
   void initState() {
     super.initState();
     _initAnimations();
-    // 必須等 TTS 完全初始化（包含 completion handler 設好）才跑第一幕
     _initTts().then((_) {
       if (mounted) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _goScene(0));
@@ -62,33 +67,25 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
   Future<void> _initTts() async {
     _tts.setErrorHandler((msg) => debugPrint('TTS error: $msg'));
-
-    // 找裝置上可用的中文語音：優先 zh-TW，找不到退回 zh-CN，再退回任何 zh-*
     try {
       final dynamic raw = await _tts.getLanguages;
       final List<String> langs =
           (raw as List?)?.map((e) => e.toString()).toList() ?? [];
-      debugPrint('TTS available languages: $langs');
-
       String pick = 'zh-TW';
       if (langs.contains('zh-TW')) {
         pick = 'zh-TW';
       } else if (langs.contains('zh-CN')) {
         pick = 'zh-CN';
       } else {
-        final any = langs.firstWhere(
+        pick = langs.firstWhere(
           (l) => l.toLowerCase().startsWith('zh'),
           orElse: () => 'zh-TW',
         );
-        pick = any;
       }
       await _tts.setLanguage(pick);
-      debugPrint('TTS using language: $pick');
-    } catch (e) {
-      debugPrint('TTS getLanguages failed, defaulting to zh-TW: $e');
+    } catch (_) {
       await _tts.setLanguage('zh-TW');
     }
-
     await _tts.setSpeechRate(0.45);
     await _tts.setPitch(1.1);
     await _tts.setVolume(1.0);
@@ -110,28 +107,18 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       duration: const Duration(milliseconds: 1100),
     )..repeat(reverse: true);
 
-    // 揮手：左右搖擺 ±12 度
-    _waveCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 650),
-    );
-    _waveAngle = Tween<double>(begin: -0.20, end: 0.20).animate(
-      CurvedAnimation(parent: _waveCtrl, curve: Curves.easeInOut),
-    );
-
-    // 嘴巴開合：400ms 一循環
     _talkCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
     );
 
-    // 場景0：小助理從螢幕底部彈入，elasticOut 彈跳感
+    // Scene 0：小助理從螢幕底部彈入
     _mascotEntrance = CurvedAnimation(
       parent: _ctrl,
       curve: const Interval(0.0, 0.65, curve: Curves.elasticOut),
     );
 
-    // 場景2：鏡頭從正常放大至右下角小助理位置
+    // Scene 2：放大至右下角
     _zoomAnim = CurvedAnimation(
       parent: _ctrl,
       curve: const Interval(0.55, 1.0, curve: Curves.easeInOut),
@@ -150,26 +137,28 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       curve: const Interval(0.6, 1.0, curve: Curves.easeOut),
     );
 
-    for (int i = 0; i < 6; i++) {
-      final s = (0.15 + i * 0.1).clamp(0.0, 0.85);
-      _cardFades.add(CurvedAnimation(
-        parent: _ctrl,
-        curve: Interval(s, (s + 0.3).clamp(0.0, 1.0), curve: Curves.easeOut),
-      ));
-    }
-
     _pulse = Tween<double>(begin: 0.88, end: 1.12).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
+
+    // Scene 3 六功能依序淡入
+    for (int i = 0; i < 6; i++) {
+      final s = (0.48 + i * 0.07).clamp(0.0, 0.88);
+      _featureFades.add(CurvedAnimation(
+        parent: _ctrl,
+        curve:
+            Interval(s, (s + 0.22).clamp(0.0, 1.0), curve: Curves.easeOut),
+      ));
+    }
   }
 
   Future<void> _goScene(int s) async {
     if (!mounted || _done) return;
     _minTimer?.cancel();
+    _gifTimer?.cancel();
     _ttsComplete = false;
     _minTimeReached = false;
 
-    // Fade out
     setState(() => _sceneOpacity = 0.0);
     await Future.delayed(const Duration(milliseconds: 220));
     if (!mounted || _done) return;
@@ -178,37 +167,33 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       _scene = s;
       _showStartBtn = false;
     });
-    _ctrl
-      ..reset()
-      ..forward();
+    _ctrl..reset()..forward();
     setState(() => _sceneOpacity = 1.0);
 
-    // 場景0：入場動畫快結束後才開始揮手
+    // Scene 0：啟動 GIF 計時，時間到切靜止圖
     if (s == 0) {
-      Future.delayed(const Duration(milliseconds: 750), () {
-        if (mounted && !_done) _waveCtrl.repeat(reverse: true);
+      setState(() => _gifDone = false);
+      _gifTimer = Timer(Duration(milliseconds: _gifDurationMs), () {
+        if (mounted && !_done && _scene == 0) {
+          setState(() => _gifDone = true);
+        }
       });
-    } else {
-      _waveCtrl.stop();
-      _waveCtrl.reset();
     }
 
-    // 場景2：TTS 開始後啟動嘴巴開合動畫
-    if (s == 2) {
+    // Scene 2 & 3：開始嘴巴開合動畫
+    if (s == 2 || s == 3) {
       Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted && !_done && _scene == 2) _talkCtrl.repeat();
+        if (mounted && !_done && _scene == s) _talkCtrl.repeat();
       });
     } else {
       _talkCtrl.stop();
       _talkCtrl.reset();
     }
 
-    // 等動畫跑一下再開始 TTS
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted || _done) return;
     await _tts.speak(_scripts[s]);
 
-    // 最短顯示時間：字數 × 200ms + 4秒緩衝，下限 8 秒，上限 18 秒
     final minMs = (_scripts[s].length * 200 + 4000).clamp(8000, 18000);
     _minTimer = Timer(Duration(milliseconds: minMs), () {
       if (!_done && mounted) {
@@ -218,7 +203,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     });
   }
 
-  // 只有 TTS 講完 AND 最短時間到，才自動跳下一幕
   void _tryAutoAdvance() {
     Future.delayed(const Duration(milliseconds: 1000), () {
       if (!_done && mounted && _ttsComplete && _minTimeReached) {
@@ -231,7 +215,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     });
   }
 
-  // 手動下一幕（右箭頭按鈕）
   void _manualNext() {
     if (_done) return;
     _tts.stop();
@@ -243,7 +226,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     }
   }
 
-  // 手動返回上一幕（左箭頭按鈕）
   void _manualBack() {
     if (_done || _scene <= 0) return;
     _tts.stop();
@@ -255,6 +237,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     _done = true;
     _tts.stop();
     _minTimer?.cancel();
+    _gifTimer?.cancel();
     _goHome();
   }
 
@@ -270,14 +253,14 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     _done = true;
     _tts.stop();
     _minTimer?.cancel();
+    _gifTimer?.cancel();
     _ctrl.dispose();
     _pulseCtrl.dispose();
-    _waveCtrl.dispose();
     _talkCtrl.dispose();
     super.dispose();
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
+  // ── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -288,14 +271,14 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Scene content with fade
+            // Scene content
             AnimatedOpacity(
               duration: const Duration(milliseconds: 220),
               opacity: _sceneOpacity,
               child: _buildScene(size),
             ),
 
-            // Skip button (always visible)
+            // 跳過按鈕
             Positioned(
               top: 8,
               right: 12,
@@ -312,7 +295,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ),
             ),
 
-            // 底部導航：← 點點 →
+            // 底部 ← 點點 →
             Positioned(
               bottom: 16,
               left: 0,
@@ -321,7 +304,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
                   children: [
-                    // 返回上一幕（第 0 幕隱藏）
                     AnimatedOpacity(
                       duration: const Duration(milliseconds: 200),
                       opacity: _scene > 0 ? 1.0 : 0.0,
@@ -335,28 +317,26 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         ),
                       ),
                     ),
-                    // 進度點
                     Expanded(
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: List.generate(
-                            4,
-                            (i) => AnimatedContainer(
-                                  duration: const Duration(milliseconds: 300),
-                                  margin:
-                                      const EdgeInsets.symmetric(horizontal: 4),
-                                  width: _scene == i ? 24 : 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    color: _scene == i
-                                        ? _brown
-                                        : _brown.withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                )),
+                          4,
+                          (i) => AnimatedContainer(
+                            duration: const Duration(milliseconds: 300),
+                            margin: const EdgeInsets.symmetric(horizontal: 4),
+                            width: _scene == i ? 24 : 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: _scene == i
+                                  ? _brown
+                                  : _brown.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                    // 前往下一幕（顯示開始按鈕時隱藏）
                     AnimatedOpacity(
                       duration: const Duration(milliseconds: 200),
                       opacity: _showStartBtn ? 0.0 : 1.0,
@@ -375,7 +355,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ),
             ),
 
-            // 開始使用按鈕（場景 3 TTS 結束後出現）
+            // 開始使用按鈕
             AnimatedOpacity(
               duration: const Duration(milliseconds: 450),
               opacity: _showStartBtn ? 1.0 : 0.0,
@@ -425,16 +405,14 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ => _buildScene3(size),
       };
 
-  // ── Scene 0: 小助理從底部蹦出（大尺寸上半身） ──────────────────────────────
+  // ── Scene 0：小助理 GIF 揮手（播一次停住）─────────────────────────────────
 
   Widget _buildScene0(Size size) {
-    // 小助理圖片佔滿螢幕寬度，從底部往上蹦，只顯示上半身
     final mascotW = size.width;
-
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
-        // 上方文字區
+        // 上方文字
         Positioned(
           top: size.height * 0.09,
           left: 0,
@@ -474,14 +452,11 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           ),
         ),
 
-        // 小助理：從螢幕底部以彈跳方式蹦出，只露出上半身
+        // 小助理：從螢幕底部彈入，播放 GIF 一次後切靜止圖
         AnimatedBuilder(
           animation: _mascotEntrance,
           builder: (_, child) {
             final t = _mascotEntrance.value;
-            // 起點：完全藏在螢幕底部下方
-            // 終點：從底部往上露出 ~55% 的身體（上半身）
-            // 用 bottom 定位：負值代表超出螢幕底部
             final startBottom = -(mascotW * 1.05);
             final endBottom = -(mascotW * 0.45);
             final currentBottom =
@@ -493,86 +468,72 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               child: child!,
             );
           },
-          child: AnimatedBuilder(
-            animation: _waveAngle,
-            builder: (_, child) => Transform.rotate(
-              angle: _waveAngle.value,
-              // 從底部中心旋轉，讓揮手動作自然
-              alignment: Alignment.bottomCenter,
-              child: child,
-            ),
-            child: Image.asset(
-              'assets/images/mascot_hi.png',
-              width: mascotW,
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) => Container(
-                width: mascotW,
-                height: mascotW,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _brown.withValues(alpha: 0.07),
-                  borderRadius: BorderRadius.circular(mascotW / 2),
+          // GIF 播完後切換到靜止圖；GIF 不存在時也 fallback 到靜止圖
+          child: _gifDone
+              ? Image.asset(
+                  'assets/images/mascot_hi.png',
+                  width: mascotW,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => _mascotFallback(mascotW),
+                )
+              : Image.asset(
+                  'assets/images/mascot_wave.gif',
+                  width: mascotW,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => Image.asset(
+                    'assets/images/mascot_hi.png',
+                    width: mascotW,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => _mascotFallback(mascotW),
+                  ),
                 ),
-                child: Icon(Icons.support_agent_rounded,
-                    size: mascotW * 0.45, color: _brown),
-              ),
-            ),
-          ),
         ),
       ],
     );
   }
 
-  // ── Scene 1: 六大功能介紹 ─────────────────────────────────────────────────
+  // ── Scene 1：主頁樣式（手機框 + 小助理在右下角）────────────────────────────
 
   Widget _buildScene1(Size size) {
-    const features = [
-      (Icons.sos_rounded, 'SOS 求救', Color(0xFFC4553A)),
-      (Icons.auto_stories_rounded, '防災知識', Color(0xFF7AA67A)),
-      (Icons.location_on_rounded, '防空洞地圖', Color(0xFF6B9EAD)),
-      (Icons.favorite_rounded, '健康回報', Color(0xFFBF7A5A)),
-      (Icons.chat_bubble_rounded, '聊天室', Color(0xFF9B88B3)),
-      (Icons.volunteer_activism_rounded, '物資捐贈', Color(0xFF7AA67A)),
-    ];
-
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 24, 28, 80),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 80),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Mascot + speech bubble
+          // 小助理說話泡泡
           FadeTransition(
             opacity: _fadeA,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                _mascotImg('assets/images/mascot_talking.png', 68),
+                _mascotImg('assets/images/mascot_talking.png', 60),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
+                        horizontal: 13, vertical: 11),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(16),
-                        topRight: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
+                        topLeft: Radius.circular(14),
+                        topRight: Radius.circular(14),
+                        bottomRight: Radius.circular(14),
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 12,
+                          color: Colors.black.withValues(alpha: 0.07),
+                          blurRadius: 10,
                           offset: const Offset(0, 3),
                         ),
                       ],
                     ),
                     child: const Text(
-                      '主畫面有六大功能，都是關鍵時刻最需要的工具！',
+                      '主畫面有六大功能，\n都是關鍵時刻最需要的工具！',
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: 13,
                         fontWeight: FontWeight.w600,
                         color: _textPrimary,
-                        height: 1.4,
+                        height: 1.45,
                       ),
                     ),
                   ),
@@ -582,63 +543,23 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           ),
           const SizedBox(height: 20),
 
-          // Feature cards — stagger fade-in
-          GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 3,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 0.95,
-            children: List.generate(features.length, (i) {
-              final (icon, label, color) = features[i];
-              return FadeTransition(
-                opacity: _cardFades[i],
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(icon, color: color, size: 24),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        label,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: _textPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
+          // 手機框：展示完整主頁，小助理在右下角
+          FadeTransition(
+            opacity: _fadeB,
+            child: Center(
+              child: _PhoneMockup(
+                pulse: _pulse,
+                size: size,
+                talkAnim: _talkCtrl, // 停止中 → 顯示靜止小助理
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ── Scene 2: 鏡頭放大至右下角小助理，嘴巴跟著動 ─────────────────────────
+  // ── Scene 2：同樣手機框，鏡頭慢慢放大至右下角小助理 ────────────────────────
 
   Widget _buildScene2(Size size) {
     return Column(
@@ -673,12 +594,11 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         ),
         const SizedBox(height: 32),
 
-        // 手機模型：先整體淡入，再鏡頭推向右下角小助理
+        // 手機框漸漸放大，焦點固定在右下角小助理
         AnimatedBuilder(
           animation: _zoomAnim,
           builder: (_, child) {
             final z = _zoomAnim.value;
-            // z: 0→1 時，縮放 1.0→2.4，焦點固定在右下角
             final scale = 1.0 + z * 1.4;
             return Transform.scale(
               scale: scale,
@@ -691,7 +611,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
             child: _PhoneMockup(
               pulse: _pulse,
               size: size,
-              talkAnim: _talkCtrl,
+              talkAnim: _talkCtrl, // 小助理開始說話
             ),
           ),
         ),
@@ -699,17 +619,21 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  // ── Scene 3: 示範點選小助理 ───────────────────────────────────────────────
+  // ── Scene 3：模擬點擊小助理，出現功能說明文字泡泡 ───────────────────────────
 
   Widget _buildScene3(Size size) {
-    const options = [
-      ('🏠', '防空洞在哪裡？'),
-      ('🆘', '怎麼求救？'),
-      ('📋', '這個 APP 怎麼用？'),
+    // 每個功能的說明文字（emoji、名稱、一句話介紹）
+    const features = [
+      ('🆘', 'SOS 緊急求救', '一鍵傳送位置，立刻通知緊急聯絡人'),
+      ('📚', '防災知識', '學習地震、火災、颱風等應急技能'),
+      ('🗺️', '防空洞地圖', '找到離你最近的避難所'),
+      ('❤️', '健康回報', '告知家人你目前是否平安'),
+      ('💬', '聊天室', '和附近鄰居即時互助聯絡'),
+      ('🎁', '物資捐贈', '分享或領取緊急生活物資'),
     ];
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 32, 28, 120),
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 120),
       child: Column(
         children: [
           FadeTransition(
@@ -725,14 +649,14 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ),
             ),
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 24),
 
           FadeTransition(
             opacity: _fadeB,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Speech bubble with options
+                // 說明泡泡（左側）
                 Expanded(
                   child: Container(
                     padding: const EdgeInsets.all(14),
@@ -741,7 +665,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       borderRadius: const BorderRadius.only(
                         topLeft: Radius.circular(18),
                         topRight: Radius.circular(18),
-                        bottomLeft: Radius.circular(18),
+                        bottomRight: Radius.circular(18),
                       ),
                       boxShadow: [
                         BoxShadow(
@@ -756,7 +680,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Text(
-                          '嗨！我是你的防災小助理 ✨',
+                          '嗨！我在這裡 ✨',
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -765,56 +689,63 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          '有什麼需要幫助的嗎？',
+                          '在每個頁面點我，我都能告訴你怎麼用！',
                           style: TextStyle(
                             fontSize: 11,
                             color: _textSecondary,
                           ),
                         ),
-                        const SizedBox(height: 10),
-                        ...options.map((opt) => FadeTransition(
-                              opacity: _fadeC,
-                              child: Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 9),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFF7F3EC),
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                        color: const Color(0xFFD4C5B0)),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Text(opt.$1,
-                                          style:
-                                              const TextStyle(fontSize: 15)),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
+                        const SizedBox(height: 12),
+
+                        // 六功能依序淡入
+                        ...List.generate(features.length, (i) {
+                          final opt = features[i];
+                          return FadeTransition(
+                            opacity: _featureFades[i],
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(opt.$1,
+                                      style: const TextStyle(fontSize: 15)),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
                                           opt.$2,
                                           style: const TextStyle(
                                             fontSize: 12,
-                                            fontWeight: FontWeight.w500,
+                                            fontWeight: FontWeight.w700,
                                             color: _textPrimary,
                                           ),
                                         ),
-                                      ),
-                                      Icon(Icons.chevron_right_rounded,
-                                          size: 15, color: _textSecondary),
-                                    ],
+                                        Text(
+                                          opt.$3,
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: _textSecondary,
+                                            height: 1.3,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
+                                ],
                               ),
-                            )),
+                            ),
+                          );
+                        }),
                       ],
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
 
-                // Mascot — pulsing to draw attention
+                // 右側小助理（脈衝跳動，吸引點擊）
                 ScaleTransition(
                   scale: _pulse,
                   child: _mascotImg('assets/images/mascot_hi.png', 88),
@@ -822,12 +753,43 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ],
             ),
           ),
+
+          const SizedBox(height: 14),
+
+          // 提示文字
+          FadeTransition(
+            opacity: _fadeC,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              decoration: BoxDecoration(
+                color: _brown.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.touch_app_rounded,
+                      size: 15, color: _brown.withValues(alpha: 0.7)),
+                  const SizedBox(width: 6),
+                  Text(
+                    '任何頁面都可以點我喔！',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _brown.withValues(alpha: 0.7),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  // ── Helper ────────────────────────────────────────────────────────────────
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   Widget _mascotImg(String path, double size) {
     return Image.asset(
@@ -835,21 +797,25 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       width: size,
       height: size,
       fit: BoxFit.contain,
-      errorBuilder: (_, _, _) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: _brown.withValues(alpha: 0.08),
-        ),
-        child: Icon(Icons.support_agent_rounded,
-            size: size * 0.55, color: _brown),
+      errorBuilder: (_, _, _) => _mascotFallback(size),
+    );
+  }
+
+  Widget _mascotFallback(double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _brown.withValues(alpha: 0.08),
       ),
+      child: Icon(Icons.support_agent_rounded,
+          size: size * 0.55, color: _brown),
     );
   }
 }
 
-// ── Phone mockup (Scene 2) ────────────────────────────────────────────────────
+// ── Phone mockup（Scene 1 & 2 共用）─────────────────────────────────────────
 
 class _PhoneMockup extends StatelessWidget {
   final Animation<double> pulse;
@@ -861,6 +827,57 @@ class _PhoneMockup extends StatelessWidget {
     required this.size,
     required this.talkAnim,
   });
+
+  Widget _miniTile(IconData icon, String label, Color color) {
+    return Expanded(
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              flex: 3,
+              child: ClipRRect(
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(5)),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        color.withValues(alpha: 0.18),
+                        color.withValues(alpha: 0.07),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                  ),
+                  child: Center(child: Icon(icon, color: color, size: 9)),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Center(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 4.5,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF3D2C1E),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -887,13 +904,13 @@ class _PhoneMockup extends StatelessWidget {
           borderRadius: BorderRadius.circular(w * 0.09),
           child: Stack(
             children: [
-              // App screen mockup
+              // 主頁畫面
               Container(
                 color: const Color(0xFFF7F3EC),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // App bar
+                    // AppBar
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 7),
@@ -922,35 +939,136 @@ class _PhoneMockup extends StatelessWidget {
                         ],
                       ),
                     ),
-                    // Feature grid (simplified)
+                    // 歡迎語
+                    Padding(
+                      padding:
+                          const EdgeInsets.fromLTRB(10, 2, 10, 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '平安是福，互CARES',
+                            style: TextStyle(
+                              fontSize: 7.5,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF3D2C1E),
+                            ),
+                          ),
+                          Text(
+                            '讓每一個求助不被忽略',
+                            style: TextStyle(
+                              fontSize: 5,
+                              color: const Color(0xFF8C7B6E).withValues(alpha: 0.8),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // 功能卡片
                     Expanded(
                       child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: GridView.count(
-                          physics: const NeverScrollableScrollPhysics(),
-                          crossAxisCount: 2,
-                          mainAxisSpacing: 5,
-                          crossAxisSpacing: 5,
-                          childAspectRatio: 1.05,
-                          children: const [
-                            Color(0xFFC4553A),
-                            Color(0xFF7AA67A),
-                            Color(0xFF6B9EAD),
-                            Color(0xFFBF7A5A),
-                          ]
-                              .map((c) => ColoredBox(
-                                    color: Colors.white,
-                                    child: Center(
-                                      child: Icon(Icons.widgets_rounded,
-                                          color: Color.fromARGB(
-                                              102,
-                                              (c.r * 255).round(),
-                                              (c.g * 255).round(),
-                                              (c.b * 255).round()),
-                                          size: 18),
+                        padding: const EdgeInsets.fromLTRB(5, 2, 5, 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // SOS 大卡
+                            Container(
+                              height: 20,
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFD96048),
+                                    Color(0xFFBF4530)
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6),
+                              child: Row(
+                                children: const [
+                                  Icon(Icons.sos_rounded,
+                                      color: Colors.white, size: 8),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    'SOS 緊急求救',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 5.5,
+                                      fontWeight: FontWeight.w900,
                                     ),
-                                  ))
-                              .toList(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            // 2×2 功能卡
+                            Expanded(
+                              child: Column(
+                                children: [
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        _miniTile(
+                                            Icons.auto_stories_rounded,
+                                            '防災知識',
+                                            const Color(0xFF7AA67A)),
+                                        const SizedBox(width: 4),
+                                        _miniTile(
+                                            Icons.location_on_rounded,
+                                            '防空洞',
+                                            const Color(0xFF6B9EAD)),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        _miniTile(
+                                            Icons.favorite_rounded,
+                                            '健康回報',
+                                            const Color(0xFFBF7A5A)),
+                                        const SizedBox(width: 4),
+                                        _miniTile(
+                                            Icons.chat_bubble_rounded,
+                                            '聊天室',
+                                            const Color(0xFF9B88B3)),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            // 物資捐贈（寬版）
+                            Container(
+                              height: 18,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 7),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: Row(
+                                children: const [
+                                  Icon(Icons.volunteer_activism_rounded,
+                                      color: Color(0xFF7AA67A), size: 8),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    '物資捐贈',
+                                    style: TextStyle(
+                                      fontSize: 5.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF3D2C1E),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -958,7 +1076,7 @@ class _PhoneMockup extends StatelessWidget {
                 ),
               ),
 
-              // 小助理：右下角脈衝光暈 + 嘴巴開合動畫
+              // 右下角小助理（脈衝光暈 + 嘴巴開合）
               Positioned(
                 right: -4,
                 bottom: 8,
@@ -967,13 +1085,13 @@ class _PhoneMockup extends StatelessWidget {
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // 光暈背景
                       Container(
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: const Color(0xFFE8C99A).withValues(alpha: 0.5),
+                          color: const Color(0xFFE8C99A)
+                              .withValues(alpha: 0.5),
                           boxShadow: [
                             BoxShadow(
                               color: const Color(0xFFE8C99A)
@@ -984,7 +1102,6 @@ class _PhoneMockup extends StatelessWidget {
                           ],
                         ),
                       ),
-                      // 嘴巴開合：talkAnim > 0.5 時切換至 talking 圖
                       AnimatedBuilder(
                         animation: talkAnim,
                         builder: (_, _) {
@@ -1008,13 +1125,13 @@ class _PhoneMockup extends StatelessWidget {
                 ),
               ),
 
-              // "我在這裡！" 標籤
+              // 「我在這裡！」標籤
               Positioned(
                 right: 38,
                 bottom: 24,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 4),
                   decoration: BoxDecoration(
                     color: const Color(0xFF5C3D2E),
                     borderRadius: BorderRadius.circular(8),
