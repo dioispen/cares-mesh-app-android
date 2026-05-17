@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
@@ -72,6 +73,7 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   }
 
   void _listenToSystemStatus() {
+    if (kIsWeb) return;
     try {
       _statusSubscription = BitchatBridge.events().listen((event) {
         if (event['type'] == 'system_status') {

@@ -3,12 +3,14 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'dart:io' show Platform;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user.dart';
 import '../bridge/bitchat_bridge.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
+import 'verify_email_screen.dart';
 
 class SetupScreen extends StatefulWidget {
   const SetupScreen({super.key});
@@ -61,8 +63,8 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       _statusText = '檢查必要權限與服務狀態...';
     });
 
-    // Web 平台跳過原生藍牙步驟，直接驗證登入狀態
-    if (kIsWeb) {
+    // Web / iOS 平台跳過原生藍牙步驟，直接驗證登入狀態
+    if (kIsWeb || Platform.isIOS) {
       setState(() => _statusText = '驗證身分中...');
       _checkRegistration();
       return;
@@ -131,6 +133,19 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       bool nativeRegistered = await BitchatBridge.isRegistered();
       final firebaseUser = FirebaseAuth.instance.currentUser;
       debugPrint('DEBUG: Native: $nativeRegistered, FirebaseUser: ${firebaseUser?.uid}');
+
+      // 已登入但信箱未驗證：還原驗證流程
+      if (firebaseUser != null && !firebaseUser.emailVerified) {
+        final prefs = await SharedPreferences.getInstance();
+        final pendingJson = prefs.getString('pending_app_user');
+        if (pendingJson != null && mounted) {
+          final pendingUser = AppUser.fromJson(jsonDecode(pendingJson));
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => VerifyEmailScreen(pendingUser: pendingUser)),
+          );
+          return;
+        }
+      }
 
       if (nativeRegistered || firebaseUser != null) {
         // Step B: 檢查本地 SharedPreferences 資料

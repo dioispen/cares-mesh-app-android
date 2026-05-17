@@ -17,9 +17,9 @@ final RouteObserver<ModalRoute<void>> mascotRouteObserver =
 
 // Always notifies listeners regardless of value equality,
 // so the mascot renders correctly on initial push (not just pop-back).
-class _MascotOptionsNotifier extends ChangeNotifier
+class MascotOptionsNotifier extends ChangeNotifier
     implements ValueListenable<List<MascotOption>> {
-  _MascotOptionsNotifier(this._value);
+  MascotOptionsNotifier(this._value);
   List<MascotOption> _value;
 
   @override
@@ -31,8 +31,8 @@ class _MascotOptionsNotifier extends ChangeNotifier
   }
 }
 
-final _MascotOptionsNotifier mascotOptionsNotifier =
-    _MascotOptionsNotifier(const []);
+final MascotOptionsNotifier mascotOptionsNotifier =
+    MascotOptionsNotifier(const []);
 
 // ─── Per-screen option sets ───────────────────────────────────────────────────
 

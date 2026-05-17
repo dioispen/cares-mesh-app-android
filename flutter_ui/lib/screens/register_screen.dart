@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
 import 'verify_email_screen.dart';
@@ -98,10 +100,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         throw Exception('帳號註冊失敗，請稍後再試');
       }
 
-      // 2. 寄出信箱驗證信
-      await FirebaseAuth.instance.currentUser?.sendEmailVerification();
-
-      // 3. 建立 AppUser 物件（暫存，驗證後才寫入 Firestore）
+      // 2. 建立 AppUser 物件並暫存到本地（重啟 App 後可還原驗證流程）
       final user = AppUser(
         id: userModel.uid,
         email: userModel.email,
@@ -115,6 +114,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
         medicalInfo: _medicalCtrl.text.trim().isEmpty ? null : _medicalCtrl.text.trim(),
         registeredAt: DateTime.now(),
       );
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pending_app_user', jsonEncode(user.toJson()));
+
+      // 3. 寄出驗證信（失敗不阻擋流程，VerifyEmailScreen 有重寄功能）
+      try {
+        await FirebaseAuth.instance.currentUser?.sendEmailVerification();
+      } catch (e) {
+        debugPrint('sendEmailVerification failed: $e');
+      }
 
       if (mounted) {
         Navigator.of(context).pushReplacement(

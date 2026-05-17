@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import 'home_screen.dart';
 import 'register_screen.dart';
+import 'verify_email_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -47,14 +48,29 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordCtrl.text,
       );
 
-      final uid = credential.user?.uid;
-      if (uid == null) throw Exception('登入失敗');
+      final user = credential.user;
+      if (user == null) throw Exception('登入失敗');
+
+      // 信箱尚未驗證：導回驗證頁（不允許進入 App）
+      if (!user.emailVerified) {
+        final prefs = await SharedPreferences.getInstance();
+        final pendingJson = prefs.getString('pending_app_user');
+        if (pendingJson != null && mounted) {
+          final pendingUser = AppUser.fromJson(jsonDecode(pendingJson));
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => VerifyEmailScreen(pendingUser: pendingUser)),
+          );
+        } else {
+          setState(() => _errorMessage = '您的電子郵件尚未驗證，請查收信箱中的驗證連結後再登入。');
+        }
+        return;
+      }
 
       // 從 Firestore 載入使用者資料並儲存到本地
       try {
         final doc = await FirebaseFirestore.instance
             .collection('users')
-            .doc(uid)
+            .doc(user.uid)
             .get()
             .timeout(const Duration(seconds: 5));
 
