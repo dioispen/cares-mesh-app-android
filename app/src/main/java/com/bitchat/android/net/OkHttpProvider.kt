@@ -38,7 +38,7 @@ object OkHttpProvider {
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .writeTimeout(20, TimeUnit.SECONDS)
-            .hostnameVerifier { _, _ -> true } // 已經允許所有主機名，這對 ngrok 是正確的
+            .hostnameVerifier { _, _ -> true }
 
         if (context != null) {
             try {
@@ -57,16 +57,11 @@ object OkHttpProvider {
                     init(keyStore)
                 }
 
-                // 注意：這裡只會信任該 pem。
-                // 如果是 ngrok，建議如果是正式憑證，則不應進入此自定義 SSL 邏輯，
-                // 或者將系統憑證也加入 KeyStore。
-
                 val sslContext = SSLContext.getInstance("TLS").apply {
                     init(null, tmf.trustManagers, null)
                 }
                 builder.sslSocketFactory(sslContext.socketFactory, tmf.trustManagers[0] as X509TrustManager)
             } catch (e: Exception) {
-                // 載入失敗時會使用系統預設，這對 ngrok (Let's Encrypt) 來說通常是正確的
                 Log.e("OkHttpProvider", "Custom cert load failed, falling back to system default", e)
             }
         }

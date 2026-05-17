@@ -24,12 +24,11 @@ class PacketUplinkManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val gson = Gson()
     
-    // 使用預設的 httpClient (不帶 context)，這樣它會信任系統標準憑證 (如 ngrok 使用的 Let's Encrypt)
     private val client by lazy { OkHttpProvider.httpClient() }
 
     companion object {
         private const val TAG = "PacketUplinkManager"
-        private const val UPLINK_URL = "https://delphine-eisteddfodic-afflictively.ngrok-free.dev/health-report"
+        private const val UPLINK_URL = ""
         private val MEDIA_TYPE_OCTET_STREAM = "application/octet-stream".toMediaType()
         private val MEDIA_TYPE_JSON = "application/json".toMediaType()
     }
@@ -66,8 +65,6 @@ class PacketUplinkManager(private val context: Context) {
                     .post(requestBody)
                     .addHeader("X-Packet-Type", packet.type.toString())
                     .addHeader("X-Sender-ID", packet.senderID.toHexString())
-                    // ngrok 免費版必須帶上此 Header，否則 API 會收到 HTML 警告頁面而報錯
-                    .addHeader("ngrok-skip-browser-warning", "true")
                     .build()
 
                 client.newCall(request).execute().use { response ->
