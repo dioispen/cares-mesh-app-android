@@ -516,7 +516,7 @@ class BluetoothMeshService(private val context: Context) {
                 try {
                     val pkt = routed.packet
                     val isBroadcast = (pkt.recipientID == null || pkt.recipientID.contentEquals(SpecialRecipients.BROADCAST))
-                    if (isBroadcast && pkt.type == MessageType.MESSAGE.value) {
+                    if (isBroadcast && (pkt.type == MessageType.MESSAGE.value || pkt.type == MessageType.HEALTH_REPORT.value)) {
                         gossipSyncManager.onPublicPacketSeen(pkt)
                     }
                 } catch (_: Exception) { }
@@ -560,15 +560,6 @@ class BluetoothMeshService(private val context: Context) {
                 gossipSyncManager.handleRequestSync(fromPeer, req)
             }
 
-            override fun handleHealthReport(routed: RoutedPacket) {
-                serviceScope.launch { 
-                    messageHandler.handleHealthReport(routed)
-                    // Track broadcast health reports for sync
-                    try { 
-                        gossipSyncManager.onPublicPacketSeen(routed.packet) 
-                    } catch (_: Exception) { }
-                }
-            }
         }
         
         // BluetoothConnectionManager delegates

@@ -35,6 +35,20 @@ object SpecialRecipients {
 }
 
 /**
+ * Content tags for HEALTH_REPORT(0x30) tagged-broadcast packets.
+ * payload[0] identifies the content type; payload[1..] is the actual data.
+ * Adding a new public broadcast type only requires a new entry here.
+ */
+enum class BroadcastContentTag(val value: Byte) {
+    HEALTH_REPORT(0x01);
+    // Future: SOS(0x02), SUPPLY_REQUEST(0x03), ...
+
+    companion object {
+        fun fromValue(b: Byte): BroadcastContentTag? = values().find { it.value == b }
+    }
+}
+
+/**
  * Binary packet format - 100% backward compatible with iOS version
  *
  * Header (13 bytes for v1, 15 bytes for v2):

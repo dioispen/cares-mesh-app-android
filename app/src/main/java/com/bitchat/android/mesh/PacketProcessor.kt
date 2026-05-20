@@ -160,7 +160,7 @@ class PacketProcessor(private val myPeerID: String) {
             MessageType.LEAVE -> handleLeave(routed)
             MessageType.FRAGMENT -> handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
-            MessageType.HEALTH_REPORT -> handleHealthReport(routed)
+            MessageType.HEALTH_REPORT -> handleMessage(routed)
             else -> {
                 // Handle private packet types (address check required)
                 if (packetRelayManager.isPacketAddressedToMe(packet)) {
@@ -259,15 +259,6 @@ class PacketProcessor(private val myPeerID: String) {
     }
 
     /**
-     * Handle HEALTH_REPORT packets (public, broadcast)
-     */
-    private suspend fun handleHealthReport(routed: RoutedPacket) {
-        val peerID = routed.peerID ?: "unknown"
-        Log.d(TAG, "Processing HEALTH_REPORT from ${formatPeerForLog(peerID)}")
-        delegate?.handleHealthReport(routed)
-    }
-    
-    /**
      * Handle delivery acknowledgment
      */
 //    private suspend fun handleDeliveryAck(routed: RoutedPacket) {
@@ -340,8 +331,7 @@ interface PacketProcessorDelegate {
     fun handleLeave(routed: RoutedPacket)
     fun handleFragment(packet: BitchatPacket): BitchatPacket?
     fun handleRequestSync(routed: RoutedPacket)
-    fun handleHealthReport(routed: RoutedPacket)
-    
+
     // Communication
     fun sendAnnouncementToPeer(peerID: String)
     fun sendCachedMessages(peerID: String)

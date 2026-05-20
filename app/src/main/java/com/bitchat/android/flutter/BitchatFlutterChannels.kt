@@ -13,6 +13,7 @@ import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
+import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.net.PacketUplinkManager
@@ -61,12 +62,17 @@ class BitchatFlutterChannels(
         // 監聽來自 Mesh 的封包，統一格式轉發給 Flutter 自行解析
         MeshServiceHolder.onPacketReceived = { packet: BitchatPacket ->
             Log.d("BitchatBridge", "📨 收到封包，類型: 0x${packet.type.toString(16).uppercase()}, 大小: ${packet.payload.size}")
+            // 對 tagged-broadcast 封包，去除 payload[0] 的 ContentTag，Flutter 收到的 payload 格式不變
+            val isTagged = packet.type == MessageType.HEALTH_REPORT.value &&
+                packet.payload.isNotEmpty() &&
+                BroadcastContentTag.fromValue(packet.payload[0]) != null
+            val emitPayload = if (isTagged) packet.payload.drop(1) else packet.payload.toList()
             emitEvent(mapOf(
                 "type"       to "packet",
                 "packetType" to packet.type.toInt(),
                 "senderId"   to packet.senderID.toHexString(),
                 "timestamp"  to packet.timestamp.toLong(),
-                "payload"    to packet.payload.map { it.toInt() and 0xFF }
+                "payload"    to emitPayload.map { it.toInt() and 0xFF }
             ))
         }
     }
@@ -225,11 +231,12 @@ class BitchatFlutterChannels(
             val publicKey = identityManager.loadStaticKey()?.second
             val senderIdHex = publicKey?.toHexString() ?: "0000000000000000"
             
+            val taggedPayload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload
             val packet = BitchatPacket(
                 type = MessageType.HEALTH_REPORT.value,
                 ttl = 3u,
                 senderID = senderIdHex,
-                payload = payload
+                payload = taggedPayload
             )
             Log.d("BitchatBridge", "🔄 正在發送 HEALTH_REPORT 封包，大小: ${payload.size}，類型: ${packet.type}, TTL: 3")
             

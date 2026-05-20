@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.util.toHexString
@@ -53,10 +54,13 @@ class PacketUplinkManager(private val context: Context) {
 
         scope.launch {
             try {
-                val isHealthReport = packet.type == MessageType.HEALTH_REPORT.value
-                
-                // 所有格式都保持二進制傳輸
-                val requestBody = packet.payload.toRequestBody(MEDIA_TYPE_OCTET_STREAM)
+                val isHealthReport = packet.type == MessageType.HEALTH_REPORT.value &&
+                    packet.payload.isNotEmpty() &&
+                    BroadcastContentTag.fromValue(packet.payload[0]) == BroadcastContentTag.HEALTH_REPORT
+
+                // 健康報告去除 ContentTag 首 byte，後端收到純健康資料
+                val uplinkPayload = if (isHealthReport) packet.payload.drop(1).toByteArray() else packet.payload
+                val requestBody = uplinkPayload.toRequestBody(MEDIA_TYPE_OCTET_STREAM)
                 
                 Log.d(TAG, " 正在上傳封包 (Type: ${packet.type}, Format: Binary) 至伺服器...")
 

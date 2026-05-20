@@ -6,6 +6,7 @@ import com.bitchat.android.model.BitchatMessageType
 import com.bitchat.android.model.IdentityAnnouncement
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.service.MeshServiceHolder
@@ -367,15 +368,13 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         }
         
         val recipientID = packet.recipientID?.takeIf { !it.contentEquals(delegate?.getBroadcastRecipient()) }
-        
-        if (packet.type == MessageType.HEALTH_REPORT.value) {
-            handleHealthReport(routed)
-            return
-        }
 
         if (recipientID == null) {
-            // BROADCAST MESSAGE
-            handleBroadcastMessage(routed)
+            if (packet.type == MessageType.HEALTH_REPORT.value) {
+                handleTaggedBroadcast(routed)
+            } else {
+                handleBroadcastMessage(routed)
+            }
         } else if (recipientID.toHexString() == myPeerID) {
             // PRIVATE MESSAGE FOR US
             handlePrivateMessage(packet, peerID)
@@ -383,6 +382,23 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         // Message relay is now handled by centralized PacketRelayManager
     }
     
+    /**
+     * Dispatch HEALTH_REPORT(0x30) tagged-broadcast by BroadcastContentTag.
+     * payload[0] = tag; payload[1..] = actual data.
+     * Falls back to full payload decode for old-format packets (no tag byte).
+     */
+    private suspend fun handleTaggedBroadcast(routed: RoutedPacket) {
+        val packet = routed.packet
+        val tag = BroadcastContentTag.fromValue(packet.payload.getOrElse(0) { 0 })
+        val dataPayload = if (tag != null) packet.payload.drop(1).toByteArray() else packet.payload
+        when (tag) {
+            BroadcastContentTag.HEALTH_REPORT ->
+                handleHealthReport(routed.copy(packet = packet.copy(payload = dataPayload)))
+            null ->
+                handleHealthReport(routed)
+        }
+    }
+
     /**
      * Handle broadcast message with verification enforcement
      */
