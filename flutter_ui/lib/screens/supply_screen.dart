@@ -134,10 +134,10 @@ class _SupplyScreenState extends State<SupplyScreen> with RouteAware {
   }
 
   @override
-  void didPush() => mascotOptionsNotifier.value = supplyOptions;
+  void didPush() => mascotOptionsNotifier.value = const [];
 
   @override
-  void didPopNext() => mascotOptionsNotifier.value = supplyOptions;
+  void didPopNext() => mascotOptionsNotifier.value = const [];
 
   Future<void> _loadUser() async {
     final prefs = await SharedPreferences.getInstance();

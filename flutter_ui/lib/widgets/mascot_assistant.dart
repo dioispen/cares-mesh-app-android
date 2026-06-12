@@ -76,13 +76,15 @@ class _MascotAssistantState extends State<MascotAssistant> {
           return const SizedBox.shrink();
         }
 
-        return Stack(
+        return ValueListenableBuilder<double>(
+          valueListenable: mascotBottomNotifier,
+          builder: (context, mascotBottom, _) => Stack(
           children: [
             // Speech bubble
             if (_state != _MascotState.idle && options.isNotEmpty)
               Positioned(
                 right: 62,
-                bottom: 184,
+                bottom: mascotBottom + 164,
                 child: _SpeechBubble(
                   state: _state,
                   selected: _selected,
@@ -96,7 +98,7 @@ class _MascotAssistantState extends State<MascotAssistant> {
             // Mascot character
             Positioned(
               right: _state == _MascotState.idle ? -11 : -8,
-              bottom: 20,
+              bottom: mascotBottom,
               child: GestureDetector(
                 onTap: options.isNotEmpty ? _tapMascot : null,
                 child: Image.asset(
@@ -104,7 +106,7 @@ class _MascotAssistantState extends State<MascotAssistant> {
                   width: 175,
                   height: 175,
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Container(
+                  errorBuilder: (context, error, stack) => Container(
                     width: 175,
                     height: 175,
                     decoration: const BoxDecoration(
@@ -121,6 +123,7 @@ class _MascotAssistantState extends State<MascotAssistant> {
               ),
             ),
           ],
+        ),
         );
       },
     );

@@ -98,7 +98,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'screen': const KnowledgeScreen(),
       },
       {
-        'title': '防空洞地圖',
+        'title': '避難所地圖',
         'sub': '附近避難所',
         'icon': Icons.location_on_rounded,
         'color': const Color(0xFF6B9EAD),
@@ -144,11 +144,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         color: _sosRed.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.shield_rounded, color: _sosRed, size: 22),
+                      child: Image.asset('assets/images/logo.png', width: 32, height: 32),
                     ),
                     const SizedBox(width: 10),
                     const Text(
-                      '防災小助理',
+                      '防災小助理：互CARES',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
@@ -203,7 +203,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       onTap: () => _navigateTo(features[0]['screen'] as Widget),
                     ),
                     const SizedBox(height: 14),
-                    // 防災知識 | 防空洞地圖
+                    // 防災知識 | 避難所地圖
                     Row(
                       children: [
                         Expanded(child: _FeatureCard(feature: features[1], featureIndex: 1, onTap: () => _navigateTo(features[1]['screen'] as Widget))),

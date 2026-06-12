@@ -35,16 +35,26 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
   @override
   void dispose() {
     mascotRouteObserver.unsubscribe(this);
+    mascotBottomNotifier.value = 20.0;
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
   @override
-  void didPush() => mascotOptionsNotifier.value = chatOptions;
+  void didPush() {
+    mascotOptionsNotifier.value = chatOptions;
+    mascotBottomNotifier.value = 100.0;
+  }
 
   @override
-  void didPopNext() => mascotOptionsNotifier.value = chatOptions;
+  void didPopNext() {
+    mascotOptionsNotifier.value = chatOptions;
+    mascotBottomNotifier.value = 100.0;
+  }
+
+  @override
+  void didPushNext() => mascotBottomNotifier.value = 20.0;
 
   void _sendMessage() {
     final text = _controller.text.trim();
