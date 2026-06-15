@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:gif/gif.dart';
 import 'home_screen.dart';
+import '../services/mascot_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -17,10 +20,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
 
-  // ★ 把這個數值改成你的 GIF 實際時長（毫秒）
-  static const int _gifDurationMs = 3000;
-
   final FlutterTts _tts = FlutterTts();
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  late GifController _introGifCtrl;
+  late GifController _waveGifCtrl;
   int _scene = 0;
   double _sceneOpacity = 0.0;
   bool _showStartBtn = false;
@@ -28,31 +31,19 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   bool _ttsComplete = false;
   bool _minTimeReached = false;
   Timer? _minTimer;
+  bool _inFeatureTour = false;
+  int _highlightedFeature = -1;
+  Completer<void>? _currentAudioCompleter;
+  int _scene2Phase = 0;
 
   // Scene 0：GIF 播完一次後切靜止圖
-  bool _gifDone = false;
-  Timer? _gifTimer;
 
   late final AnimationController _ctrl;
   late final AnimationController _pulseCtrl;
   late final AnimationController _talkCtrl;
 
-  late final Animation<double> _mascotEntrance;
-  late final Animation<double> _zoomAnim;
   late final Animation<double> _fadeA;
   late final Animation<double> _fadeB;
-  late final Animation<double> _fadeC;
-  late final Animation<double> _pulse;
-
-  // Scene 3 六項功能逐條淡入
-  final List<Animation<double>> _featureFades = [];
-
-  static const _scripts = [
-    '嗨！我是你的防災小助理！很高興認識你！',
-    '主畫面有六大功能，包括緊急求救、防空洞地圖、健康回報、防災知識、聊天室，還有物資捐贈，都是關鍵時刻最需要的工具！',
-    '不管你在哪個畫面，我都會在右下角等你喔！',
-    '有任何問題，點一下我，我就能告訴你每個功能怎麼使用！在任何頁面，我都在右下角等著你。準備好了嗎？讓我們開始吧！',
-  ];
 
   @override
   void initState() {
@@ -95,9 +86,22 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         if (_minTimeReached) _tryAutoAdvance();
       }
     });
+
+    _audioPlayer.onPlayerComplete.listen((_) {
+      if (_currentAudioCompleter != null && !_currentAudioCompleter!.isCompleted) {
+        _currentAudioCompleter!.complete();
+      }
+      if (!_done && mounted && !_inFeatureTour) {
+        _ttsComplete = true;
+        if (_minTimeReached) _tryAutoAdvance();
+      }
+    });
   }
 
   void _initAnimations() {
+    _introGifCtrl = GifController(vsync: this);
+    _waveGifCtrl = GifController(vsync: this);
+
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 950),
@@ -112,17 +116,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       duration: const Duration(milliseconds: 400),
     );
 
-    // Scene 0：小助理從螢幕底部彈入
-    _mascotEntrance = CurvedAnimation(
-      parent: _ctrl,
-      curve: const Interval(0.0, 0.65, curve: Curves.elasticOut),
-    );
-
-    // Scene 2：放大至右下角
-    _zoomAnim = CurvedAnimation(
-      parent: _ctrl,
-      curve: const Interval(0.55, 1.0, curve: Curves.easeInOut),
-    );
 
     _fadeA = CurvedAnimation(
       parent: _ctrl,
@@ -130,32 +123,13 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
     _fadeB = CurvedAnimation(
       parent: _ctrl,
-      curve: const Interval(0.45, 0.85, curve: Curves.easeOut),
+      curve: const Interval(0.5, 0.9, curve: Curves.easeOut),
     );
-    _fadeC = CurvedAnimation(
-      parent: _ctrl,
-      curve: const Interval(0.6, 1.0, curve: Curves.easeOut),
-    );
-
-    _pulse = Tween<double>(begin: 0.88, end: 1.12).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
-    );
-
-    // Scene 3 六功能依序淡入
-    for (int i = 0; i < 6; i++) {
-      final s = (0.48 + i * 0.07).clamp(0.0, 0.88);
-      _featureFades.add(CurvedAnimation(
-        parent: _ctrl,
-        curve:
-            Interval(s, (s + 0.22).clamp(0.0, 1.0), curve: Curves.easeOut),
-      ));
-    }
   }
 
   Future<void> _goScene(int s) async {
     if (!mounted || _done) return;
     _minTimer?.cancel();
-    _gifTimer?.cancel();
     _ttsComplete = false;
     _minTimeReached = false;
 
@@ -170,43 +144,119 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     _ctrl..reset()..forward();
     setState(() => _sceneOpacity = 1.0);
 
-    // Scene 0：啟動 GIF 計時，時間到切靜止圖
+    _talkCtrl.stop();
+    _talkCtrl.reset();
+
+    final preDelay = s == 0 ? 1800 : 300;
+    await Future.delayed(Duration(milliseconds: preDelay));
+    if (!mounted || _done) return;
+
     if (s == 0) {
-      setState(() => _gifDone = false);
-      _gifTimer = Timer(Duration(milliseconds: _gifDurationMs), () {
-        if (mounted && !_done && _scene == 0) {
-          setState(() => _gifDone = true);
+      _introGifCtrl.reset();
+      Future.delayed(const Duration(milliseconds: 1000), () {
+        if (!mounted || _done || _scene != 0) return;
+        _introGifCtrl.repeat();
+      });
+      await _audioPlayer.play(AssetSource('mp3/audio_1.mp3'));
+      _minTimer = Timer(const Duration(milliseconds: 6000), () {
+        if (!_done && mounted) {
+          _minTimeReached = true;
+          if (_ttsComplete) _tryAutoAdvance();
+        }
+      });
+    } else if (s == 1) {
+      _startFeatureTour();
+    } else {
+      if (mounted) setState(() => _scene2Phase = 0);
+      _startScene2Sequence();
+      await _audioPlayer.play(AssetSource('mp3/audio_3.mp3'));
+      _minTimer = Timer(const Duration(milliseconds: 12000), () {
+        if (!_done && mounted) {
+          _minTimeReached = true;
+          if (_ttsComplete) _tryAutoAdvance();
         }
       });
     }
+  }
 
-    // Scene 2 & 3：開始嘴巴開合動畫
-    if (s == 2 || s == 3) {
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted && !_done && _scene == s) _talkCtrl.repeat();
+  void _startScene2Sequence() {
+    // Phase 1：縮放 + 點擊漣漪
+    Future.delayed(const Duration(milliseconds: 900), () {
+      if (!mounted || _done || _scene != 2) return;
+      setState(() => _scene2Phase = 1);
+
+      // Phase 2：泡泡框（問候 + 選項）出現
+      Future.delayed(const Duration(milliseconds: 2800), () {
+        if (!mounted || _done || _scene != 2) return;
+        setState(() => _scene2Phase = 2);
+
+        // Phase 3：選項高亮（停留 4 秒）
+        Future.delayed(const Duration(milliseconds: 4000), () {
+          if (!mounted || _done || _scene != 2) return;
+          setState(() => _scene2Phase = 3);
+
+          // Phase 4：切換成回答（停留 4 秒）
+          Future.delayed(const Duration(milliseconds: 4000), () {
+            if (!mounted || _done || _scene != 2) return;
+            setState(() => _scene2Phase = 4);
+          });
+        });
       });
-    } else {
-      _talkCtrl.stop();
-      _talkCtrl.reset();
+    });
+  }
+
+  Future<void> _startFeatureTour() async {
+    _inFeatureTour = true;
+
+    // 先播開頭
+    if (mounted && !_done) {
+      _currentAudioCompleter = Completer<void>();
+      await _audioPlayer.play(AssetSource('mp3/audio_2_0.mp3'));
+      await _currentAudioCompleter!.future.timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {},
+      );
+      _currentAudioCompleter = null;
+      if (mounted && !_done) await Future.delayed(const Duration(milliseconds: 300));
     }
 
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (!mounted || _done) return;
-    await _tts.speak(_scripts[s]);
+    const audioFiles = [
+      'mp3/audio_2_1.mp3',
+      'mp3/audio_2_2.mp3',
+      'mp3/audio_2_3.mp3',
+      'mp3/audio_2_4.mp3',
+      'mp3/audio_2_5.mp3',
+      'mp3/audio_2_6.mp3',
+    ];
 
-    final minMs = (_scripts[s].length * 200 + 4000).clamp(8000, 18000);
-    _minTimer = Timer(Duration(milliseconds: minMs), () {
-      if (!_done && mounted) {
-        _minTimeReached = true;
-        if (_ttsComplete) _tryAutoAdvance();
-      }
-    });
+    for (int i = 0; i < audioFiles.length; i++) {
+      if (!mounted || _done || !_inFeatureTour || _scene != 1) break;
+      if (mounted) setState(() => _highlightedFeature = i);
+      _currentAudioCompleter = Completer<void>();
+      await _audioPlayer.play(AssetSource(audioFiles[i]));
+      await _currentAudioCompleter!.future.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () {},
+      );
+      _currentAudioCompleter = null;
+      if (!mounted || _done || !_inFeatureTour || _scene != 1) break;
+      await Future.delayed(const Duration(milliseconds: 400));
+    }
+
+    _inFeatureTour = false;
+    _currentAudioCompleter = null;
+    if (mounted) setState(() => _highlightedFeature = -1);
+    if (!_done && mounted && _scene == 1) {
+      _ttsComplete = true;
+      _minTimeReached = true;
+      _tryAutoAdvance();
+    }
   }
 
   void _tryAutoAdvance() {
     Future.delayed(const Duration(milliseconds: 1000), () {
       if (!_done && mounted && _ttsComplete && _minTimeReached) {
-        if (_scene < 3) {
+        if (_scene < 2) {
           _goScene(_scene + 1);
         } else {
           setState(() => _showStartBtn = true);
@@ -218,8 +268,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   void _manualNext() {
     if (_done) return;
     _tts.stop();
+    _audioPlayer.stop();
     _minTimer?.cancel();
-    if (_scene < 3) {
+    _inFeatureTour = false;
+    if (_currentAudioCompleter != null && !_currentAudioCompleter!.isCompleted) {
+      _currentAudioCompleter!.complete();
+    }
+    _currentAudioCompleter = null;
+    if (mounted) setState(() => _highlightedFeature = -1);
+    if (_scene < 2) {
       _goScene(_scene + 1);
     } else {
       setState(() => _showStartBtn = true);
@@ -229,15 +286,27 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   void _manualBack() {
     if (_done || _scene <= 0) return;
     _tts.stop();
+    _audioPlayer.stop();
     _minTimer?.cancel();
+    _inFeatureTour = false;
+    if (_currentAudioCompleter != null && !_currentAudioCompleter!.isCompleted) {
+      _currentAudioCompleter!.complete();
+    }
+    _currentAudioCompleter = null;
+    if (mounted) setState(() => _highlightedFeature = -1);
     _goScene(_scene - 1);
   }
 
   void _skip() {
     _done = true;
     _tts.stop();
+    _audioPlayer.stop();
     _minTimer?.cancel();
-    _gifTimer?.cancel();
+    _inFeatureTour = false;
+    if (_currentAudioCompleter != null && !_currentAudioCompleter!.isCompleted) {
+      _currentAudioCompleter!.complete();
+    }
+    _currentAudioCompleter = null;
     _goHome();
   }
 
@@ -252,8 +321,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   void dispose() {
     _done = true;
     _tts.stop();
+    _audioPlayer.dispose();
+    _introGifCtrl.dispose();
+    _waveGifCtrl.dispose();
     _minTimer?.cancel();
-    _gifTimer?.cancel();
     _ctrl.dispose();
     _pulseCtrl.dispose();
     _talkCtrl.dispose();
@@ -321,7 +392,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: List.generate(
-                          4,
+                          3,
                           (i) => AnimatedContainer(
                             duration: const Duration(milliseconds: 300),
                             margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -401,217 +472,79 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   Widget _buildScene(Size size) => switch (_scene) {
         0 => _buildScene0(size),
         1 => _buildScene1(size),
-        2 => _buildScene2(size),
-        _ => _buildScene3(size),
+        _ => _buildScene2(size),
       };
 
   // ── Scene 0：小助理 GIF 揮手（播一次停住）─────────────────────────────────
 
   Widget _buildScene0(Size size) {
-    final mascotW = size.width;
-    return Stack(
-      clipBehavior: Clip.hardEdge,
-      children: [
-        // 上方文字
-        Positioned(
-          top: size.height * 0.09,
-          left: 0,
-          right: 0,
-          child: Column(
-            children: [
-              FadeTransition(
-                opacity: _fadeA,
-                child: const Text(
-                  '嗨！我是你的\n防災小助理 ✨',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 34,
-                    fontWeight: FontWeight.w900,
-                    color: _textPrimary,
-                    height: 1.3,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              FadeTransition(
-                opacity: _fadeB,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 40),
-                  child: Text(
-                    '很高興認識你！讓我帶你認識這個 APP 吧',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: _textSecondary,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // 小助理：從螢幕底部彈入，播放 GIF 一次後切靜止圖
-        AnimatedBuilder(
-          animation: _mascotEntrance,
-          builder: (_, child) {
-            final t = _mascotEntrance.value;
-            final startBottom = -(mascotW * 1.05);
-            final endBottom = -(mascotW * 0.45);
-            final currentBottom =
-                startBottom + (endBottom - startBottom) * t;
-            return Positioned(
-              bottom: currentBottom,
-              left: 0,
-              right: 0,
-              child: child!,
-            );
-          },
-          // GIF 播完後切換到靜止圖；GIF 不存在時也 fallback 到靜止圖
-          child: _gifDone
-              ? Image.asset(
-                  'assets/images/mascot_hi.png',
-                  width: mascotW,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => _mascotFallback(mascotW),
-                )
-              : Image.asset(
-                  'assets/images/mascot_wave.gif',
-                  width: mascotW,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => Image.asset(
-                    'assets/images/mascot_hi.png',
-                    width: mascotW,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, _, _) => _mascotFallback(mascotW),
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-
-  // ── Scene 1：主頁樣式（手機框 + 小助理在右下角）────────────────────────────
-
-  Widget _buildScene1(Size size) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 80),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 小助理說話泡泡
-          FadeTransition(
-            opacity: _fadeA,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _mascotImg('assets/images/mascot_talking.png', 60),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 13, vertical: 11),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(14),
-                        topRight: Radius.circular(14),
-                        bottomRight: Radius.circular(14),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.07),
-                          blurRadius: 10,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    child: const Text(
-                      '主畫面有六大功能，\n都是關鍵時刻最需要的工具！',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _textPrimary,
-                        height: 1.45,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 手機框：展示完整主頁，小助理在右下角
-          FadeTransition(
-            opacity: _fadeB,
-            child: Center(
-              child: _PhoneMockup(
-                pulse: _pulse,
-                size: size,
-                talkAnim: _talkCtrl, // 停止中 → 顯示靜止小助理
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Scene 2：同樣手機框，鏡頭慢慢放大至右下角小助理 ────────────────────────
-
-  Widget _buildScene2(Size size) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         FadeTransition(
           opacity: _fadeA,
           child: const Text(
-            '隨時找得到我',
+            '嗨！我是你的\n防災小助理 ✨',
+            textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 28,
+              fontSize: 34,
               fontWeight: FontWeight.w900,
               color: _textPrimary,
+              height: 1.3,
             ),
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         FadeTransition(
           opacity: _fadeA,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 40),
             child: Text(
-              '不管在哪個畫面，我都在右下角等你 👇',
+              '很高興認識你！讓我帶你認識這個 APP 吧',
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 14,
+                fontSize: 15,
                 color: _textSecondary,
                 height: 1.5,
               ),
             ),
           ),
         ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 24),
+        Gif(
+          image: const AssetImage('assets/images/mascot_intro.gif'),
+          controller: _introGifCtrl,
+          autostart: Autostart.no,
+          width: size.width * 0.85,
+          fit: BoxFit.contain,
+        ),
+      ],
+    );
+  }
 
-        // 手機框漸漸放大，焦點固定在右下角小助理
-        AnimatedBuilder(
-          animation: _zoomAnim,
-          builder: (_, child) {
-            final z = _zoomAnim.value;
-            final scale = 1.0 + z * 1.4;
-            return Transform.scale(
-              scale: scale,
-              alignment: Alignment.bottomRight,
-              child: child,
-            );
-          },
+  // ── Scene 1：首頁完整複製 + 右下角站立小助理 ──────────────────────────────────
+
+  Widget _buildScene1(Size size) {
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+          child: FadeTransition(
+            opacity: _fadeA,
+            child: _homeContent(highlight: _highlightedFeature),
+          ),
+        ),
+        // 右下角站立小助理
+        Positioned(
+          right: -11,
+          bottom: 72,
           child: FadeTransition(
             opacity: _fadeB,
-            child: _PhoneMockup(
-              pulse: _pulse,
-              size: size,
-              talkAnim: _talkCtrl, // 小助理開始說話
+            child: Image.asset(
+              'assets/images/mascot_stand.png',
+              width: 175,
+              height: 175,
+              fit: BoxFit.contain,
             ),
           ),
         ),
@@ -619,258 +552,435 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  // ── Scene 3：模擬點擊小助理，出現功能說明文字泡泡 ───────────────────────────
+  // ── Scene 2：首頁 + 小助理 → 放大右下角 → 揮手 GIF → 模擬點擊 → 泡泡框 ─────────
 
-  Widget _buildScene3(Size size) {
-    // 每個功能的說明文字（emoji、名稱、一句話介紹）
-    const features = [
-      ('🆘', 'SOS 緊急求救', '一鍵傳送位置，立刻通知緊急聯絡人'),
-      ('📚', '防災知識', '學習地震、火災、颱風等應急技能'),
-      ('🗺️', '防空洞地圖', '找到離你最近的避難所'),
-      ('❤️', '健康回報', '告知家人你目前是否平安'),
-      ('💬', '聊天室', '和附近鄰居即時互助聯絡'),
-      ('🎁', '物資捐贈', '分享或領取緊急生活物資'),
-    ];
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 120),
-      child: Column(
-        children: [
-          FadeTransition(
-            opacity: _fadeA,
-            child: const Text(
-              '有問題？\n點我就知道！',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
-                color: _textPrimary,
-                height: 1.3,
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          FadeTransition(
-            opacity: _fadeB,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+  Widget _buildScene2(Size size) {
+    return Stack(
+      clipBehavior: Clip.hardEdge,
+      children: [
+        // 首頁內容 + 小助理，整體往右下角放大
+        Positioned.fill(
+          child: AnimatedScale(
+            scale: _scene2Phase >= 1 ? 1.35 : 1.0,
+            duration: const Duration(milliseconds: 900),
+            alignment: Alignment.bottomRight,
+            curve: Curves.easeInOut,
+            child: Stack(
               children: [
-                // 說明泡泡（左側）
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(18),
-                        topRight: Radius.circular(18),
-                        bottomRight: Radius.circular(18),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 14,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          '嗨！我在這裡 ✨',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: _textPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          '在每個頁面點我，我都能告訴你怎麼用！',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: _textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-
-                        // 六功能依序淡入
-                        ...List.generate(features.length, (i) {
-                          final opt = features[i];
-                          return FadeTransition(
-                            opacity: _featureFades[i],
-                            child: Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(opt.$1,
-                                      style: const TextStyle(fontSize: 15)),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          opt.$2,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: _textPrimary,
-                                          ),
-                                        ),
-                                        Text(
-                                          opt.$3,
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: _textSecondary,
-                                            height: 1.3,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
+                Positioned.fill(
+                  child: SingleChildScrollView(
+                    physics: const NeverScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+                    child: _homeContent(),
                   ),
                 ),
-                const SizedBox(width: 8),
-
-                // 右側小助理（脈衝跳動，吸引點擊）
-                ScaleTransition(
-                  scale: _pulse,
-                  child: _mascotImg('assets/images/mascot_hi.png', 88),
+                // 小助理：phase 0-1 站立，phase 2-3 hi，phase 4+ talking
+                Positioned(
+                  right: -11,
+                  bottom: 72,
+                  child: Image.asset(
+                    _scene2Phase >= 4
+                        ? 'assets/images/mascot_talking.png'
+                        : _scene2Phase >= 2
+                            ? 'assets/images/mascot_hi.png'
+                            : 'assets/images/mascot_stand.png',
+                    width: 175,
+                    height: 175,
+                    fit: BoxFit.contain,
+                  ),
                 ),
               ],
             ),
           ),
+        ),
 
-          const SizedBox(height: 14),
+        // 點擊漣漪動畫（phase 1）
+        if (_scene2Phase == 1)
+          Positioned(
+            right: 48,
+            bottom: 165,
+            child: _clickRipple(),
+          ),
 
-          // 提示文字
-          FadeTransition(
-            opacity: _fadeC,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        // 泡泡框（phase 2+）
+        Positioned(
+          right: 62,
+          bottom: 330,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 400),
+            opacity: _scene2Phase >= 2 ? 1.0 : 0.0,
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeOut,
+              offset: _scene2Phase >= 2 ? Offset.zero : const Offset(0.15, 0),
+              child: _mockSpeechBubble(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _clickRipple() {
+    return TweenAnimationBuilder<double>(
+      key: const ValueKey('click-ripple'),
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: const Duration(milliseconds: 700),
+      builder: (context, t, _) {
+        return SizedBox(
+          width: 80,
+          height: 80,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 24 + t * 50,
+                height: 24 + t * 50,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: _brown.withValues(alpha: (1 - t) * 0.55),
+                    width: 2,
+                  ),
+                ),
+              ),
+              Icon(Icons.touch_app_rounded, size: 22, color: _brown.withValues(alpha: (1 - t * 0.5))),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _mockSpeechBubble() {
+    final isResponse = _scene2Phase >= 4;
+    final opt = homeOptions[0]; // 避難所在哪裡？
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 240,
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.13),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: isResponse ? _mockResponseContent(opt) : _mockGreetingContent(),
+        ),
+        Positioned(
+          right: 16,
+          bottom: -10,
+          child: CustomPaint(
+            painter: _BubbleTailPainter(),
+            size: const Size(18, 11),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _mockGreetingContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Expanded(
+              child: Text(
+                '嗨！我是你的防災小助理 ✨',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF3D2C1E)),
+              ),
+            ),
+            Icon(Icons.close_rounded, size: 16, color: _textSecondary),
+          ],
+        ),
+        const SizedBox(height: 3),
+        Text('有什麼需要幫助的嗎？', style: TextStyle(fontSize: 11, color: _textSecondary)),
+        const SizedBox(height: 10),
+        ...List.generate(homeOptions.length, (i) {
+          final opt = homeOptions[i];
+          final tapped = _scene2Phase >= 3 && i == 0;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: _brown.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(20),
+                color: tapped ? const Color(0xFF5C3D2E).withValues(alpha: 0.12) : const Color(0xFFF7F3EC),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: tapped ? const Color(0xFF5C3D2E).withValues(alpha: 0.5) : const Color(0xFFD4C5B0),
+                  width: tapped ? 1.5 : 1,
+                ),
               ),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.touch_app_rounded,
-                      size: 15, color: _brown.withValues(alpha: 0.7)),
+                  Text(opt.icon, style: const TextStyle(fontSize: 13)),
                   const SizedBox(width: 6),
-                  Text(
-                    '任何頁面都可以點我喔！',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: _brown.withValues(alpha: 0.7),
-                      fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Text(
+                      opt.label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: const Color(0xFF3D2C1E),
+                        fontWeight: tapped ? FontWeight.w700 : FontWeight.w500,
+                      ),
                     ),
                   ),
+                  Icon(Icons.chevron_right_rounded, size: 14, color: _textSecondary),
                 ],
               ),
             ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _mockResponseContent(MascotOption opt) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.arrow_back_ios_new_rounded, size: 13, color: _textSecondary),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                '${opt.icon} ${opt.label}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF3D2C1E)),
+              ),
+            ),
+            Icon(Icons.close_rounded, size: 16, color: _textSecondary),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Container(height: 1, color: const Color(0xFF3D2C1E).withValues(alpha: 0.07)),
+        const SizedBox(height: 8),
+        Text(
+          opt.response,
+          style: const TextStyle(fontSize: 11, height: 1.6, color: Color(0xFF3D2C1E)),
+        ),
+      ],
+    );
+  }
+
+  // ── 螢光黃高亮邊框（用 _pulseCtrl 閃爍）──────────────────────────────────────
+
+  Widget _highlightGlow({required bool active, required Widget child, double radius = 18}) {
+    if (!active) return child;
+    return AnimatedBuilder(
+      animation: _pulseCtrl,
+      builder: (context, _) {
+        final t = _pulseCtrl.value;
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(
+              color: const Color(0xFFFFE03A).withValues(alpha: 0.5 + t * 0.5),
+              width: 2.0 + t * 2.0,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFFE03A).withValues(alpha: 0.5 * t),
+                blurRadius: 18,
+                spreadRadius: 3,
+              ),
+            ],
           ),
-        ],
-      ),
+          child: child,
+        );
+      },
     );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ── 首頁內容（Scene 1 & 2 共用）─────────────────────────────────────────────
 
-  Widget _mascotImg(String path, double size) {
-    return Image.asset(
-      path,
-      width: size,
-      height: size,
-      fit: BoxFit.contain,
-      errorBuilder: (_, _, _) => _mascotFallback(size),
+  Widget _homeContent({int highlight = -1}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Header
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFC4553A).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Image.asset('assets/images/logo.png', width: 26, height: 26),
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              '防災小助理：互CARES',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          '平安是福，互CARES',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _textPrimary, height: 1.2),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '從「Who cares？」到「互 CARES」，讓每一個求助不被忽略',
+          style: TextStyle(fontSize: 12, color: _textSecondary),
+        ),
+        const SizedBox(height: 14),
+        // SOS 大卡
+        _highlightGlow(
+          active: highlight == 0,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFD96048), Color(0xFFBF4530)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFC4553A).withValues(alpha: 0.35),
+                  blurRadius: 14, offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('SOS 緊急求救',
+                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900)),
+                      SizedBox(height: 4),
+                      Text('一鍵傳送 GPS 位置・即刻求援',
+                          style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.sos_rounded, color: Colors.white, size: 28),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(child: _onboardingFeatureCard('防災知識', '學習應急技能', Icons.auto_stories_rounded, const Color(0xFF7AA67A), highlighted: highlight == 1)),
+            const SizedBox(width: 10),
+            Expanded(child: _onboardingFeatureCard('避難所地圖', '附近避難所', Icons.location_on_rounded, const Color(0xFF6B9EAD), highlighted: highlight == 2)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(child: _onboardingFeatureCard('健康回報', '回報您的狀況', Icons.favorite_rounded, const Color(0xFFBF7A5A), highlighted: highlight == 3)),
+            const SizedBox(width: 10),
+            Expanded(child: _onboardingFeatureCard('聊天室', '互助聯絡', Icons.chat_bubble_rounded, const Color(0xFF9B88B3), highlighted: highlight == 4)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _highlightGlow(
+          active: highlight == 5,
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEFDF9),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF7AA67A).withValues(alpha: 0.15),
+                  blurRadius: 10, offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 72, height: 60,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7AA67A).withValues(alpha: 0.12),
+                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
+                  ),
+                  child: const Icon(Icons.volunteer_activism_rounded, color: Color(0xFF7AA67A), size: 28),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('物資捐贈', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary)),
+                      SizedBox(height: 2),
+                      Text('認領需求物資', style: TextStyle(fontSize: 11, color: _textSecondary)),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Icon(Icons.chevron_right_rounded, color: _textSecondary.withValues(alpha: 0.5), size: 20),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _mascotFallback(double size) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: _brown.withValues(alpha: 0.08),
-      ),
-      child: Icon(Icons.support_agent_rounded,
-          size: size * 0.55, color: _brown),
-    );
-  }
-}
-
-// ── Phone mockup（Scene 1 & 2 共用）─────────────────────────────────────────
-
-class _PhoneMockup extends StatelessWidget {
-  final Animation<double> pulse;
-  final Size size;
-  final AnimationController talkAnim;
-
-  const _PhoneMockup({
-    required this.pulse,
-    required this.size,
-    required this.talkAnim,
-  });
-
-  Widget _miniTile(IconData icon, String label, Color color) {
-    return Expanded(
+  Widget _onboardingFeatureCard(String title, String sub, IconData icon, Color color, {bool highlighted = false}) {
+    return _highlightGlow(
+      active: highlighted,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(5),
+          color: const Color(0xFFFEFDF9),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(color: color.withValues(alpha: 0.15), blurRadius: 10, offset: const Offset(0, 4)),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              flex: 3,
-              child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(5)),
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        color.withValues(alpha: 0.18),
-                        color.withValues(alpha: 0.07),
-                      ],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
-                  ),
-                  child: Center(child: Icon(icon, color: color, size: 9)),
-                ),
+            Container(
+              height: 72,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
               ),
+              child: Icon(icon, color: color, size: 30),
             ),
-            Expanded(
-              flex: 2,
-              child: Center(
-                child: Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 4.5,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF3D2C1E),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _textPrimary)),
+                  const SizedBox(height: 2),
+                  Text(sub, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+                ],
               ),
             ),
           ],
@@ -879,277 +989,26 @@ class _PhoneMockup extends StatelessWidget {
     );
   }
 
+}
+
+class _BubbleTailPainter extends CustomPainter {
   @override
-  Widget build(BuildContext context) {
-    final w = size.width * 0.56;
-    final h = w * 1.95;
-
-    return Container(
-      width: w,
-      height: h,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E),
-        borderRadius: BorderRadius.circular(w * 0.12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(5),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(w * 0.09),
-          child: Stack(
-            children: [
-              // 主頁畫面
-              Container(
-                color: const Color(0xFFF7F3EC),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // AppBar
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 7),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.shield_rounded,
-                              color: Color(0xFFC4553A), size: 13),
-                          const SizedBox(width: 4),
-                          const Text(
-                            '防災小助理',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF3D2C1E),
-                            ),
-                          ),
-                          const Spacer(),
-                          Container(
-                            width: 18,
-                            height: 18,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF5C3D2E),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // 歡迎語
-                    Padding(
-                      padding:
-                          const EdgeInsets.fromLTRB(10, 2, 10, 4),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            '平安是福，互CARES',
-                            style: TextStyle(
-                              fontSize: 7.5,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF3D2C1E),
-                            ),
-                          ),
-                          Text(
-                            '讓每一個求助不被忽略',
-                            style: TextStyle(
-                              fontSize: 5,
-                              color: const Color(0xFF8C7B6E).withValues(alpha: 0.8),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // 功能卡片
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(5, 2, 5, 4),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // SOS 大卡
-                            Container(
-                              height: 20,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFD96048),
-                                    Color(0xFFBF4530)
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                borderRadius: BorderRadius.circular(5),
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6),
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.sos_rounded,
-                                      color: Colors.white, size: 8),
-                                  SizedBox(width: 3),
-                                  Text(
-                                    'SOS 緊急求救',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 5.5,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            // 2×2 功能卡
-                            Expanded(
-                              child: Column(
-                                children: [
-                                  Expanded(
-                                    child: Row(
-                                      children: [
-                                        _miniTile(
-                                            Icons.auto_stories_rounded,
-                                            '防災知識',
-                                            const Color(0xFF7AA67A)),
-                                        const SizedBox(width: 4),
-                                        _miniTile(
-                                            Icons.location_on_rounded,
-                                            '防空洞',
-                                            const Color(0xFF6B9EAD)),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Expanded(
-                                    child: Row(
-                                      children: [
-                                        _miniTile(
-                                            Icons.favorite_rounded,
-                                            '健康回報',
-                                            const Color(0xFFBF7A5A)),
-                                        const SizedBox(width: 4),
-                                        _miniTile(
-                                            Icons.chat_bubble_rounded,
-                                            '聊天室',
-                                            const Color(0xFF9B88B3)),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            // 物資捐贈（寬版）
-                            Container(
-                              height: 18,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 7),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(5),
-                              ),
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.volunteer_activism_rounded,
-                                      color: Color(0xFF7AA67A), size: 8),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    '物資捐贈',
-                                    style: TextStyle(
-                                      fontSize: 5.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF3D2C1E),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // 右下角小助理（脈衝光暈 + 嘴巴開合）
-              Positioned(
-                right: -4,
-                bottom: 8,
-                child: ScaleTransition(
-                  scale: pulse,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: const Color(0xFFE8C99A)
-                              .withValues(alpha: 0.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFFE8C99A)
-                                  .withValues(alpha: 0.7),
-                              blurRadius: 12,
-                              spreadRadius: 4,
-                            ),
-                          ],
-                        ),
-                      ),
-                      AnimatedBuilder(
-                        animation: talkAnim,
-                        builder: (_, _) {
-                          final isTalking = talkAnim.value > 0.5;
-                          return Image.asset(
-                            isTalking
-                                ? 'assets/images/mascot_talking.png'
-                                : 'assets/images/mascot_stand.png',
-                            width: 34,
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, _, _) => const Icon(
-                              Icons.support_agent_rounded,
-                              size: 28,
-                              color: Color(0xFF5C3D2E),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // 「我在這裡！」標籤
-              Positioned(
-                right: 38,
-                bottom: 24,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 7, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF5C3D2E),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    '我在這裡！',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  void paint(Canvas canvas, Size size) {
+    final shadow = Paint()
+      ..color = Colors.black.withValues(alpha: 0.07)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+    final fill = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width * 0.75, size.height)
+      ..close();
+    canvas.drawPath(path, shadow);
+    canvas.drawPath(path, fill);
   }
+
+  @override
+  bool shouldRepaint(_BubbleTailPainter old) => false;
 }

@@ -197,7 +197,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
             // 輸入列
             Container(
               color: _card,
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              padding: const EdgeInsets.fromLTRB(14, 10, 100, 10),
               child: Row(
                 children: [
                   Expanded(

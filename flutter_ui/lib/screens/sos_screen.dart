@@ -253,46 +253,51 @@ class _SOSScreenState extends State<SOSScreen> with RouteAware {
               const Spacer(),
 
               // 位置 & 用戶資訊卡
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: _card,
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
+              Padding(
+                padding: const EdgeInsets.only(right: 100),
                 child: Column(
                   children: [
-                    _infoRow(Icons.person_rounded, '姓名', _currentUser?.name ?? '載入中…'),
-                    const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                    _infoRow(Icons.location_on_rounded, '目前位置', _locationText),
-                    const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                    _infoRow(Icons.phone_rounded, '緊急電話', '119 消防 ／ 110 警察'),
-                    const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                    _infoRow(Icons.access_time_rounded, '發送時間', _sentTimeText),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _card,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          _infoRow(Icons.person_rounded, '姓名', _currentUser?.name ?? '載入中…'),
+                          const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                          _infoRow(Icons.location_on_rounded, '目前位置', _locationText),
+                          const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                          _infoRow(Icons.phone_rounded, '緊急電話', '119 消防 ／ 110 警察'),
+                          const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                          _infoRow(Icons.access_time_rounded, '發送時間', _sentTimeText),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_sosSent)
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () => setState(() {
+                            _sosSent = false;
+                            _sentAt = null;
+                          }),
+                          child: Text('重置', style: TextStyle(color: _textSecondary)),
+                        ),
+                      ),
                   ],
                 ),
               ),
-
-              const SizedBox(height: 16),
-
-              if (_sosSent)
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    onPressed: () => setState(() {
-                      _sosSent = false;
-                      _sentAt = null;
-                    }),
-                    child: Text('重置', style: TextStyle(color: _textSecondary)),
-                  ),
-                ),
             ],
           ),
         ),
