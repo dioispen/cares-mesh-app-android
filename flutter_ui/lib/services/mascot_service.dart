@@ -34,28 +34,26 @@ class _MascotOptionsNotifier extends ChangeNotifier
 final _MascotOptionsNotifier mascotOptionsNotifier =
     _MascotOptionsNotifier(const []);
 
-final ValueNotifier<double> mascotBottomNotifier = ValueNotifier(20.0);
-
 // ─── Per-screen option sets ───────────────────────────────────────────────────
 
 const homeOptions = [
-  MascotOption(
-    icon: '🏠',
-    label: '避難所在哪裡？',
-    response:
-        '點選下方的「避難所地圖」功能卡 🗺️\n系統會根據你的位置，顯示附近的避難場所！\n\n也可以撥打\n📞 1991 災害應變中心\n直接向專人詢問。',
-  ),
-  MascotOption(
-    icon: '🆘',
-    label: '怎麼求救？',
-    response:
-        '緊急狀況請立刻撥打：\n\n🚒 消防／救護 → 119\n👮 警察報案 → 110\n📞 災害應變中心 → 1991\n\n也可以點選「SOS 緊急求救」功能卡，一鍵傳送位置！',
-  ),
   MascotOption(
     icon: '📋',
     label: '這個 APP 怎麼用？',
     response:
         '主畫面有 6 大功能 👇\n\n🆘 SOS 緊急求救\n📖 防災知識\n🗺️ 避難所地圖\n❤️ 健康回報\n💬 聊天室\n📦 物資捐贈\n\n點擊任一功能卡即可進入！',
+  ),
+  MascotOption(
+    icon: '📦',
+    label: '物資捐贈怎麼用？',
+    response:
+        '這裡顯示目前需要募集的物資清單 📋\n\n上方可依分類篩選物資：\n🥤 食品飲水　🏠 生活用品\n💊 醫療衛生　👔 衣物\n\n點擊任一物資卡片\n→ 輸入想捐贈的數量\n→ 點「確認認領」即完成登記 ✅\n\n感謝你的善心支持！',
+  ),
+  MascotOption(
+    icon: '📧',
+    label: '聯絡客服',
+    response:
+        '有任何問題或建議，歡迎聯絡我們 💙\n\n📧 客服信箱：\nhu_cares@gmail.com\n\n來信請附上：\n· 問題描述\n· 使用裝置型號\n· 發生時間\n\n我們會盡快回覆你！',
   ),
 ];
 

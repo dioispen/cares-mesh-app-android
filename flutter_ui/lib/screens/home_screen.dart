@@ -77,6 +77,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _navigateTo(Widget screen) {
+    if (screen is SupplyScreen) mascotOptionsNotifier.value = const [];
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
