@@ -315,7 +315,7 @@ class _TopHeader extends StatelessWidget {
         child: Column(
           children: [
             Image.asset(
-              'assets/images/logo.png',
+              'assets/images/mascot_hi.png',
               width: 100,
               height: 100,
               fit: BoxFit.contain,

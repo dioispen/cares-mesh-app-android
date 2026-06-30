@@ -68,16 +68,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   void _showProfile() {
     if (_user == null) return;
+    mascotOptionsNotifier.value = const [];
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => _ProfileSheet(user: _user!),
-    );
+    ).whenComplete(() {
+      mascotOptionsNotifier.value = homeOptions;
+    });
   }
 
   void _navigateTo(Widget screen) {
-    if (screen is SupplyScreen) mascotOptionsNotifier.value = const [];
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
@@ -99,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'screen': const KnowledgeScreen(),
       },
       {
-        'title': '避難所地圖',
+        'title': '防災避難所',
         'sub': '附近避難所',
         'icon': Icons.location_on_rounded,
         'color': const Color(0xFF6B9EAD),
@@ -113,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'screen': const HealthScreen(),
       },
       {
-        'title': '聊天室',
+        'title': '互助通訊',
         'sub': '互助聯絡',
         'icon': Icons.chat_bubble_rounded,
         'color': const Color(0xFF9B88B3),
@@ -145,11 +147,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         color: _sosRed.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Image.asset('assets/images/logo.png', width: 32, height: 32),
+                      child: const Icon(Icons.shield_rounded, color: _sosRed, size: 22),
                     ),
                     const SizedBox(width: 10),
                     const Text(
-                      '防災小助理：互CARES',
+                      '防災小助理',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
@@ -201,10 +203,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   children: [
                     // SOS 大卡
                     _SosHeroCard(
-                      onTap: () => _navigateTo(features[0]['screen'] as Widget),
+                      onTap: () {
+                        mascotOptionsNotifier.value = const [];
+                        _navigateTo(features[0]['screen'] as Widget);
+                      },
                     ),
                     const SizedBox(height: 14),
-                    // 防災知識 | 避難所地圖
+                    // 防災知識 | 防災避難所
                     Row(
                       children: [
                         Expanded(child: _FeatureCard(feature: features[1], featureIndex: 1, onTap: () => _navigateTo(features[1]['screen'] as Widget))),
@@ -213,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    // 健康回報 | 聊天室
+                    // 健康回報 | 互助通訊
                     Row(
                       children: [
                         Expanded(child: _FeatureCard(feature: features[3], featureIndex: 3, onTap: () => _navigateTo(features[3]['screen'] as Widget))),

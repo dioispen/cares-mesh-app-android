@@ -820,7 +820,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 color: const Color(0xFFC4553A).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Image.asset('assets/images/logo.png', width: 26, height: 26),
+              child: Image.asset('assets/images/mascot_hi.png', width: 26, height: 26),
             ),
             const SizedBox(width: 8),
             const Text(
@@ -891,7 +891,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           children: [
             Expanded(child: _onboardingFeatureCard('防災知識', '學習應急技能', Icons.auto_stories_rounded, const Color(0xFF7AA67A), highlighted: highlight == 1)),
             const SizedBox(width: 10),
-            Expanded(child: _onboardingFeatureCard('避難所地圖', '附近避難所', Icons.location_on_rounded, const Color(0xFF6B9EAD), highlighted: highlight == 2)),
+            Expanded(child: _onboardingFeatureCard('防災避難所', '附近避難所', Icons.location_on_rounded, const Color(0xFF6B9EAD), highlighted: highlight == 2)),
           ],
         ),
         const SizedBox(height: 10),
@@ -899,7 +899,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           children: [
             Expanded(child: _onboardingFeatureCard('健康回報', '回報您的狀況', Icons.favorite_rounded, const Color(0xFFBF7A5A), highlighted: highlight == 3)),
             const SizedBox(width: 10),
-            Expanded(child: _onboardingFeatureCard('聊天室', '互助聯絡', Icons.chat_bubble_rounded, const Color(0xFF9B88B3), highlighted: highlight == 4)),
+            Expanded(child: _onboardingFeatureCard('互助通訊', '互助聯絡', Icons.chat_bubble_rounded, const Color(0xFF9B88B3), highlighted: highlight == 4)),
           ],
         ),
         const SizedBox(height: 10),

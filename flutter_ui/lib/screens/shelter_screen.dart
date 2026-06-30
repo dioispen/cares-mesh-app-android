@@ -48,7 +48,7 @@ class _ShelterScreenState extends State<ShelterScreen> with RouteAware {
         backgroundColor: _bg,
         elevation: 0,
         title: const Text(
-          '避難所地圖',
+          '防災避難所',
           style: TextStyle(
               fontSize: 20, fontWeight: FontWeight.w800, color: _textPrimary),
         ),

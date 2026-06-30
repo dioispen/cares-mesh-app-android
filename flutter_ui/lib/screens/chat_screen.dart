@@ -21,7 +21,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
   static const _accent = Color(0xFF9B88B3);
 
   final List<Message> _messages = [
-    Message(sender: '系統', text: '歡迎進入防災聊天室，請保持冷靜、互助合作。', time: DateTime.now()),
+    Message(sender: '系統', text: '歡迎進入防災互助通訊，請保持冷靜、互助合作。', time: DateTime.now()),
     Message(sender: '志工A', text: '大家好，我在埔里火車站附近，這裡情況穩定。', time: DateTime.now()),
     Message(sender: '志工B', text: '南投縣政府已開放避難中心，地址：南投市中興新村。', time: DateTime.now()),
   ];
@@ -85,7 +85,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('防災聊天室', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
+            Text('防災互助通訊', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
             Text('公開頻道 · 即時互助', style: TextStyle(fontSize: 11, color: _textSecondary)),
           ],
         ),

@@ -301,7 +301,7 @@ class _StepHeader extends StatelessWidget {
         children: [
           Row(
             children: [
-              Image.asset('assets/images/logo.png', width: 32, height: 32),
+              Image.asset('assets/images/mascot_hi.png', width: 32, height: 32),
               const SizedBox(width: 8),
               const Text('防災 APP 註冊',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: brown)),
