@@ -4,6 +4,8 @@ import 'firebase_options.dart';
 import 'package:flutter/material.dart';
 import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
+import 'services/mascot_service.dart';
+import 'widgets/mascot_assistant.dart';
 
 // 全局 NavigatorKey 用於在沒有 Context 的情況下顯示 Dialog
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -130,6 +132,13 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5C3D2E)),
         useMaterial3: true,
+      ),
+      navigatorObservers: [mascotRouteObserver],
+      builder: (context, child) => Stack(
+        children: [
+          child!,
+          const Positioned.fill(child: MascotAssistant()),
+        ],
       ),
       home: const SetupScreen(),
     );

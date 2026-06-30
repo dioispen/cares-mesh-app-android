@@ -9,11 +9,12 @@ import '../models/user.dart';
 import '../models/health_report.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
+import '../services/mascot_service.dart';
 
 // Top-level function required by compute() — must live outside any class.
 HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
     HealthReportPayload.decode(payload);
-
+    
 class HealthService {
   String status = 'unknown';
   void updateStatus(String newStatus) => status = newStatus;
@@ -53,7 +54,8 @@ class HealthScreen extends StatefulWidget {
   State<HealthScreen> createState() => _HealthScreenState();
 }
 
-class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderStateMixin {
+class _HealthScreenState extends State<HealthScreen>
+    with SingleTickerProviderStateMixin, RouteAware {
   final HealthService _healthService = HealthService();
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
@@ -117,12 +119,25 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
   void dispose() {
+    mascotRouteObserver.unsubscribe(this);
     _tasksSubscription?.cancel();
     _bridgeSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = healthOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = healthOptions;
 
   void _listenToBridge() {
     _bridgeSubscription = BitchatBridge.events().listen((event) async {

@@ -4,7 +4,23 @@
       "Bash(flutter devices:*)",
       "Bash(flutter emulators:*)",
       "Bash(flutter run:*)",
-      "Bash(flutter create:*)"
+      "Bash(flutter create:*)",
+      "Bash(xcode-select -p)",
+      "Bash(xcodebuild -version)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(flutter analyze *)",
+      "WebFetch(domain:kiang.github.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:adr.npa.gov.tw)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(flutter pub *)",
+      "Bash(jobs)",
+      "Bash(code /Users/penny/Desktop/bitchat-android_dioispen_project)",
+      "Bash(open \"http://localhost:64077\")",
+      "Bash(open -a \"Google Chrome\" \"http://localhost:64077\")",
+      "Bash(kill 6222)",
+      "Bash(pkill -f \"flutter run\")"
     ]
   }
 }

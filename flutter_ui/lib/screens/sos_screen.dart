@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../services/mascot_service.dart';
 import '../services/sos_service.dart';
 
 class SOSScreen extends StatefulWidget {
@@ -12,7 +13,7 @@ class SOSScreen extends StatefulWidget {
   State<SOSScreen> createState() => _SOSScreenState();
 }
 
-class _SOSScreenState extends State<SOSScreen> {
+class _SOSScreenState extends State<SOSScreen> with RouteAware {
   final SOSService _sosService = SOSService();
 
   static const _bg = Color(0xFFF7F3EC);
@@ -34,6 +35,24 @@ class _SOSScreenState extends State<SOSScreen> {
     _loadUser();
     _fetchLocation();
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mascotRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
+  void dispose() {
+    mascotRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPush() => mascotOptionsNotifier.value = sosOptions;
+
+  @override
+  void didPopNext() => mascotOptionsNotifier.value = sosOptions;
 
   Future<void> _loadUser() async {
     final prefs = await SharedPreferences.getInstance();

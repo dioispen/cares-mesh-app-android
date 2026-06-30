@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
 import 'verify_email_screen.dart';
+import 'login_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -120,6 +121,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
           MaterialPageRoute(builder: (_) => VerifyEmailScreen(pendingUser: user)),
         );
       }
+    } on FirebaseAuthException catch (e) {
+      final msg = switch (e.code) {
+        'email-already-in-use' =>
+          '此 Email 已被註冊過。\n請至 Firebase Authentication 刪除舊帳號，或直接登入。',
+        'invalid-email' => 'Email 格式不正確',
+        'weak-password' => '密碼太簡單，請使用至少 6 位字元',
+        'network-request-failed' => '網路連線失敗，請確認網路後再試',
+        _ => '註冊失敗（${e.code}）：${e.message}',
+      };
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: const Color(0xFFC4553A),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -221,6 +242,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           style: TextStyle(color: _textSecondary.withAlpha(178), fontSize: 13)),
                     ),
                   ],
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('已有帳號？',
+                          style: TextStyle(color: _textSecondary, fontSize: 14)),
+                      TextButton(
+                        onPressed: _isSaving
+                            ? null
+                            : () => Navigator.of(context).pushReplacement(
+                                  MaterialPageRoute(
+                                      builder: (_) => const LoginScreen()),
+                                ),
+                        child: const Text('返回登入',
+                            style: TextStyle(
+                                color: _brown, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
