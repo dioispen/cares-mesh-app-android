@@ -60,19 +60,17 @@ class BitchatFlutterChannels(
         context.registerReceiver(statusReceiver, filter)
 
         // 監聽來自 Mesh 的封包，統一格式轉發給 Flutter 自行解析
+        // 注意：ContentTag 已經在 MessageHandler.handleTaggedBroadcast() 那一層被去除，
+        // 這裡拿到的 packet.payload 一定是「未加 tag」的原始資料，不可再嘗試偵測/剝除 tag byte
+        // （payload[0] 剛好等於 0x01 是合法資料，例如 reporterId 長度恰為 1 時，會被誤判成 tag 而遭到錯誤剝除）。
         MeshServiceHolder.onPacketReceived = { packet: BitchatPacket ->
             Log.d("BitchatBridge", "📨 收到封包，類型: 0x${packet.type.toString(16).uppercase()}, 大小: ${packet.payload.size}")
-            // 對 tagged-broadcast 封包，去除 payload[0] 的 ContentTag，Flutter 收到的 payload 格式不變
-            val isTagged = packet.type == MessageType.HEALTH_REPORT.value &&
-                packet.payload.isNotEmpty() &&
-                BroadcastContentTag.fromValue(packet.payload[0]) != null
-            val emitPayload = if (isTagged) packet.payload.drop(1) else packet.payload.toList()
             emitEvent(mapOf(
                 "type"       to "packet",
                 "packetType" to packet.type.toInt(),
                 "senderId"   to packet.senderID.toHexString(),
                 "timestamp"  to packet.timestamp.toLong(),
-                "payload"    to emitPayload.map { it.toInt() and 0xFF }
+                "payload"    to packet.payload.map { it.toInt() and 0xFF }
             ))
         }
     }
