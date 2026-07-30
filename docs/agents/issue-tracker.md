@@ -11,7 +11,7 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone. This repo has multiple remotes (`origin`, `upstream`, `disaster_app`); `gh` operations target the repo tied to `origin` (`dioispen/bitchat-android_dioispen_project`) unless a different repo is specified with `--repo`.
+**Always pass `--repo dioispen/cares-mesh-app-android`.** This clone has three remotes (`origin` → `dioispen/cares-mesh-app-android`, `upstream` → `permissionlesstech/bitchat-android`, `disaster_app` → `Penny104/disaster_app`) and no `gh` default repo is set, so `gh` cannot infer the target unambiguously — without `--repo` it either prompts or resolves to the wrong repo.
 
 ## Pull requests as a triage surface
 
