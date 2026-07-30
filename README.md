@@ -1,308 +1,144 @@
-<p align="center">
-    <img src="https://github.com/user-attachments/assets/188c42f8-d249-4a72-b27a-e2b4f10a00a8" alt="Bitchat Android Logo" width="480">
-</p>
+# CARES Mesh（Android）
 
 > [!WARNING]
-> This software has not received external security review and may contain vulnerabilities and may not necessarily meet its stated security goals. Do not use it for sensitive use cases, and do not rely on its security until it has been reviewed. Work in progress.
+> 本軟體未經外部安全審查，可能存在漏洞，也未必達成其宣稱的安全目標。請勿用於敏感情境，在完成審查前請勿依賴其安全性。本專案為在校專題，開發中。
 
-# bitchat for Android
+一套離線的災害應變 mesh 應用。受災者在無任何基礎設施的情況下，透過 Bluetooth LE mesh 發布自身狀況與位置；救援者讀取這些回報，據以決定優先前往的對象。
 
-A secure, decentralized, peer-to-peer messaging app that works over Bluetooth mesh networks. No internet required for mesh chats, no servers, no phone numbers - just pure encrypted communication. Bitchat also supports geohash channels, which use an internet connection to connect you with others in your geographic area.
+本專案是 [bitchat-android](https://github.com/permissionlesstech/bitchat-android) 的**修改版 fork**，保留其 BLE mesh 傳輸層與二進位協定，在其上加入災害應變的應用層。**詳細的來源說明與 GPLv3 授權義務見 [NOTICE.md](NOTICE.md)。**
 
-This is the **Android port** of the original [bitchat iOS app](https://github.com/jackjackbits/bitchat), maintaining 100% protocol compatibility for cross-platform communication.
+領域語彙以 [CONTEXT.md](CONTEXT.md) 為準（Health Report、Status、Severity 等詞在本專案有精確定義，不可混用）。
 
-## Install bitchat
+---
 
-You can download the latest version of bitchat for Android from the [GitHub Releases page](https://github.com/permissionlesstech/bitchat-android/releases).
+## 本組的修改
 
-Or you can:
+上游 bitchat 是一套通用的匿名通訊軟體。本專案將其改造為災害應變工具，主要改動如下：
 
-[<img alt="Get it on Google Play" height="60" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"/>](https://play.google.com/store/apps/details?id=com.bitchat.droid)
+### 應用層（新增）
 
-**Instructions:**
+| 項目 | 位置 |
+|---|---|
+| **Health Report 封包** — 受災者自述狀況（Status）、位置與聯絡資訊的線路格式與序列化 | `app/.../protocol/DisasterReportPacket.kt` |
+| **Flutter ↔ Android 橋接** — MethodChannel／EventChannel，讓 Flutter UI 驅動原生 mesh | `app/.../flutter/BitchatFlutterChannels.kt`、`FlutterChatActivity.kt` |
+| **網際網路上行** — 在有網路時將封包轉送至雲端 | `app/.../net/PacketUplinkManager.kt` |
+| **Flutter UI 全套畫面** — 登入／註冊／信箱驗證、首頁、SOS、避難所地圖、物資、防災知識、健康回報 | `flutter_ui/lib/screens/` |
+| **Firebase 整合** — 使用者驗證與健康資料儲存 | `flutter_ui/lib/services/auth_service.dart` |
 
-1.  **Download the APK:** On your Android device, navigate to the link above and download the latest `.apk` file. Open it.
-2.  **Allow Unknown Sources:** On some devices, before you can install the APK, you may need to enable "Install from unknown sources" in your device's settings. This is typically found under **Settings > Security** or **Settings > Apps & notifications > Special app access**.
-3.  **Install:** Open the downloaded `.apk` file to begin the installation.
+### 上游元件的修改
 
-## License
+- `mesh/MessageHandler.kt` — 加入 tagged broadcast 處理路徑（`BroadcastContentTag`）
+- `mesh/BluetoothMeshService.kt`、`mesh/PacketProcessor.kt` — 接上災害回報流程
+- `protocol/BinaryProtocol.kt` — 新增 `HEALTH_REPORT`（`0x30`）等訊息型別
+- `service/MeshForegroundService.kt`、`service/MeshServiceHolder.kt` — 前景服務生命週期調整
+- `ui/`、`MainActivity.kt` — 移除或停用不適用於本情境的上游 UI
+- Gradle — 嵌入 `:flutter` 子專案、加入 google-services plugin
 
-This project is released into the public domain. See the [LICENSE](LICENSE.md) file for details.
+完整的檔案層級差異：`git diff 632ee88 main`（`632ee88` 為 fork 自上游的最後一個未修改狀態）。
 
-## Features
+---
 
-- **✅ Cross-Platform Compatible**: Full protocol compatibility with iOS bitchat
-- **✅ Decentralized Mesh Network**: Automatic peer discovery and multi-hop message relay over Bluetooth LE
-- **✅ End-to-End Encryption**: X25519 key exchange + AES-256-GCM for private messages
-- **✅ Channel-Based Chats**: Topic-based group messaging with optional password protection
-- **✅ Store & Forward**: Messages cached for offline peers and delivered when they reconnect
-- **✅ Privacy First**: No accounts, no phone numbers, no persistent identifiers
-- **✅ IRC-Style Commands**: Familiar `/join`, `/msg`, `/who` style interface
-- **✅ Message Retention**: Optional channel-wide message saving controlled by channel owners
-- **✅ Emergency Wipe**: Triple-tap logo to instantly clear all data
-- **✅ Modern Android UI**: Jetpack Compose with Material Design 3
-- **✅ Dark/Light Themes**: Terminal-inspired aesthetic matching iOS version
-- **✅ Battery Optimization**: Adaptive scanning and power management
+## 建置
 
-## Android Setup
+### 前置需求
 
-### Prerequisites
+- Android Studio（含 Android SDK，compileSdk 36、minSdk 26）
+- JDK 17 以上
+- Flutter SDK（Dart SDK `^3.11.1`）— `flutter_ui/` 以 Gradle 子專案形式嵌入，建置 Android 前必須先取得 Flutter 相依套件
 
-- **Android Studio**: Arctic Fox (2020.3.1) or newer
-- **Android SDK**: API level 26 (Android 8.0) or higher
-- **Kotlin**: 1.8.0 or newer
-- **Gradle**: 7.0 or newer
-
-### Build Instructions
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/permissionlesstech/bitchat-android.git
-   cd bitchat-android
-   ```
-
-2. **Open in Android Studio:**
-   ```bash
-   # Open Android Studio and select "Open an Existing Project"
-   # Navigate to the bitchat-android directory
-   ```
-
-3. **Build the project:**
-   ```bash
-   ./gradlew build
-   ```
-
-4. **Install on device:**
-   ```bash
-   ./gradlew installDebug
-   ```
-
-### Development Build
-
-For development builds with debugging enabled:
+### 步驟
 
 ```bash
-./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+git clone https://github.com/dioispen/cares-mesh-app-android.git
+cd cares-mesh-app-android
+
+# 1. 取得 Flutter 相依套件（缺這一步 Gradle 會失敗）
+cd flutter_ui && flutter pub get && cd ..
+
+# 2. 建置
+./gradlew assembleDebug        # per-ABI + universal APK
+./gradlew installDebug         # 安裝到已連接的裝置
+
+# 測試
+./gradlew test                 # Kotlin 單元測試
+cd flutter_ui && flutter test  # Dart 測試
 ```
 
-### Release Build
+`assembleDebug` / `assembleRelease` 會產生分 ABI 的 APK（arm64、x86_64、armeabi-v7a、x86）加上一個 universal APK；`bundleRelease` 會關閉 split（由 Play Store 處理 ABI 分發）。
 
-For production releases:
+### Firebase
 
-```bash
-./gradlew assembleRelease
+需要 `app/google-services.json`。本 repo 未納入該檔，向組內索取。
+
+---
+
+## 架構
+
+Android（Kotlin）層擁有全部的網路、密碼學與背景服務；Flutter 層擁有絕大多數使用者可見的畫面。
+
+```
+flutter_ui/lib/screens/          使用者畫面
+        │
+        ├── bridge/bitchat_bridge.dart      Dart 端唯一的原生呼叫入口
+        │        ▲  MethodChannel（動作）／EventChannel（事件）
+        │        ▼
+app/.../flutter/BitchatFlutterChannels.kt   Kotlin 端橋接
+        │
+        ├── mesh/BluetoothMeshService        BLE mesh 核心
+        ├── protocol/BinaryProtocol          線路格式
+        ├── noise/、crypto/                  Noise 握手與加密
+        └── service/MeshForegroundService    背景常駐
 ```
 
-## Android-Specific Requirements
+### 主要套件
 
-### Permissions
+| 套件 | 職責 |
+|---|---|
+| `mesh/` | BLE mesh 核心 — `BluetoothMeshService` 協調 `PeerManager`、`FragmentManager`、`SecurityManager`、`StoreForwardManager`、`MessageHandler`、`BluetoothConnectionManager`、`PacketProcessor` |
+| `protocol/` | 線路格式 — `BinaryProtocol.kt` 編解碼；`MessageType`、`BroadcastContentTag` 定義封包型別；`HealthReportPayload` 為健康回報結構 |
+| `service/` | 前景服務 — `MeshForegroundService` 維持 mesh 存活；`MeshServiceHolder` 為單例存取點 |
+| `crypto/`、`noise/` | X25519／Ed25519／AES-256-GCM（BouncyCastle）與 Noise Protocol 會話 |
+| `net/` | 網際網路上行與 Tor／Arti |
+| `flutter/` | Flutter 橋接 |
+| `ui/` | Jetpack Compose 舊版 UI（多數畫面已由 Flutter 取代） |
 
-The app requires the following permissions (automatically requested):
+更完整的說明見 [AGENTS.md](AGENTS.md)。
 
-- **Bluetooth**: Core BLE functionality
-- **Location**: Required for BLE scanning on Android
-- **Network**: Expand your mesh through public internet relays
-- **Notifications**: Message alerts and background updates
+---
 
-### Hardware Requirements
+## 協定要點
 
-- **Bluetooth LE (BLE)**: Required for mesh networking
-- **Android 8.0+**: API level 26 minimum
-- **RAM**: 2GB recommended for optimal performance
+- 封包標頭：version(1) + type(1) + TTL(1) + timestamp(8) + flags(1) + payloadLength(2 或 4)
+- 最大 TTL 為 7 跳
+- 訊息 >100 bytes 自動以 LZ4 壓縮
+- 與上游 iOS bitchat 的二進位協定相容性由上游維持；本組新增的 `0x30` 等型別為本專案專有
 
-## Usage
+**ContentTag 規則**：`MessageHandler.handleTaggedBroadcast()` 在轉交 Flutter 前已剝除 `payload[0]` 的 `BroadcastContentTag`。橋接層收到的是**未帶 tag 的原始 payload** — 不要在橋接層再次偵測或剝除 tag byte。
 
-### Basic Commands
+---
 
-- `/j #channel` - Join or create a channel
-- `/m @name message` - Send a private message
-- `/w` - List online users
-- `/channels` - Show all discovered channels
-- `/block @name` - Block a peer from messaging you
-- `/block` - List all blocked peers
-- `/unblock @name` - Unblock a peer
-- `/clear` - Clear chat messages
-- `/pass [password]` - Set/change channel password (owner only)
-- `/transfer @name` - Transfer channel ownership
-- `/save` - Toggle message retention for channel (owner only)
+## 文件
 
-### Getting Started
+| 文件 | 內容 |
+|---|---|
+| [CONTEXT.md](CONTEXT.md) | 領域語彙 — 專案用詞的權威定義 |
+| [PLAN.md](PLAN.md) | 專題改善計畫、實驗矩陣、時程與分工 |
+| [NOTICE.md](NOTICE.md) | fork 來源、GPLv3 義務、第三方元件 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 分支策略與 commit 規範 |
+| [AGENTS.md](AGENTS.md) | 架構細節與開發標準 |
+| [docs/adr/](docs/adr/) | 架構決策紀錄 |
+| [PRIVACY_POLICY.md](PRIVACY_POLICY.md) | 隱私政策 |
 
-1. **Install the app** on your Android device (requires Android 8.0+)
-2. **Grant permissions** for Bluetooth and location when prompted
-3. **Launch bitchat** - it will auto-start mesh networking
-4. **Set your nickname** or use the auto-generated one
-5. **Connect automatically** to nearby iOS and Android bitchat users
-6. **Join a channel** with `/j #general` or start chatting in public
-7. **Messages relay** through the mesh network to reach distant peers
+---
 
-### Android UI Features
+## 分支現況
 
-- **Jetpack Compose UI**: Modern Material Design 3 interface
-- **Dark/Light Themes**: Terminal-inspired aesthetic matching iOS
-- **Haptic Feedback**: Vibrations for interactions and notifications
-- **Adaptive Layout**: Optimized for various Android screen sizes
-- **Message Status**: Real-time delivery and read receipts
-- **RSSI Indicators**: Signal strength colors for each peer
+`main` 為專題的單一真相來源，所有工作分支都應由 `main` 開出。分支策略見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-### Channel Features
+**待處理**：`origin/penny` 有 2026-06-30 之後的 UI 修正（`login_screen`、`supply_screen`、`onboarding_screen`、`pubspec.lock`、iOS 平台設定檔等）尚未併入。這些改動與 `main` 上的同名檔案重疊，需要人工解衝突，不在 R1 的範圍內。
 
-- **Password Protection**: Channel owners can set passwords with `/pass`
-- **Message Retention**: Owners can enable mandatory message saving with `/save`
-- **@ Mentions**: Use `@nickname` to mention users (with autocomplete)
-- **Ownership Transfer**: Pass control to trusted users with `/transfer`
+## 授權
 
-## Security & Privacy
+本專案依 **GNU General Public License v3.0** 授權，與上游 bitchat-android 相同。完整條款見 [LICENSE.md](LICENSE.md)，來源說明與修改紀錄見 [NOTICE.md](NOTICE.md)。
 
-### Encryption
-- **Private Messages**: X25519 key exchange + AES-256-GCM encryption
-- **Channel Messages**: Argon2id password derivation + AES-256-GCM
-- **Digital Signatures**: Ed25519 for message authenticity
-- **Forward Secrecy**: New key pairs generated each session
-
-### Privacy Features
-- **No Registration**: No accounts, emails, or phone numbers required
-- **Ephemeral by Default**: Messages exist only in device memory
-- **Cover Traffic**: Random delays and dummy messages prevent traffic analysis
-- **Emergency Wipe**: Triple-tap logo to instantly clear all data
-- **Bundled Tor Support**: Built-in Tor network integration for enhanced privacy when internet connectivity is available
-
-## Performance & Efficiency
-
-### Message Compression
-- **LZ4 Compression**: Automatic compression for messages >100 bytes
-- **30-70% bandwidth savings** on typical text messages
-- **Smart compression**: Skips already-compressed data
-
-### Battery Optimization
-- **Adaptive Power Modes**: Automatically adjusts based on battery level
-  - Performance mode: Full features when charging or >60% battery
-  - Balanced mode: Default operation (30-60% battery)
-  - Power saver: Reduced scanning when <30% battery
-  - Ultra-low power: Emergency mode when <10% battery
-- **Background efficiency**: Automatic power saving when app backgrounded
-- **Configurable scanning**: Duty cycle adapts to battery state
-
-### Network Efficiency
-- **Optimized Bloom filters**: Faster duplicate detection with less memory
-- **Message aggregation**: Batches small messages to reduce transmissions
-- **Adaptive connection limits**: Adjusts peer connections based on power mode
-
-## Technical Architecture
-
-### Binary Protocol
-bitchat uses an efficient binary protocol optimized for Bluetooth LE:
-- Compact packet format with 1-byte type field
-- TTL-based message routing (max 7 hops)
-- Automatic fragmentation for large messages
-- Message deduplication via unique IDs
-
-### Mesh Networking
-- Each device acts as both client and peripheral
-- Automatic peer discovery and connection management
-- Store-and-forward for offline message delivery
-- Adaptive duty cycling for battery optimization
-
-### Android-Specific Optimizations
-- **Coroutine Architecture**: Asynchronous operations for mesh networking
-- **Kotlin Coroutines**: Thread-safe concurrent mesh operations
-- **EncryptedSharedPreferences**: Secure storage for user settings
-- **Lifecycle-Aware**: Proper handling of Android app lifecycle
-- **Battery Optimization**: Foreground service and adaptive scanning
-
-## Android Technical Architecture
-
-### Core Components
-
-1. **BitchatApplication.kt**: Application-level initialization and dependency injection
-2. **MainActivity.kt**: Main activity handling permissions and UI hosting
-3. **ChatViewModel.kt**: MVVM pattern managing app state and business logic
-4. **BluetoothMeshService.kt**: Core BLE mesh networking (central + peripheral roles)
-5. **EncryptionService.kt**: Cryptographic operations using BouncyCastle
-6. **BinaryProtocol.kt**: Binary packet encoding/decoding matching iOS format
-7. **ChatScreen.kt**: Jetpack Compose UI with Material Design 3
-
-### Dependencies
-
-- **Jetpack Compose**: Modern declarative UI
-- **BouncyCastle**: Cryptographic operations (X25519, Ed25519, AES-GCM)
-- **Nordic BLE Library**: Reliable Bluetooth LE operations
-- **Kotlin Coroutines**: Asynchronous programming
-- **LZ4**: Message compression (when enabled)
-- **EncryptedSharedPreferences**: Secure local storage
-
-### Binary Protocol Compatibility
-
-The Android implementation maintains 100% binary protocol compatibility with iOS:
-- **Header Format**: Identical 13-byte header structure
-- **Packet Types**: Same message types and routing logic
-- **Encryption**: Identical cryptographic algorithms and key exchange
-- **UUIDs**: Same Bluetooth service and characteristic identifiers
-- **Fragmentation**: Compatible message fragmentation for large content
-
-## Publishing to Google Play
-
-### Preparation
-
-1. **Update version information:**
-   ```kotlin
-   // In app/build.gradle.kts
-   defaultConfig {
-       versionCode = 2  // Increment for each release
-       versionName = "1.1.0"  // User-visible version
-   }
-   ```
-
-2. **Create a signed release build:**
-   ```bash
-   ./gradlew assembleRelease
-   ```
-
-3. **Generate app bundle (recommended for Play Store):**
-   ```bash
-   ./gradlew bundleRelease
-   ```
-
-### Play Store Requirements
-
-- **Target API**: Latest Android API (currently 34)
-- **Privacy Policy**: Required for apps requesting sensitive permissions
-- **App Permissions**: Justify Bluetooth and location usage
-- **Content Rating**: Complete questionnaire for age-appropriate content
-
-### Distribution
-
-- **Google Play Store**: Main distribution channel
-- **F-Droid**: For open-source distribution
-- **Direct APK**: For testing and development
-
-## Cross-Platform Communication
-
-This Android port enables seamless communication with the original iOS bitchat app:
-
-- **iPhone ↔ Android**: Full bidirectional messaging
-- **Mixed Groups**: iOS and Android users in same channels
-- **Feature Parity**: All commands and encryption work across platforms
-- **Protocol Sync**: Identical message format and routing behavior
-
-**iOS Version**: For iPhone/iPad users, get the original bitchat at [github.com/jackjackbits/bitchat](https://github.com/jackjackbits/bitchat)
-
-## Contributing
-
-Contributions are welcome! Key areas for enhancement:
-
-1. **Performance**: Battery optimization and connection reliability
-2. **UI/UX**: Additional Material Design 3 features
-3. **Security**: Enhanced cryptographic features
-4. **Testing**: Unit and integration test coverage
-5. **Documentation**: API documentation and development guides
-
-## Support & Issues
-
-- **Bug Reports**: [Create an issue](../../issues) with device info and logs
-- **Feature Requests**: [Start a discussion](https://github.com/orgs/permissionlesstech/discussions)
-- **Security Issues**: Email security concerns privately
-- **iOS Compatibility**: Cross-reference with [original iOS repo](https://github.com/jackjackbits/bitchat)
-
-For iOS-specific issues, please refer to the [original iOS bitchat repository](https://github.com/jackjackbits/bitchat).
+> 上游 README 曾寫有「released into the public domain」，該敘述在上游於 2026-02-28 將授權由 MIT 改為 GPLv3（commit `fb2bb64`）後即已失效。本 repo 的授權以 `LICENSE.md` 為準。
