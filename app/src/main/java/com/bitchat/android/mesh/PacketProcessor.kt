@@ -95,6 +95,17 @@ class PacketProcessor(private val myPeerID: String) {
     }
     
     /**
+     * Release the actor for a peer that has disconnected.
+     * Prevents unbounded growth of the actors map when peers come and go.
+     */
+    fun cleanupPeer(peerID: String) {
+        actors.remove(peerID)?.let { channel ->
+            try { channel.close() } catch (_: Exception) { }
+            Log.d(TAG, "🎭 Cleaned up packet actor for departed peer $peerID")
+        }
+    }
+
+    /**
      * Set up the packet relay manager with its delegate
      */
     fun setupRelayManager() {
@@ -149,6 +160,7 @@ class PacketProcessor(private val myPeerID: String) {
             MessageType.LEAVE -> handleLeave(routed)
             MessageType.FRAGMENT -> handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
+            MessageType.HEALTH_REPORT -> handleMessage(routed)
             else -> {
                 // Handle private packet types (address check required)
                 if (packetRelayManager.isPacketAddressedToMe(packet)) {
@@ -245,7 +257,7 @@ class PacketProcessor(private val myPeerID: String) {
         Log.d(TAG, "Processing REQUEST_SYNC from ${formatPeerForLog(peerID)}")
         delegate?.handleRequestSync(routed)
     }
-    
+
     /**
      * Handle delivery acknowledgment
      */
@@ -319,7 +331,7 @@ interface PacketProcessorDelegate {
     fun handleLeave(routed: RoutedPacket)
     fun handleFragment(packet: BitchatPacket): BitchatPacket?
     fun handleRequestSync(routed: RoutedPacket)
-    
+
     // Communication
     fun sendAnnouncementToPeer(peerID: String)
     fun sendCachedMessages(peerID: String)

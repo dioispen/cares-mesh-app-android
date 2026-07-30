@@ -36,35 +36,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * Extracted from ChatScreen.kt for better organization
  */
 
-
-
-
-@Composable
-fun TorStatusDot(
-    modifier: Modifier = Modifier
-) {
-    val torProvider = remember { com.bitchat.android.net.ArtiTorManager.getInstance() }
-    val torStatus by torProvider.statusFlow.collectAsState()
-    
-    if (torStatus.mode != com.bitchat.android.net.TorMode.OFF) {
-        val dotColor = when {
-            torStatus.running && torStatus.bootstrapPercent < 100 -> Color(0xFFFF9500) // Orange - bootstrapping
-            torStatus.running && torStatus.bootstrapPercent >= 100 -> Color(0xFF00C851) // Green - connected
-            else -> Color.Red // Red - error/disconnected
-        }
-        Canvas(
-            modifier = modifier
-        ) {
-            val radius = size.minDimension / 2
-            drawCircle(
-                color = dotColor,
-                radius = radius,
-                center = Offset(size.width / 2, size.height / 2)
-            )
-        }
-    }
-}
-
 @Composable
 fun NoiseSessionIcon(
     sessionState: String?,
@@ -244,7 +215,6 @@ fun ChatHeaderContent(
             // Main header
             MainHeader(
                 nickname = nickname,
-                onNicknameChange = viewModel::setNickname,
                 onTitleClick = onShowAppInfo,
                 onTripleTitleClick = onTripleClick,
                 onSidebarClick = onSidebarClick,
@@ -325,7 +295,6 @@ private fun ChannelHeader(
 @Composable
 private fun MainHeader(
     nickname: String,
-    onNicknameChange: (String) -> Unit,
     onTitleClick: () -> Unit,
     onTripleTitleClick: () -> Unit,
     onSidebarClick: () -> Unit,
@@ -370,7 +339,7 @@ private fun MainHeader(
             
             NicknameEditor(
                 value = nickname,
-                onValueChange = onNicknameChange
+                onValueChange = { viewModel.setNickname(it) }
             )
         }
         
@@ -430,13 +399,6 @@ private fun MainHeader(
                 onClick = onLocationNotesClick
             )
 
-            // Tor status dot when Tor is enabled
-            TorStatusDot(
-                modifier = Modifier
-                    .size(8.dp)
-                    .padding(start = 0.dp, end = 2.dp)
-            )
-            
             // PoW status indicator
             PoWStatusIndicator(
                 modifier = Modifier,

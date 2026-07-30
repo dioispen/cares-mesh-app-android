@@ -2,6 +2,7 @@ package com.bitchat.android.service
 
 import android.content.Context
 import com.bitchat.android.mesh.BluetoothMeshService
+import com.bitchat.android.protocol.BitchatPacket
 
 /**
  * Process-wide holder to share a single BluetoothMeshService instance
@@ -9,9 +10,16 @@ import com.bitchat.android.mesh.BluetoothMeshService
  */
 object MeshServiceHolder {
     private const val TAG = "MeshServiceHolder"
+    
     @Volatile
     var meshService: BluetoothMeshService? = null
         private set
+
+    /**
+     * Callback for incoming packets - used by BitchatFlutterChannels to receive BLE messages
+     */
+    @Volatile
+    var onPacketReceived: ((BitchatPacket) -> Unit)? = null
 
     @Synchronized
     fun getOrCreate(context: Context): BluetoothMeshService {

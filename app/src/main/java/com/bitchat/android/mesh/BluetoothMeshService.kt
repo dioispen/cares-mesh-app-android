@@ -16,6 +16,7 @@ import com.bitchat.android.model.RequestSyncPacket
 import com.bitchat.android.sync.GossipSyncManager
 import com.bitchat.android.util.toHexString
 import com.bitchat.android.services.VerificationService
+import com.bitchat.android.net.PacketUplinkManager
 import kotlinx.coroutines.*
 import java.util.*
 import kotlin.math.sign
@@ -55,6 +56,10 @@ class BluetoothMeshService(private val context: Context) {
     internal val connectionManager = BluetoothConnectionManager(context, myPeerID, fragmentManager) // Made internal for access
     private val packetProcessor = PacketProcessor(myPeerID)
     private lateinit var gossipSyncManager: GossipSyncManager
+    
+    // Uplink manager for gateway functionality
+    private val uplinkManager = PacketUplinkManager(context)
+
     // Service-level notification manager for background (no-UI) DMs
     private val serviceNotificationManager = com.bitchat.android.ui.NotificationManager(
         context.applicationContext,
@@ -191,6 +196,9 @@ class BluetoothMeshService(private val context: Context) {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to remove Noise session for $peerID: ${e.message}")
                 }
+
+                // Release the per-peer coroutine actor so it doesn't leak memory
+                try { packetProcessor.cleanupPeer(peerID) } catch (_: Exception) { }
             }
         }
         
@@ -508,7 +516,7 @@ class BluetoothMeshService(private val context: Context) {
                 try {
                     val pkt = routed.packet
                     val isBroadcast = (pkt.recipientID == null || pkt.recipientID.contentEquals(SpecialRecipients.BROADCAST))
-                    if (isBroadcast && pkt.type == MessageType.MESSAGE.value) {
+                    if (isBroadcast && (pkt.type == MessageType.MESSAGE.value || pkt.type == MessageType.HEALTH_REPORT.value)) {
                         gossipSyncManager.onPublicPacketSeen(pkt)
                     }
                 } catch (_: Exception) { }
@@ -551,11 +559,15 @@ class BluetoothMeshService(private val context: Context) {
                 val req = RequestSyncPacket.decode(routed.packet.payload) ?: return
                 gossipSyncManager.handleRequestSync(fromPeer, req)
             }
+
         }
         
         // BluetoothConnectionManager delegates
         connectionManager.delegate = object : BluetoothConnectionManagerDelegate {
         override fun onPacketReceived(packet: BitchatPacket, peerID: String, device: android.bluetooth.BluetoothDevice?) {
+            // Uplink packet to server if internet is available (Gateway functionality)
+            uplinkManager.uplinkPacketIfNeeded(packet)
+
             // Log incoming for debug graphs (do not double-count anywhere else)
             try {
                 com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().logIncoming(
@@ -684,6 +696,11 @@ class BluetoothMeshService(private val context: Context) {
             Log.i(TAG, "BluetoothMeshService terminated and scope cancelled")
         }
     }
+
+    /**
+     * Whether this service is currently active.
+     */
+    fun isStarted(): Boolean = isActive
 
     /**
      * Whether this instance can be safely reused. Returns false after stopServices() or if
@@ -916,17 +933,6 @@ class BluetoothMeshService(private val context: Context) {
         serviceScope.launch {
             Log.d(TAG, "📖 Sending read receipt for message $messageID to $recipientPeerID")
 
-            // Route geohash read receipts via MessageRouter instead of here
-            val geo = runCatching { com.bitchat.android.services.MessageRouter.tryGetInstance() }.getOrNull()
-            val isGeoAlias = try {
-                val map = com.bitchat.android.nostr.GeohashAliasRegistry.snapshot()
-                map.containsKey(recipientPeerID)
-            } catch (_: Exception) { false }
-            if (isGeoAlias && geo != null) {
-                geo.sendReadReceipt(com.bitchat.android.model.ReadReceipt(messageID), recipientPeerID)
-                return@launch
-            }
-
             try {
                 // Avoid duplicate read receipts: check persistent store first
                 val seenStore = try { com.bitchat.android.services.SeenMessageStore.getInstance(context.applicationContext) } catch (_: Exception) { null }
@@ -1010,6 +1016,24 @@ class BluetoothMeshService(private val context: Context) {
                 Log.d(TAG, "📤 Sent $label to $recipientPeerID (${payload.data.size} bytes)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send $label to $recipientPeerID: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 發送廣播 Packet（通用方法）
+     * 用於發送任何類型的 Packet（如 HEALTH_REPORT、MESSAGE 等）
+     */
+    fun sendBroadcastPacket(packet: BitchatPacket) {
+        serviceScope.launch {
+            try {
+                val signedPacket = signPacketBeforeBroadcast(packet)
+                connectionManager.broadcastPacket(RoutedPacket(signedPacket))
+                // 追蹤公開 packet 以進行同步
+                try { gossipSyncManager.onPublicPacketSeen(signedPacket) } catch (_: Exception) { }
+                Log.d(TAG, "✅ 廣播 Packet 成功: type=${packet.type}, payload size=${packet.payload.size}")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ 廣播 Packet 失敗: ${e.message}", e)
             }
         }
     }

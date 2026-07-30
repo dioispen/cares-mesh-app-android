@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.kotlin.compose)
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -99,10 +100,10 @@ dependencies {
     // Lifecycle
     implementation(libs.bundles.lifecycle)
     implementation(libs.androidx.lifecycle.process)
-    
+
     // Navigation
     implementation(libs.androidx.navigation.compose)
-    
+
     // Permissions
     implementation(libs.accompanist.permissions)
 
@@ -114,16 +115,16 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.compose)
-    
+
     // Cryptography
     implementation(libs.bundles.cryptography)
-    
+
     // JSON
     implementation(libs.gson)
-    
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
-    
+
     // Bluetooth
     implementation(libs.nordic.ble)
 
@@ -138,10 +139,19 @@ dependencies {
 
     // Google Play Services Location
     implementation(libs.gms.location)
+    implementation(platform("com.google.firebase:firebase-bom:34.11.0"))
+
+    implementation("com.google.guava:guava:31.1-android")
+
+    // Camera 相關依賴
+    implementation("androidx.camera:camera-core:1.3.0")
+    implementation("androidx.camera:camera-camera2:1.3.0")
+    implementation("androidx.camera:camera-lifecycle:1.3.0")
+    implementation("androidx.camera:camera-view:1.3.0")
 
     // Security preferences
     implementation(libs.androidx.security.crypto)
-    
+
     // EXIF orientation handling for images
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     
@@ -150,4 +160,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.bundles.compose.testing)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    //flutter
+    implementation(project(":flutter"))
 }

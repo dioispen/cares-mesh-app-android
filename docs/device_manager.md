@@ -1,6 +1,10 @@
-# Device Monitoring Manager — Design and Integration
+# Device Monitoring Manager — Design Proposal (NOT YET IMPLEMENTED)
 
-This change introduces a lean DeviceMonitoringManager to strictly manage BLE device connections while keeping the existing code structure intact.
+> **Status: UNIMPLEMENTED**
+> `DeviceMonitoringManager.kt` has not been created. None of the wiring changes to GATT client/server/connection managers described below have been applied.
+> The existing codebase only has application-layer user blocking (by Noise fingerprint, in `DataManager.kt`), not BLE MAC-address-level connection blocking.
+
+This document proposes a lean DeviceMonitoringManager to strictly manage BLE device connections while keeping the existing code structure intact.
 
 ## Goals
 
@@ -101,12 +105,12 @@ Timers:
 - Packet activity is captured in both client and server data paths as early as possible to ensure the inactivity timer is accurate even before higher-level processing.
 - The “first ANNOUNCE” check uses the same mapping event that sets `addressPeerMap` to avoid false positives on unverified announces.
 
-## Touched Files
+## Files to Create/Modify (Pending Implementation)
 
-- Added: `mesh/DeviceMonitoringManager.kt`
-- Updated: `mesh/BluetoothConnectionManager.kt`
-- Updated: `mesh/BluetoothGattClientManager.kt`
-- Updated: `mesh/BluetoothGattServerManager.kt`
-- Updated: `mesh/BluetoothMeshService.kt`
+- **To add**: `mesh/DeviceMonitoringManager.kt`
+- **To update**: `mesh/BluetoothConnectionManager.kt`
+- **To update**: `mesh/BluetoothGattClientManager.kt`
+- **To update**: `mesh/BluetoothGattServerManager.kt`
+- **To update**: `mesh/BluetoothMeshService.kt`
 
 These changes are small, local, and respect existing structure without broad refactors.

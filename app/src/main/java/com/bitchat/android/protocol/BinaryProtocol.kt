@@ -17,7 +17,8 @@ enum class MessageType(val value: UByte) {
     NOISE_ENCRYPTED(0x11u),  // Noise encrypted transport message
     FRAGMENT(0x20u), // Fragmentation for large packets
     REQUEST_SYNC(0x21u), // GCS-based sync request
-    FILE_TRANSFER(0x22u); // New: File transfer packet (BLE voice notes, etc.)
+    FILE_TRANSFER(0x22u), // New: File transfer packet (BLE voice notes, etc.)
+    HEALTH_REPORT(0x30u); // Renamed from DISASTER_REPORT
 
     companion object {
         fun fromValue(value: UByte): MessageType? {
@@ -31,6 +32,20 @@ enum class MessageType(val value: UByte) {
  */
 object SpecialRecipients {
     val BROADCAST = ByteArray(8) { 0xFF.toByte() }  // All 0xFF = broadcast
+}
+
+/**
+ * Content tags for HEALTH_REPORT(0x30) tagged-broadcast packets.
+ * payload[0] identifies the content type; payload[1..] is the actual data.
+ * Adding a new public broadcast type only requires a new entry here.
+ */
+enum class BroadcastContentTag(val value: Byte) {
+    HEALTH_REPORT(0x01);
+    // Future: SOS(0x02), SUPPLY_REQUEST(0x03), ...
+
+    companion object {
+        fun fromValue(b: Byte): BroadcastContentTag? = values().find { it.value == b }
+    }
 }
 
 /**
@@ -60,7 +75,8 @@ data class BitchatPacket(
     val payload: ByteArray,
     var signature: ByteArray? = null,  // Changed from val to var for packet signing
     var ttl: UByte,
-    var route: List<ByteArray>? = null // Optional source route: ordered list of peerIDs (8 bytes each), not including sender and final recipient
+    var route: List<ByteArray>? = null, // Optional source route: ordered list of peerIDs (8 bytes each), not including sender and final recipient
+    val severity: UByte? = null // Severity level for priority handling (0-255, higher = more urgent)
 ) : Parcelable {
 
     constructor(
@@ -76,7 +92,8 @@ data class BitchatPacket(
         timestamp = (System.currentTimeMillis()).toULong(),
         payload = payload,
         signature = null,
-        ttl = ttl
+        ttl = ttl,
+        severity = null
     )
 
     fun toBinaryData(): ByteArray? {
@@ -99,6 +116,7 @@ data class BitchatPacket(
             payload = payload,
             signature = null, // Remove signature for signing
             route = route,
+            severity = severity,
             ttl = com.bitchat.android.util.AppConstants.SYNC_TTL_HOPS // Use fixed TTL=0 for signing to ensure relay compatibility
         )
         return BinaryProtocol.encode(unsignedPacket)
@@ -156,6 +174,7 @@ data class BitchatPacket(
             val b = other.route?.map { it.toList() } ?: emptyList()
             if (a != b) return false
         }
+        if (severity != other.severity) return false
 
         return true
     }
@@ -170,6 +189,7 @@ data class BitchatPacket(
         result = 31 * result + (signature?.contentHashCode() ?: 0)
         result = 31 * result + ttl.hashCode()
         result = 31 * result + (route?.fold(1) { acc, bytes -> 31 * acc + bytes.contentHashCode() } ?: 0)
+        result = 31 * result + (severity?.hashCode() ?: 0)
         return result
     }
 }
@@ -189,6 +209,7 @@ object BinaryProtocol {
         const val HAS_SIGNATURE: UByte = 0x02u
         const val IS_COMPRESSED: UByte = 0x04u
         const val HAS_ROUTE: UByte = 0x08u
+        const val HAS_SEVERITY: UByte = 0x10u
     }
 
     private fun getHeaderSize(version: UByte): Int {
@@ -217,12 +238,13 @@ object BinaryProtocol {
             val headerSize = getHeaderSize(packet.version)
             val recipientBytes = if (packet.recipientID != null) RECIPIENT_ID_SIZE else 0
             val signatureBytes = if (packet.signature != null) SIGNATURE_SIZE else 0
+            val severityBytes = if (packet.severity != null) 1 else 0
             val sizeFieldBytes = if (isCompressed) (if (packet.version >= 2u.toUByte()) 4 else 2) else 0
             val payloadBytes = payload.size + sizeFieldBytes
             val routeBytes = if (!packet.route.isNullOrEmpty() && packet.version >= 2u.toUByte()) {
                 1 + (packet.route!!.size.coerceAtMost(255) * SENDER_ID_SIZE)
             } else 0
-            val capacity = headerSize + SENDER_ID_SIZE + recipientBytes + payloadBytes + signatureBytes + routeBytes + 16 // small slack
+            val capacity = headerSize + SENDER_ID_SIZE + recipientBytes + severityBytes + payloadBytes + signatureBytes + routeBytes + 16 // small slack
             val buffer = ByteBuffer.allocate(capacity.coerceAtLeast(512)).apply { order(ByteOrder.BIG_ENDIAN) }
             
             // Header
@@ -247,6 +269,9 @@ object BinaryProtocol {
             // HAS_ROUTE is only supported for v2+ packets
             if (!packet.route.isNullOrEmpty() && packet.version >= 2u.toUByte()) {
                 flags = flags or Flags.HAS_ROUTE
+            }
+            if (packet.severity != null) {
+                flags = flags or Flags.HAS_SEVERITY
             }
             buffer.put(flags.toByte())
             
@@ -282,6 +307,11 @@ object BinaryProtocol {
                     buffer.put(count.toByte())
                     cleaned.take(count).forEach { hop -> buffer.put(hop) }
                 }
+            }
+
+            // Severity (if present): 1 byte
+            packet.severity?.let { severity ->
+                buffer.put(severity.toByte())
             }
             
             // Payload (with original size prepended if compressed)
@@ -357,6 +387,7 @@ object BinaryProtocol {
             val isCompressed = (flags and Flags.IS_COMPRESSED) != 0u.toUByte()
             // HAS_ROUTE is only valid for v2+ packets; ignore the flag for v1
             val hasRoute = (version >= 2u.toUByte()) && (flags and Flags.HAS_ROUTE) != 0u.toUByte()
+            val hasSeverity = (flags and Flags.HAS_SEVERITY) != 0u.toUByte()
 
             // Payload length - version-dependent (2 or 4 bytes)
             val payloadLength = if (version >= 2u.toUByte()) {
@@ -368,6 +399,7 @@ object BinaryProtocol {
             // Calculate expected total size
             var expectedSize = headerSize + SENDER_ID_SIZE + payloadLength.toInt()
             if (hasRecipient) expectedSize += RECIPIENT_ID_SIZE
+            if (hasSeverity) expectedSize += 1 // 1 byte for severity
             var routeCount = 0
             if (hasRoute) {
                 // Peek count (1 byte) without consuming buffer for now
@@ -413,6 +445,11 @@ object BinaryProtocol {
                     }
                     hops
                 }
+            } else null
+
+            // Severity (if present)
+            val severity = if (hasSeverity) {
+                buffer.get().toUByte()
             } else null
 
             // Payload
@@ -464,7 +501,8 @@ object BinaryProtocol {
                 payload = payload,
                 signature = signature,
                 ttl = ttl,
-                route = route
+                route = route,
+                severity = severity
             )
             
         } catch (e: Exception) {

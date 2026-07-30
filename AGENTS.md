@@ -7,9 +7,11 @@ This document provides context, architectural insights, and development standard
 
 **Key Technologies:**
 - **Language:** Kotlin (JVM Target 1.8)
-- **UI Framework:** Jetpack Compose (Material 3)
+- **UI Framework:** Flutter (primary frontend)
+- **Backend UI:** Jetpack Compose (Material 3) for legacy components
 - **Asynchronous:** Kotlin Coroutines & Flow
-- **Networking:** Bluetooth Low Energy (BLE), Tor (Arti Rust bridge), OkHttp
+- **Networking:** Bluetooth Low Energy (BLE), OkHttp
+- **Database:** Google Firestore (authentication & health data)
 - **Architecture:** MVVM with Clean Architecture principles
 - **Build System:** Gradle (Kotlin DSL)
 
@@ -28,22 +30,25 @@ The application follows a clean architecture pattern, heavily modularized by fea
 | `noise/` | **Encryption**: Implementation of the Noise Protocol Framework for secure channels. |
 | `identity/` | **User Identity**: Management of user profiles and public/private keys. |
 | `features/` | **App Features**: Sub-modules for `voice`, `file`, and `media` handling. |
-| `nostr/` | **Relay Integration**: Logic for Nostr protocol integration and relay management. |
 | `geohash/` | **Location**: Utilities for location-based features and geohashing. |
 | `net/` | **Networking**: General network utilities and abstractions. |
 
 ## 3. Key Components
 
-### UI Layer (Jetpack Compose)
-- **Activity**: Single-Activity architecture (`MainActivity.kt`).
-- **Navigation**: Jetpack Compose Navigation.
-- **State Management**: `ViewModel` exposing `StateFlow` to Composables.
-- **Theme**: Custom theme definitions in `ui/theme`.
+### UI Layer
+- **Primary Framework**: Flutter (located in `flutter_ui/`) handles the main application UI and user-facing functionality.
+- **Legacy Components**: Jetpack Compose (Material 3) available for backend/legacy Android components.
+- **Flutter Features**: Registration/Login, health information packet upload, messaging interface.
+- **State Management**: ViewModel with StateFlow for Android components; Flutter Provider pattern for Flutter UI.
+- **Theme**: Custom theme definitions in both `ui/theme` (Android) and `flutter_ui/` (Flutter).
 
 ### Networking & Connectivity
 - **MeshForegroundService**: The critical component that keeps the mesh network alive. It manages the lifecycle of BLE scanning/advertising and other transport layers.
 - **BLE Stack**: Located in `mesh/` and `net/`, handles the intricacies of Android Bluetooth interactions.
-- **Tor/Arti**: Integrated via JNI (`jniLibs`) to provide anonymous internet routing where available.
+
+### Authentication & Data Management
+- **Firestore Integration**: Used for user registration/login and health information packet storage. Provides secure cloud-based authentication and data persistence.
+- **Health Data Upload**: Integrated with Firestore for secure transmission and storage of health information packets from Flutter UI.
 
 ## 4. Development Standards
 
@@ -52,6 +57,11 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - **Compose**: Use functional components. Hoist state to ViewModels where possible.
 - **Coroutines**: Use `suspend` functions for all I/O operations. strictly avoid blocking the main thread.
 - **Naming**: Clear, descriptive names. Follow standard Android naming patterns (e.g., `*ViewModel`, `*Repository`, `*Screen`).
+
+### Commit messages
+- Title 與 description 一律使用**繁體中文**撰寫。
+- 例外：`CONTEXT.md` 定義的領域語彙（Health Report、Status、Reporter、Broadcast Tier、Detail Tier、Severity、Severity Inflation、Relay Decision 等）維持原文，不要翻譯或改寫，以免與 `CONTEXT.md` 的 _Avoid_ 清單衝突。
+- 其他技術識別字（類別名、檔名、指令、type prefix 如 `fix:` / `docs:`）同樣保留原文。
 
 ### Testing
 - **Unit Tests**: Located in `app/src/test/`. Use for business logic, protocols, and utility testing.
@@ -69,6 +79,16 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - **Build Debug APK**: `./gradlew assembleDebug`
 - **Lint Check**: `./gradlew lint`
 - **Clean Build**: `./gradlew clean`
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
 ---
 *Note: This file is intended to assist AI agents in navigating and modifying the codebase efficiently. Always verify context by reading the actual files before making changes.*

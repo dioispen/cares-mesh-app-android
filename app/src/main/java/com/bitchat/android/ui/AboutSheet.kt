@@ -26,15 +26,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.bitchat.android.nostr.NostrProofOfWork
-import com.bitchat.android.nostr.PoWPreferenceManager
 import androidx.compose.ui.res.stringResource
 import com.bitchat.android.R
 import com.bitchat.android.core.ui.component.button.CloseButton
 import com.bitchat.android.core.ui.component.sheet.BitchatBottomSheet
-import com.bitchat.android.net.TorMode
-import com.bitchat.android.net.TorPreferenceManager
-import com.bitchat.android.net.ArtiTorManager
 
 /**
  * Feature row for displaying app capabilities
@@ -365,14 +360,7 @@ fun AboutSheet(
 
                     // Settings Section - Unified Card with Toggles
                     item(key = "settings") {
-                        LaunchedEffect(Unit) { PoWPreferenceManager.init(context) }
-                        val powEnabled by PoWPreferenceManager.powEnabled.collectAsState()
-                        val powDifficulty by PoWPreferenceManager.powDifficulty.collectAsState()
                         var backgroundEnabled by remember { mutableStateOf(com.bitchat.android.service.MeshServicePreferences.isBackgroundEnabled(true)) }
-                        val torMode = remember { mutableStateOf(TorPreferenceManager.get(context)) }
-                        val torProvider = remember { ArtiTorManager.getInstance() }
-                        val torStatus by torProvider.statusFlow.collectAsState()
-                        val torAvailable = remember { torProvider.isTorAvailable() }
 
                         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
                             Text(
@@ -403,217 +391,6 @@ fun AboutSheet(
                                                 com.bitchat.android.service.MeshForegroundService.start(context)
                                             }
                                         }
-                                    )
-                                    
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(start = 56.dp),
-                                        color = colorScheme.outline.copy(alpha = 0.12f)
-                                    )
-                                    
-                                    // Proof of Work Toggle
-                                    SettingsToggleRow(
-                                        icon = Icons.Filled.Speed,
-                                        title = stringResource(R.string.about_pow),
-                                        subtitle = stringResource(R.string.about_pow_tip),
-                                        checked = powEnabled,
-                                        onCheckedChange = { PoWPreferenceManager.setPowEnabled(it) }
-                                    )
-                                    
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(start = 56.dp),
-                                        color = colorScheme.outline.copy(alpha = 0.12f)
-                                    )
-                                    
-                                    // Tor Toggle
-                                    SettingsToggleRow(
-                                        icon = Icons.Filled.Security,
-                                        title = "Tor Network",
-                                        subtitle = stringResource(R.string.about_tor_route),
-                                        checked = torMode.value == TorMode.ON,
-                                        onCheckedChange = { enabled ->
-                                            if (torAvailable) {
-                                                torMode.value = if (enabled) TorMode.ON else TorMode.OFF
-                                                TorPreferenceManager.set(context, torMode.value)
-                                            }
-                                        },
-                                        enabled = torAvailable,
-                                        statusIndicator = if (torMode.value == TorMode.ON) {
-                                            {
-                                                val statusColor = when {
-                                                    torStatus.running && torStatus.bootstrapPercent >= 100 -> if (isDark) Color(0xFF32D74B) else Color(0xFF248A3D)
-                                                    torStatus.running -> Color(0xFFFF9500)
-                                                    else -> Color(0xFFFF3B30)
-                                                }
-                                                Surface(
-                                                    color = statusColor,
-                                                    shape = CircleShape,
-                                                    modifier = Modifier.size(8.dp)
-                                                ) {}
-                                            }
-                                        } else null
-                                    )
-                                }
-                            }
-                            
-                            // Tor unavailable hint
-                            if (!torAvailable) {
-                                Text(
-                                    text = stringResource(R.string.tor_not_available_in_this_build),
-                                    fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = colorScheme.onBackground.copy(alpha = 0.5f),
-                                    modifier = Modifier.padding(start = 16.dp, top = 8.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // PoW Difficulty Slider (when enabled)
-                    item(key = "pow_slider") {
-                        val powEnabled by PoWPreferenceManager.powEnabled.collectAsState()
-                        val powDifficulty by PoWPreferenceManager.powDifficulty.collectAsState()
-                        
-                        if (powEnabled) {
-                            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    color = colorScheme.surface,
-                                    shape = RoundedCornerShape(16.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(16.dp),
-                                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "Difficulty",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.Medium,
-                                                color = colorScheme.onSurface
-                                            )
-                                            Text(
-                                                text = "$powDifficulty bits • ${NostrProofOfWork.estimateMiningTime(powDifficulty)}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontFamily = FontFamily.Monospace,
-                                                color = colorScheme.onSurface.copy(alpha = 0.6f)
-                                            )
-                                        }
-                                        
-                                        Slider(
-                                            value = powDifficulty.toFloat(),
-                                            onValueChange = { PoWPreferenceManager.setPowDifficulty(it.toInt()) },
-                                            valueRange = 0f..32f,
-                                            steps = 31,
-                                            colors = SliderDefaults.colors(
-                                                thumbColor = if (isDark) Color(0xFF32D74B) else Color(0xFF248A3D),
-                                                activeTrackColor = if (isDark) Color(0xFF32D74B) else Color(0xFF248A3D)
-                                            )
-                                        )
-                                        
-                                        Text(
-                                            text = when {
-                                                powDifficulty == 0 -> stringResource(R.string.about_pow_desc_none)
-                                                powDifficulty <= 8 -> stringResource(R.string.about_pow_desc_very_low)
-                                                powDifficulty <= 12 -> stringResource(R.string.about_pow_desc_low)
-                                                powDifficulty <= 16 -> stringResource(R.string.about_pow_desc_medium)
-                                                powDifficulty <= 20 -> stringResource(R.string.about_pow_desc_high)
-                                                powDifficulty <= 24 -> stringResource(R.string.about_pow_desc_very_high)
-                                                else -> stringResource(R.string.about_pow_desc_extreme)
-                                            },
-                                            fontSize = 12.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            color = colorScheme.onSurface.copy(alpha = 0.5f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Tor Status (when enabled)
-                    item(key = "tor_status") {
-                        val torMode = remember { mutableStateOf(TorPreferenceManager.get(context)) }
-                        val torProvider = remember { ArtiTorManager.getInstance() }
-                        val torStatus by torProvider.statusFlow.collectAsState()
-                        
-                        if (torMode.value == TorMode.ON) {
-                            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    color = colorScheme.surface,
-                                    shape = RoundedCornerShape(16.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(16.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            val statusColor = when {
-                                                torStatus.running && torStatus.bootstrapPercent >= 100 -> if (isDark) Color(0xFF32D74B) else Color(0xFF248A3D)
-                                                torStatus.running -> Color(0xFFFF9500)
-                                                else -> Color(0xFFFF3B30)
-                                            }
-                                            Surface(color = statusColor, shape = CircleShape, modifier = Modifier.size(10.dp)) {}
-                                            Text(
-                                                text = if (torStatus.running) "Connected (${torStatus.bootstrapPercent}%)" else "Disconnected",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.Medium,
-                                                color = colorScheme.onSurface
-                                            )
-                                        }
-                                        if (torStatus.lastLogLine.isNotEmpty()) {
-                                            Text(
-                                                text = torStatus.lastLogLine.take(120),
-                                                fontSize = 11.sp,
-                                                fontFamily = FontFamily.Monospace,
-                                                color = colorScheme.onSurface.copy(alpha = 0.5f),
-                                                maxLines = 2
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Emergency Warning
-                    item(key = "warning") {
-                        Surface(
-                            modifier = Modifier
-                                .padding(horizontal = 20.dp)
-                                .fillMaxWidth(),
-                            color = colorScheme.error.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Warning,
-                                    contentDescription = null,
-                                    tint = colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.about_emergency_title),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = colorScheme.error
-                                    )
-                                    Text(
-                                        text = stringResource(R.string.about_emergency_tip),
-                                        fontSize = 13.sp,
-                                        color = colorScheme.onSurface.copy(alpha = 0.7f)
                                     )
                                 }
                             }

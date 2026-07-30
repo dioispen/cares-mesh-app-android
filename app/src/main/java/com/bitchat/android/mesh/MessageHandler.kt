@@ -6,7 +6,10 @@ import com.bitchat.android.model.BitchatMessageType
 import com.bitchat.android.model.IdentityAnnouncement
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.*
 import java.util.*
@@ -365,10 +368,13 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         }
         
         val recipientID = packet.recipientID?.takeIf { !it.contentEquals(delegate?.getBroadcastRecipient()) }
-        
+
         if (recipientID == null) {
-            // BROADCAST MESSAGE
-            handleBroadcastMessage(routed)
+            if (packet.type == MessageType.HEALTH_REPORT.value) {
+                handleTaggedBroadcast(routed)
+            } else {
+                handleBroadcastMessage(routed)
+            }
         } else if (recipientID.toHexString() == myPeerID) {
             // PRIVATE MESSAGE FOR US
             handlePrivateMessage(packet, peerID)
@@ -376,6 +382,23 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         // Message relay is now handled by centralized PacketRelayManager
     }
     
+    /**
+     * Dispatch HEALTH_REPORT(0x30) tagged-broadcast by BroadcastContentTag.
+     * payload[0] = tag; payload[1..] = actual data.
+     * Falls back to full payload decode for old-format packets (no tag byte).
+     */
+    private suspend fun handleTaggedBroadcast(routed: RoutedPacket) {
+        val packet = routed.packet
+        val tag = BroadcastContentTag.fromValue(packet.payload.getOrElse(0) { 0 })
+        val dataPayload = if (tag != null) packet.payload.drop(1).toByteArray() else packet.payload
+        when (tag) {
+            BroadcastContentTag.HEALTH_REPORT ->
+                handleHealthReport(routed.copy(packet = packet.copy(payload = dataPayload)))
+            null ->
+                handleHealthReport(routed)
+        }
+    }
+
     /**
      * Handle broadcast message with verification enforcement
      */
@@ -477,7 +500,52 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         }
     }
 
-    
+    /**
+     * Handle structured health report
+     */
+    suspend fun handleHealthReport(routed: RoutedPacket) {
+        val packet = routed.packet
+        val peerID = routed.peerID ?: "unknown"
+
+        Log.d(TAG, "🔍 收到健康報告封包，大小: ${packet.payload.size} 字節，來自: $peerID")
+        val report = HealthReportPayload.decode(packet.payload)
+        if (report != null) {
+            Log.d(TAG, "📢 成功解碼健康報告 - 回報者: ${report.name}, 狀態: ${report.status}")
+
+            // 1. Notify UI/Flutter
+            val message = BitchatMessage(
+                id = report.reporterId,
+                sender = report.name,
+                content = "[HEALTH REPORT] Status: ${report.status}\nLocation: ${report.lat}, ${report.lng}\nNote: ${report.description}",
+                senderPeerID = peerID,
+                timestamp = Date()
+            )
+            delegate?.onMessageReceived(message)
+
+            // 2. BACKEND CONCEPT: Automatic upload to management center if network is available
+            uploadToManagementCenter(report)
+            
+            // 3. 轉發給 Flutter EventChannel
+            MeshServiceHolder.onPacketReceived?.invoke(packet)
+        } else {
+            Log.w(TAG, "❌ 無法解碼健康報告封包，原始大小: ${packet.payload.size}")
+        }
+    }
+
+    private fun uploadToManagementCenter(report: HealthReportPayload) {
+        handlerScope.launch {
+            // Check network availability (simplified)
+            val cm = appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val network = cm?.activeNetwork
+            val caps = cm?.getNetworkCapabilities(network)
+            val hasInternet = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+
+            if (hasInternet) {
+                Log.d(TAG, "🌐 Internet available, uploading health report ${report.reporterId} to management center")
+                // TODO: Implement actual HTTP upload to your management center
+            }
+        }
+    }
     
     /**
      * Handle leave message
