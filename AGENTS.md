@@ -58,6 +58,11 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - **Coroutines**: Use `suspend` functions for all I/O operations. strictly avoid blocking the main thread.
 - **Naming**: Clear, descriptive names. Follow standard Android naming patterns (e.g., `*ViewModel`, `*Repository`, `*Screen`).
 
+### Commit messages
+- Title 與 description 一律使用**繁體中文**撰寫。
+- 例外：`CONTEXT.md` 定義的領域語彙（Health Report、Status、Reporter、Broadcast Tier、Detail Tier、Severity、Severity Inflation、Relay Decision 等）維持原文，不要翻譯或改寫，以免與 `CONTEXT.md` 的 _Avoid_ 清單衝突。
+- 其他技術識別字（類別名、檔名、指令、type prefix 如 `fix:` / `docs:`）同樣保留原文。
+
 ### Testing
 - **Unit Tests**: Located in `app/src/test/`. Use for business logic, protocols, and utility testing.
 - **Instrumented Tests**: Located in `app/src/androidTest/`. Use for UI and permission integration testing.
