@@ -41,8 +41,12 @@ git checkout -b feat/severity-relay-policy
 
 1. 從 `main` 開分支、完成工作
 2. 推上 `origin`，開 PR 到 `main`
-3. 至少一位組員 review 後合併
+3. 請一位組員 review 後合併
 4. 合併後刪除該分支（GitHub 上與本地都刪）
+
+`main` 已設定 branch protection：**強制走 PR、禁止 force push、禁止刪除分支、PR 上的 review comment 須全部解決才能合併**。approve 數量不強制（避免 7 人隊伍卡在時間喬不攏），但「請人 review」是團隊約定，不是可選項。
+
+repo admin 在緊急情況下可 bypass 保護規則 — 這是逃生口，不是日常流程。
 
 分支存活時間越短越好。一個分支活超過兩週，就該考慮它是不是該拆小。
 
