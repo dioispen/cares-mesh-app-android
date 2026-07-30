@@ -75,5 +75,15 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - **Lint Check**: `./gradlew lint`
 - **Clean Build**: `./gradlew clean`
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ---
 *Note: This file is intended to assist AI agents in navigating and modifying the codebase efficiently. Always verify context by reading the actual files before making changes.*
