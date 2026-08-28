@@ -2,6 +2,10 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
+/// 本機自填的完整 Health Report —— 含 Detail Tier 欄位（姓名、電話、血型、自由文字、
+/// 精確座標）。這份資料只走「Reporter 對後端的自願揭露」路徑（Firestore `health_reports`）
+/// 與自己的畫面，**不會**原樣進入 BLE 廣播；廣播出去的是 [BroadcastHealthReport] 對應的
+/// Broadcast Tier（見 ADR-0003）。
 class HealthReport {
   final String id;          // UUID v4，管理端追蹤用唯一識別碼
   final String reporterId;  // 回報者 ID
@@ -52,4 +56,35 @@ class HealthReport {
         lng: (json['lng'] as num?)?.toDouble(),
         reportTime: DateTime.parse(json['reportTime'] as String),
       );
+}
+
+/// 從 BLE 廣播收到的 Health Report —— 只有 Broadcast Tier。
+///
+/// 與本機自填的 [HealthReport] 是**不同來源**：這裡永遠沒有真實姓名、電話、血型、
+/// 自由文字或精確座標。UI 不得假設收到的回報帶有這些欄位；聯絡資訊須另行透過
+/// Detail Tier 請求（A2，見 ADR-0003）。
+class BroadcastHealthReport {
+  /// 不具識別性的固定長度識別碼，不可反推回帳號或 Firestore 文件。
+  final String reporterHandle;
+
+  /// '安全' / '輕傷' / '重傷'。
+  final String status;
+
+  /// 降精度 geohash；無位置時為 null。
+  final String? geohash;
+
+  /// 由 [geohash] 還原的近似座標；無位置時為 null。
+  final double? approxLat;
+  final double? approxLng;
+
+  final DateTime reportTime;
+
+  const BroadcastHealthReport({
+    required this.reporterHandle,
+    required this.status,
+    this.geohash,
+    this.approxLat,
+    this.approxLng,
+    required this.reportTime,
+  });
 }

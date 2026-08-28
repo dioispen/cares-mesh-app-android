@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -72,6 +73,8 @@ class _HealthScreenState extends State<HealthScreen>
 
   Position? _currentPosition;
   String? _currentUserId;
+  String? _myBroadcastHandle;
+  Future<String>? _broadcastHandleFuture;
   List<QueryDocumentSnapshot> _firestoreDocs = [];
   final List<MutualAidTask> _bleTasks = [];
   final Map<String, TaskStatus> _taskStatusOverrides = {};
@@ -155,31 +158,32 @@ class _HealthScreenState extends State<HealthScreen>
       if (decoded == null) return;
       if (!mounted) return;
 
-      // 不顯示自己發出的報告
-      if (decoded.reporterId == _currentUserId) return;
+      // 不顯示自己發出的報告（Broadcast Tier 沒有帳號 ID，以廣播 handle 比對）
+      if (decoded.reporterHandle == _myBroadcastHandle) return;
 
-      final report = decoded.toHealthReport();
+      final report = decoded.toBroadcastReport();
       final position = _currentPosition;
+      final hasLocation = report.approxLat != null && report.approxLng != null;
 
       double distanceKm = 0;
-      if (report.lat != null && report.lng != null && position != null) {
+      if (hasLocation && position != null) {
         final meters = Geolocator.distanceBetween(
           position.latitude, position.longitude,
-          report.lat!, report.lng!,
+          report.approxLat!, report.approxLng!,
         );
         distanceKm = meters / 1000;
       }
 
       final newTask = MutualAidTask(
-        id: 'ble_${report.reporterId}',
-        name: report.name,
-        userId: report.reporterId,
+        id: 'ble_${report.reporterHandle}',
+        name: '匿名回報 ${report.reporterHandle.substring(0, 4)}',
+        userId: report.reporterHandle,
         injury: report.status,
-        location: report.lat != null && report.lng != null
-            ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
+        location: hasLocation
+            ? '概略位置 ${report.approxLat!.toStringAsFixed(2)}, ${report.approxLng!.toStringAsFixed(2)}'
             : '位置未提供',
         distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
-        note: report.description ?? '來自 BLE 廣播',
+        note: '來自 BLE 廣播・聯絡資訊需另行請求',
         isBle: true,
       );
 
@@ -194,6 +198,31 @@ class _HealthScreenState extends State<HealthScreen>
     });
   }
 
+  /// 取得（或首次產生）本機的廣播 handle。
+  ///
+  /// 這是刻意**不從帳號衍生**的隨機值：不用 Firebase UID、電話或姓名雜湊，
+  /// 讓長期側錄者無法把 handle 反推回本人或 Firestore 文件（ADR-0003）。
+  /// 一經產生即固定，供接收端過濾自己的回報用。
+  ///
+  /// 用 [_broadcastHandleFuture] memoize，確保 initState 與使用者點擊兩條 async 路徑
+  /// 不會各自產生並寫入不同的隨機值。
+  Future<String> _getOrCreateBroadcastHandle(SharedPreferences prefs) {
+    return _broadcastHandleFuture ??= _loadOrCreateBroadcastHandle(prefs);
+  }
+
+  Future<String> _loadOrCreateBroadcastHandle(SharedPreferences prefs) async {
+    var handle = prefs.getString('broadcast_handle');
+    if (handle == null || !RegExp(r'^[0-9a-f]{12}$').hasMatch(handle)) {
+      final rng = Random.secure();
+      handle = List<String>.generate(
+        6,
+        (_) => rng.nextInt(256).toRadixString(16).padLeft(2, '0'),
+      ).join();
+      await prefs.setString('broadcast_handle', handle);
+    }
+    return handle;
+  }
+
   Future<void> _loadUserAndPosition() async {
     final prefs = await SharedPreferences.getInstance();
     final userJson = prefs.getString('app_user');
@@ -201,6 +230,8 @@ class _HealthScreenState extends State<HealthScreen>
       final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
       if (mounted) setState(() => _currentUserId = user.id);
     }
+    final handle = await _getOrCreateBroadcastHandle(prefs);
+    if (mounted) setState(() => _myBroadcastHandle = handle);
     final savedStatus = prefs.getString('health_status');
     final savedSub = prefs.getString('health_sub_injury');
     if (mounted) {
@@ -333,6 +364,11 @@ class _HealthScreenState extends State<HealthScreen>
       if (userJson == null) return;
       final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
 
+      final handle = _myBroadcastHandle ?? await _getOrCreateBroadcastHandle(prefs);
+      if (mounted && _myBroadcastHandle == null) {
+        setState(() => _myBroadcastHandle = handle);
+      }
+
       final report = HealthReport(
         reporterId: user.id,
         name: user.name,
@@ -345,15 +381,19 @@ class _HealthScreenState extends State<HealthScreen>
         reportTime: DateTime.now(),
       );
 
-      final reportJson = report.toJson();
+      // BLE 廣播只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標
+      // （由原生端就地降精度為 geohash）。姓名／電話／血型／自由文字一律不進入廣播（ADR-0003）。
+      await BitchatBridge.sendHealthReport({
+        'reporterHandle': handle,
+        'status': status,
+        'lat': _currentPosition?.latitude,
+        'lng': _currentPosition?.longitude,
+      });
 
-      // 所有狀態都透過 BLE 廣播，讓附近裝置知道你的狀態
-      await BitchatBridge.sendHealthReport(reportJson);
-
-      // 上傳到 Firebase (原本邏輯保留)
+      // Firestore 仍寫入完整回報（Reporter 對後端的自願揭露，另由 firestore.rules 治理）
       await FirebaseFirestore.instance
           .collection('health_reports')
-          .add(reportJson);
+          .add(report.toJson());
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

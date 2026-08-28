@@ -507,29 +507,36 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 
-        Log.d(TAG, "🔍 收到健康報告封包，大小: ${packet.payload.size} 字節，來自: $peerID")
+        Log.d(TAG, "🔍 收到健康報告封包，大小: ${packet.payload.size} 字節")
         val report = HealthReportPayload.decode(packet.payload)
-        if (report != null) {
-            Log.d(TAG, "📢 成功解碼健康報告 - 回報者: ${report.name}, 狀態: ${report.status}")
-
-            // 1. Notify UI/Flutter
-            val message = BitchatMessage(
-                id = report.reporterId,
-                sender = report.name,
-                content = "[HEALTH REPORT] Status: ${report.status}\nLocation: ${report.lat}, ${report.lng}\nNote: ${report.description}",
-                senderPeerID = peerID,
-                timestamp = Date()
-            )
-            delegate?.onMessageReceived(message)
-
-            // 2. BACKEND CONCEPT: Automatic upload to management center if network is available
-            uploadToManagementCenter(report)
-            
-            // 3. 轉發給 Flutter EventChannel
-            MeshServiceHolder.onPacketReceived?.invoke(packet)
-        } else {
+        if (report == null) {
             Log.w(TAG, "❌ 無法解碼健康報告封包，原始大小: ${packet.payload.size}")
+            return
         }
+        Log.d(TAG, "📢 健康報告解碼成功")
+
+        // 1. Notify UI/Flutter —— 只帶 Broadcast Tier：Status 與近似位置，不含任何 PII
+        val approx = report.approximateLatLng()
+        val locationText = if (approx != null) {
+            // Locale.US 固定用小數點，避免逗號小數的地區把座標對格式化成四個數字
+            String.format(java.util.Locale.US, "約 %.3f, %.3f", approx.first, approx.second)
+        } else {
+            "位置未提供"
+        }
+        val message = BitchatMessage(
+            id = report.reporterHandle,
+            sender = "匿名回報",
+            content = "[HEALTH REPORT] Status: ${report.status.label}\nLocation: $locationText",
+            senderPeerID = peerID,
+            timestamp = Date()
+        )
+        delegate?.onMessageReceived(message)
+
+        // 2. BACKEND CONCEPT: Automatic upload to management center if network is available
+        uploadToManagementCenter(report)
+
+        // 3. 轉發給 Flutter EventChannel
+        MeshServiceHolder.onPacketReceived?.invoke(packet)
     }
 
     private fun uploadToManagementCenter(report: HealthReportPayload) {
@@ -541,7 +548,7 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
             val hasInternet = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
 
             if (hasInternet) {
-                Log.d(TAG, "🌐 Internet available, uploading health report ${report.reporterId} to management center")
+                Log.d(TAG, "🌐 Internet available, uploading health report ${report.reporterHandle} to management center")
                 // TODO: Implement actual HTTP upload to your management center
             }
         }

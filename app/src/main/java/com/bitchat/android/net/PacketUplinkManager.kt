@@ -7,7 +7,6 @@ import android.util.Log
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
-import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.util.toHexString
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope

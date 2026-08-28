@@ -1,201 +1,163 @@
 package com.bitchat.android.protocol
 
 import android.util.Log
+import com.bitchat.android.geohash.Geohash
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Health Report Payload - Synchronized with Flutter health_report.dart
+ * Broadcast Tier —— Health Report 中「藍牙範圍內每台裝置都能讀」的部分。
+ *
+ * 依 ADR-0003 的分層揭露：本結構**不攜帶任何可識別個人的欄位**——沒有真實姓名、
+ * 電話、血型、自由文字說明，也沒有公尺級座標。真實身分與精確座標屬於 Detail Tier，
+ * 不走廣播，僅在 Rescuer 透過既有 Noise session 提出請求時釋出（A2，另開 issue）。
+ *
+ * 線路格式（big-endian，最大 [MAX_ENCODED_SIZE] bytes）：
+ * ```
+ *   [0]        version        1 byte   目前為 VERSION；未知版本一律拒收，不做盡力解析
+ *   [1..6]     reporterHandle 6 bytes  不具識別性、不可反推回帳號的固定長度識別碼
+ *   [7]        status         1 byte   HealthStatus.wire
+ *   [8]        geohashLen     1 byte   0 或 GEOHASH_PRECISION
+ *   [9..]      geohash        geohashLen bytes  ASCII base32，降精度近似位置
+ *   [末 4]     reportTime     4 bytes  Unix 秒（unsigned，big-endian）
+ * ```
+ *
+ * 這一份格式定義（Kotlin）與 Dart 端 `ble_packet_decoder.dart` 的 `HealthReportPayload`
+ * 必須對應同一組權威向量（見 `DisasterReportTest` 與 `health_report_payload_test.dart`）。
  */
 data class HealthReportPayload(
-    val reporterId: String,   // 回報者 ID
-    val name: String,         // 姓名
-    val phone: String,        // 手機
-    val bloodType: String?,   // 血型
-    val status: String,       // '安全' / '輕傷' / '重傷'
-    val description: String?, // 補充說明
-    val lat: Double?,         // 緯度
-    val lng: Double?,         // 經度
-    val reportTime: String    // ISO8601 時間字串
+    /** 12 個十六進位字元（6 bytes）。不具識別性，不得由 Firebase UID／電話／姓名雜湊等可反推值產生。 */
+    val reporterHandle: String,
+    val status: HealthStatus,
+    /** 降精度 geohash；無位置資訊時為空字串。 */
+    val geohash: String,
+    /** 回報時間（epoch millis）。線路上只保留到秒，解碼後的毫秒位固定為 0。 */
+    val reportTimeMillis: Long
 ) {
+
     fun encode(): ByteArray {
-        // 使用簡單的字串長度編碼或 JSON。考量到與 Flutter 對接方便，這裡採用與 Flutter 相同的欄位結構。
-        // 為求效能與穩定，我們定義一個二進位格式：
-        val reporterIdBytes = reporterId.toByteArray(Charsets.UTF_8)
-        val nameBytes = name.toByteArray(Charsets.UTF_8)
-        val phoneBytes = phone.toByteArray(Charsets.UTF_8)
-        val bloodTypeBytes = bloodType?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
-        val statusBytes = status.toByteArray(Charsets.UTF_8)
-        val descriptionBytes = description?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
-        val reportTimeBytes = reportTime.toByteArray(Charsets.UTF_8)
+        val handleBytes = hexToBytes(reporterHandle)
+        require(handleBytes.size == HANDLE_BYTES) {
+            "reporterHandle 必須是 $HANDLE_BYTES bytes（$HANDLE_BYTES * 2 個 hex 字元）"
+        }
+        val ghBytes = geohash.toByteArray(Charsets.US_ASCII)
+        require(ghBytes.isEmpty() || ghBytes.size == GEOHASH_PRECISION) {
+            "geohash 長度必須為 0 或 $GEOHASH_PRECISION"
+        }
 
-        val size = 1 + reporterIdBytes.size + 
-                   1 + nameBytes.size + 
-                   1 + phoneBytes.size + 
-                   1 + bloodTypeBytes.size + 
-                   1 + statusBytes.size + 
-                   2 + descriptionBytes.size + 
-                   16 + // Lat(8) + Lng(8)
-                   1 + reportTimeBytes.size
-
+        val size = 1 + HANDLE_BYTES + 1 + 1 + ghBytes.size + 4
         val buffer = ByteBuffer.allocate(size).apply { order(ByteOrder.BIG_ENDIAN) }
-        
-        // Write Fields
-        buffer.put(reporterIdBytes.size.toByte())
-        buffer.put(reporterIdBytes)
-        
-        buffer.put(nameBytes.size.toByte())
-        buffer.put(nameBytes)
-        
-        buffer.put(phoneBytes.size.toByte())
-        buffer.put(phoneBytes)
-        
-        buffer.put(bloodTypeBytes.size.toByte())
-        buffer.put(bloodTypeBytes)
-        
-        buffer.put(statusBytes.size.toByte())
-        buffer.put(statusBytes)
-        
-        buffer.putShort(descriptionBytes.size.toShort())
-        buffer.put(descriptionBytes)
-        
-        buffer.putDouble(lat ?: 0.0)
-        buffer.putDouble(lng ?: 0.0)
-        
-        buffer.put(reportTimeBytes.size.toByte())
-        buffer.put(reportTimeBytes)
-        
+        buffer.put(VERSION.toByte())
+        buffer.put(handleBytes)
+        buffer.put(status.wire)
+        buffer.put(ghBytes.size.toByte())
+        buffer.put(ghBytes)
+        buffer.putInt((reportTimeMillis / 1000L).toInt())
         return buffer.array()
     }
 
+    /** 由 geohash 還原的近似中心座標；無位置時為 null。這是「大約在哪」而非確切位置。 */
+    fun approximateLatLng(): Pair<Double, Double>? =
+        if (geohash.isEmpty()) null else Geohash.decodeToCenter(geohash)
+
     companion object {
         private const val TAG = "HealthReportPayload"
-        
+
+        const val VERSION = 1
+        const val HANDLE_BYTES = 6
+
+        /**
+         * 合法的 reporterHandle 形式：HANDLE_BYTES * 2 個十六進位字元。
+         * 注意 [VERSION] 與 [BroadcastContentTag.HEALTH_REPORT] 的數值目前都是 1，
+         * 但兩者是不同層的概念（payload 版本 vs. 廣播內容類型），不得互相假設相等。
+         */
+        val HANDLE_REGEX = Regex("[0-9a-fA-F]{${HANDLE_BYTES * 2}}")
+
+        /**
+         * Broadcast Tier 的「隱私半徑」單一決策點。
+         * geohash-5 ≈ 數公里見方——足以做檢傷排序，不足以定位到 Reporter 本人。
+         */
+        const val GEOHASH_PRECISION = 5
+
+        /** Broadcast Tier 的位元組上界：1 + handle + status + geohashLen + geohash + time。 */
+        const val MAX_ENCODED_SIZE = 1 + HANDLE_BYTES + 1 + 1 + GEOHASH_PRECISION + 4
+
+        private const val MIN_ENCODED_SIZE = 1 + HANDLE_BYTES + 1 + 1 + 4
+
+        /**
+         * 由完整資料建構 Broadcast Tier：座標在此就地降精度為 geohash，
+         * 精確經緯度不進入回傳物件，也不會出現在 [encode] 的輸出中。
+         */
+        fun fromLocation(
+            reporterHandle: String,
+            status: HealthStatus,
+            lat: Double?,
+            lng: Double?,
+            reportTimeMillis: Long
+        ): HealthReportPayload {
+            require(HANDLE_REGEX.matches(reporterHandle)) {
+                "reporterHandle 必須是 ${HANDLE_BYTES * 2} 個十六進位字元"
+            }
+            val gh = if (lat != null && lng != null) {
+                Geohash.encode(lat, lng, GEOHASH_PRECISION)
+            } else {
+                ""
+            }
+            return HealthReportPayload(reporterHandle.lowercase(), status, gh, reportTimeMillis)
+        }
+
+        /**
+         * 解碼 Broadcast Tier payload。
+         * 遇到未知版本或格式不符一律回傳 null（拒收），不做盡力解析。
+         * 日誌只輸出長度與版本號，不輸出任何欄位內容。
+         */
         fun decode(data: ByteArray): HealthReportPayload? {
             try {
-                Log.d(TAG, "🔍 開始解碼，資料長度: ${data.size} 字節")
-                
-                // 輸出前 32 個字節用於調試
-                val hexPreview = data.take(32).joinToString(" ") { String.format("%02X", it) }
-                Log.d(TAG, "資料預覽 (前32字節): $hexPreview")
-                
+                if (data.size < MIN_ENCODED_SIZE) return null
+
                 val buffer = ByteBuffer.wrap(data).apply { order(ByteOrder.BIG_ENDIAN) }
-                
-                // 讀取報告者 ID
-                val ridLen = buffer.get().toInt() and 0xFF
-                Log.d(TAG, "reporterId 長度: $ridLen (預期 < 256)")
-                if (ridLen < 0 || ridLen > 255 || ridLen > buffer.remaining()) {
-                    Log.w(TAG, "❌ reporterId 長度異常: $ridLen，剩餘: ${buffer.remaining()}")
+
+                val version = buffer.get().toInt() and 0xFF
+                if (version != VERSION) {
+                    Log.w(TAG, "拒收健康報告：未知 payload 版本 $version")
                     return null
                 }
-                val reporterIdBytes = ByteArray(ridLen)
-                buffer.get(reporterIdBytes)
-                val reporterId = String(reporterIdBytes, Charsets.UTF_8)
-                Log.d(TAG, "✓ reporterId: '$reporterId'")
-                
-                // 讀取姓名
-                val nLen = buffer.get().toInt() and 0xFF
-                Log.d(TAG, "name 長度: $nLen")
-                if (nLen < 0 || nLen > 255 || nLen > buffer.remaining()) {
-                    Log.w(TAG, "❌ name 長度異常: $nLen，剩餘: ${buffer.remaining()}")
-                    return null
-                }
-                val nameBytes = ByteArray(nLen)
-                buffer.get(nameBytes)
-                val name = String(nameBytes, Charsets.UTF_8)
-                Log.d(TAG, "✓ name: '$name'")
-                
-                // 讀取電話
-                val pLen = buffer.get().toInt() and 0xFF
-                Log.d(TAG, "phone 長度: $pLen")
-                if (pLen < 0 || pLen > 255 || pLen > buffer.remaining()) {
-                    Log.w(TAG, "❌ phone 長度異常: $pLen，剩餘: ${buffer.remaining()}")
-                    return null
-                }
-                val phoneBytes = ByteArray(pLen)
-                buffer.get(phoneBytes)
-                val phone = String(phoneBytes, Charsets.UTF_8)
-                Log.d(TAG, "✓ phone: '$phone'")
-                
-                // 讀取血型
-                val btLen = buffer.get().toInt() and 0xFF
-                Log.d(TAG, "bloodType 長度: $btLen")
-                val bloodType = if (btLen > 0 && btLen <= 255 && btLen <= buffer.remaining()) {
-                    val btBytes = ByteArray(btLen)
-                    buffer.get(btBytes)
-                    String(btBytes, Charsets.UTF_8)
-                } else {
-                    null
-                }
-                Log.d(TAG, "✓ bloodType: '${bloodType ?: "null"}'")
-                
-                // 讀取狀態
-                val sLen = buffer.get().toInt() and 0xFF
-                Log.d(TAG, "status 長度: $sLen")
-                if (sLen < 0 || sLen > 255 || sLen > buffer.remaining()) {
-                    Log.w(TAG, "❌ status 長度異常: $sLen，剩餘: ${buffer.remaining()}")
-                    return null
-                }
-                val statusBytes = ByteArray(sLen)
-                buffer.get(statusBytes)
-                val status = String(statusBytes, Charsets.UTF_8)
-                Log.d(TAG, "✓ status: '$status'")
-                
-                // 讀取補充說明
-                if (buffer.remaining() < 2) {
-                    Log.w(TAG, "❌ description 長度欄位不足，剩餘: ${buffer.remaining()}")
-                    return null
-                }
-                val dLen = buffer.getShort().toInt() and 0xFFFF
-                Log.d(TAG, "description 長度: $dLen (2字節大端序)")
-                val description = if (dLen > 0 && dLen <= buffer.remaining()) {
-                    val dBytes = ByteArray(dLen)
-                    buffer.get(dBytes)
-                    String(dBytes, Charsets.UTF_8)
-                } else {
-                    null
-                }
-                Log.d(TAG, "✓ description: '${description ?: "null"}'")
-                
-                // 讀取座標
-                if (buffer.remaining() < 16) {
-                    Log.w(TAG, "❌ 座標資料不足，需要16字節，剩餘: ${buffer.remaining()}")
-                    return null
-                }
-                val latVal = buffer.getDouble()
-                val lngVal = buffer.getDouble()
-                val lat = if (latVal == 0.0) null else latVal
-                val lng = if (lngVal == 0.0) null else lngVal
-                Log.d(TAG, "✓ lat: $lat, lng: $lng")
-                
-                // 讀取時間
-                if (buffer.remaining() < 1) {
-                    Log.w(TAG, "❌ reportTime 長度欄位不足")
-                    return null
-                }
-                val tLen = buffer.get().toInt() and 0xFF
-                Log.d(TAG, "reportTime 長度: $tLen")
-                if (tLen < 0 || tLen > 255 || tLen > buffer.remaining()) {
-                    Log.w(TAG, "❌ reportTime 長度異常: $tLen，剩餘: ${buffer.remaining()}")
-                    return null
-                }
-                val reportTimeBytes = ByteArray(tLen)
-                buffer.get(reportTimeBytes)
-                val reportTime = String(reportTimeBytes, Charsets.UTF_8)
-                Log.d(TAG, "✓ reportTime: '$reportTime'")
-                
-                if (buffer.remaining() > 0) {
-                    Log.w(TAG, "⚠️  解碼完成但還有 ${buffer.remaining()} 字節未讀")
-                }
-                
-                Log.d(TAG, "✅ 解碼成功！")
+
+                val handleBytes = ByteArray(HANDLE_BYTES)
+                buffer.get(handleBytes)
+
+                val status = HealthStatus.fromWire(buffer.get()) ?: return null
+
+                val ghLen = buffer.get().toInt() and 0xFF
+                if (ghLen != 0 && ghLen != GEOHASH_PRECISION) return null
+                if (buffer.remaining() < ghLen + 4) return null
+                val ghBytes = ByteArray(ghLen)
+                buffer.get(ghBytes)
+                val geohash = String(ghBytes, Charsets.US_ASCII)
+
+                val reportTimeSecs = buffer.getInt().toLong() and 0xFFFFFFFFL
+
                 return HealthReportPayload(
-                    reporterId, name, phone, bloodType, status, description, lat, lng, reportTime
+                    reporterHandle = bytesToHex(handleBytes),
+                    status = status,
+                    geohash = geohash,
+                    reportTimeMillis = reportTimeSecs * 1000L
                 )
             } catch (e: Exception) {
-                Log.e(TAG, "❌ 解碼失敗: ${e.message}, 堆疊追蹤:", e)
+                Log.w(TAG, "健康報告解碼失敗，長度 ${data.size}")
                 return null
             }
         }
+
+        private fun hexToBytes(hex: String): ByteArray {
+            val clean = hex.trim()
+            require(clean.length % 2 == 0) { "hex 長度必須為偶數" }
+            return ByteArray(clean.length / 2) {
+                clean.substring(it * 2, it * 2 + 2).toInt(16).toByte()
+            }
+        }
+
+        private fun bytesToHex(bytes: ByteArray): String =
+            bytes.joinToString("") { "%02x".format(it) }
     }
 }
