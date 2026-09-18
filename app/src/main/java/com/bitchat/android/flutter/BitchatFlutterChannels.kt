@@ -63,7 +63,7 @@ class BitchatFlutterChannels(
         // 注意：ContentTag 已經在 MessageHandler.handleTaggedBroadcast() 那一層被去除，
         // 這裡拿到的 packet.payload 一定是「未加 tag」的原始資料，不可再嘗試偵測/剝除 tag byte
         // （payload[0] 剛好等於 0x01 是合法資料，例如 reporterId 長度恰為 1 時，會被誤判成 tag 而遭到錯誤剝除）。
-        MeshServiceHolder.onPacketReceived = { packet: BitchatPacket ->
+        com.bitchat.android.mesh.InboundPacketBridge.onPacketReceived = { packet: BitchatPacket ->
             Log.d("BitchatBridge", "📨 收到封包，類型: 0x${packet.type.toString(16).uppercase()}, 大小: ${packet.payload.size}")
             emitEvent(mapOf(
                 "type"       to "packet",
@@ -276,7 +276,7 @@ class BitchatFlutterChannels(
 
     fun destroy() {
         try { context.unregisterReceiver(statusReceiver) } catch (e: Exception) {}
-        MeshServiceHolder.onPacketReceived = null
+        com.bitchat.android.mesh.InboundPacketBridge.onPacketReceived = null
     }
 
     companion object {
