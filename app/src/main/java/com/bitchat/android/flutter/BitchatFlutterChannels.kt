@@ -16,7 +16,6 @@ import com.bitchat.android.onboarding.PermissionManager
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.BitchatPacket
-import com.bitchat.android.net.PacketUplinkManager
 import com.bitchat.android.util.toHexString
 import com.google.gson.Gson
 import io.flutter.plugin.common.BinaryMessenger
@@ -37,7 +36,6 @@ class BitchatFlutterChannels(
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL_NAME)
     private val identityManager = SecureIdentityStateManager(context)
     private val permissionManager = PermissionManager(context)
-    private val uplinkManager = PacketUplinkManager(context)
     private val gson = Gson()
 
     private var eventSink: EventChannel.EventSink? = null
@@ -240,7 +238,6 @@ class BitchatFlutterChannels(
             
             // 通過 BluetoothMeshService 廣播 HEALTH_REPORT 封包
             service.sendBroadcastPacket(packet)
-            uplinkManager.uplinkPacketIfNeeded(packet)
             Log.d("BitchatBridge", "📤 HEALTH_REPORT 已提交給網格服務")
             true
         } else {

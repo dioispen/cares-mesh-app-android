@@ -18,7 +18,6 @@ import com.bitchat.android.model.RequestSyncPacket
 import com.bitchat.android.sync.GossipSyncManager
 import com.bitchat.android.util.toHexString
 import com.bitchat.android.services.VerificationService
-import com.bitchat.android.net.PacketUplinkManager
 import com.bitchat.android.service.TransportBridgeService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -116,9 +115,6 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     private data class VoiceFrameRequest(val recipientPeerID: String?, val payload: ByteArray)
     private val voiceFrameQueue = Channel<VoiceFrameRequest>(capacity = 128)
     private lateinit var gossipSyncManager: GossipSyncManager
-    
-    // Uplink manager for gateway functionality
-    private val uplinkManager = PacketUplinkManager(context)
 
     // Service-level notification manager for background (no-UI) DMs
     private val serviceNotificationManager = com.bitchat.android.ui.NotificationManager(
@@ -675,10 +671,6 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
             device: android.bluetooth.BluetoothDevice?,
             ingressLinkID: String
         ) {
-            // Uplink packet to server if internet is available (Gateway functionality)
-            uplinkManager.uplinkPacketIfNeeded(packet)
-
-
             // Log incoming for debug graphs (do not double-count anywhere else)
             try {
                 com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().logIncoming(
