@@ -120,8 +120,11 @@ class BitchatFlutterChannels(
                     result.error("NO_ACTIVITY", "Cannot request permissions without an activity", null)
                     return
                 }
+                // Includes the Wi‑Fi Aware permissions when that transport is on and supported;
+                // checkPermissions / areRequiredPermissionsGranted still only gate on the
+                // critical set, so declining Wi‑Fi Aware leaves the setup screen passable.
                 val permissions = mutableListOf<String>()
-                permissions.addAll(permissionManager.getRequiredPermissions())
+                permissions.addAll(permissionManager.getPermissionsToRequest())
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
