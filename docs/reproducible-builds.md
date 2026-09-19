@@ -23,6 +23,9 @@ GitHub/Google Play publication checklist.
 - exact Temurin JDK release and digest-pinned Linux builder image
 - Android platform, Platform Tools, and Build Tools archives by filename and
   SHA-256, plus the accepted SDK license-text SHA-1 required to use them
+- the Flutter SDK archive by version and SHA-256, with its framework revision
+  re-checked after extraction, and the Dart package set resolved from
+  `flutter_ui/pubspec.lock`
 - Kotlin/JVM toolchain and bytecode target
 - Arti source tag and full commit, stable native build epoch, Rust, `cargo-ndk`,
   Android NDK, Cargo lockfile, digest-pinned Rust builder image, and immutable
@@ -56,6 +59,88 @@ The authoritative pins are:
 - `tools/reproducible-builds/TOOLCHAIN.env`
 - `tools/arti-build/TOOLCHAIN.env`
 - `tools/arti-build/Cargo.lock`
+- `flutter_ui/pubspec.lock`
+
+## The embedded Flutter module
+
+`settings.gradle.kts` applies `flutter_ui/.android/include_flutter.groovy`. The
+Flutter tool generates that file from the module's pubspec, and it is not version
+controlled, so Gradle cannot even configure the build until
+`tools/reproducible-builds/prepare-flutter.sh` has run. The canonical container
+build calls it from `build-release.sh`; CI calls it from `ci-prepare.sh`.
+
+`prepare-flutter.sh` refuses to continue unless the Flutter SDK on `PATH` is the
+version `TOOLCHAIN.env` names, and it runs `flutter pub get --enforce-lockfile`,
+so a resolution that would drift from `flutter_ui/pubspec.lock` fails the build
+instead of silently succeeding.
+
+### Where the hermeticity boundary sits
+
+Two Flutter inputs would otherwise be fetched while the build runs, and both are
+moved into the image instead:
+
+- the Flutter engine and tool artifacts, downloaded by `flutter precache` during
+  the image build;
+- the Dart package set, downloaded by a `flutter pub get` that runs during the
+  image build against a copy of `flutter_ui/pubspec.yaml` and
+  `flutter_ui/pubspec.lock` and leaves the packages in `PUB_CACHE`
+  (`/opt/pub-cache`).
+
+The build stage therefore runs `flutter pub get --offline` and needs no pub.dev
+access. Because only the pubspec pair is copied into that layer, editing Dart
+sources reuses the cache and changing a dependency correctly invalidates it.
+
+The boundary stops there, and it stops in the same place it already did for
+Gradle. The build stage still resolves Maven dependencies over the network —
+including the Flutter engine AARs from
+`https://storage.googleapis.com/download.flutter.io`, which
+`settings.gradle.kts` declares as an ordinary repository. Those are covered by
+`gradle/verification-metadata.xml` checksums and the Gradle lockfiles, which is
+how every other Maven input is handled. So the honest statement is: pub and the
+Flutter tool are hermetic once the image exists; Maven is pinned but not
+offline. Making the whole build offline would mean pre-seeding a Gradle
+dependency cache in the image, which is a separate change affecting every
+dependency, not just Flutter's.
+
+A checkout without the warmed cache — a developer building outside the
+container — can populate it from pub.dev with
+`BITCHAT_FLUTTER_PUB_OFFLINE=0 tools/reproducible-builds/prepare-flutter.sh`.
+
+## Firebase configuration
+
+`app/google-services.json` is required: the `com.google.gms.google-services`
+plugin fails at configuration time without it. It is **not** version controlled,
+so it is injected rather than checked out.
+
+**It changes the release bytes.** The plugin turns `project_id`,
+`project_number`, `mobilesdk_app_id`, the API key and `storage_bucket` into
+string resources (`google_app_id`, `google_api_key`, `gcm_defaultSenderId`,
+`project_id`, `google_storage_bucket`), which are compiled into `resources.arsc`
+inside every APK and AAB. Two builds of the same commit configured against
+different Firebase projects therefore do not produce identical bytes. A third
+party can only reproduce the published release bytes if it builds with the same
+`google-services.json` the release was built with. `BUILDINFO.json` records that
+file's SHA-256 as `googleServicesSha256` so the mismatch is diagnosable rather
+than mysterious.
+
+Supply it in one of three ways:
+
+- **Local container build** — leave it at `app/google-services.json`, or point
+  `BITCHAT_GOOGLE_SERVICES_JSON` at a copy elsewhere.
+  `build-in-container.sh` mounts it read-only at `/injected/google-services.json`
+  and `build-release.sh` installs it into the staging tree. It is deliberately
+  not a nested bind mount over `/workspace`, which is not portable across
+  Docker runtimes.
+- **CI** — the `GOOGLE_SERVICES_JSON` repository secret holds the file's
+  contents. `ci-prepare.sh` writes it into the checkout for container jobs; the
+  reproducible-build job writes it to a temporary file and passes the path
+  through `BITCHAT_GOOGLE_SERVICES_JSON`.
+- **Plain host build** — place it at `app/google-services.json` as usual.
+
+If the project later decides to track the file, nothing above breaks: the
+injected copy is simply identical to the one already in the tree, and
+`install-google-services-json.sh` skips the copy when source and destination are
+the same path.
 
 ## Reproduce a release locally
 
@@ -63,6 +148,11 @@ Requirements are Git, Docker with Linux/amd64 support, more than 8 GiB of memory
 available to the Docker VM (16 GiB recommended), and enough free space for the
 Android and Gradle images and dependencies. R8's single-threaded deterministic
 mode can exceed an 8 GiB Docker memory limit while optimizing the phone app.
+
+The builder image is about 6.1 GB, of which roughly 3.1 GB is the Flutter SDK,
+its precached engine artifacts and the warmed `PUB_CACHE`. Budget disk
+accordingly. The memory figures above are unchanged: the Flutter work is disk-
+and network-bound, and R8 remains the peak-memory step.
 
 ```bash
 git clone https://github.com/permissionlesstech/bitchat-android.git
@@ -216,6 +306,31 @@ maintainer locally creates `bitchat-android-play-upload.aab` and
 `bitchat-android-wear-play-upload.aab` from those exact files and uploads them
 manually to Google Play.
 
+## CI uses the same image
+
+`.github/workflows/android-build.yml` builds
+`tools/reproducible-builds/Dockerfile` once per run in the `toolchain-image`
+job, pushes it to `ghcr.io/<owner>/<repo>/reproducible-builder:<sha>`, and runs
+the test, lint and debug-build jobs inside that image. Local builds, CI and
+releases therefore share one pinned toolchain rather than three.
+
+The `reproducible-build` job is the exception: it drives Docker itself, so it
+cannot be a container job. It pulls the same image, retags it to the name
+`build-in-container.sh` expects, and sets `BITCHAT_REUSE_CONTAINER_IMAGE=1` so
+the script uses it instead of rebuilding — which also guarantees both replicas
+share one image.
+
+Two consequences worth knowing:
+
+- pushing to GHCR needs `packages: write`, which the `GITHUB_TOKEN` of a
+  pull request from a **fork** does not have. Fork PRs cannot run this workflow
+  as written; they need a variant that builds the image locally in each job.
+- the image is built from the working tree, while the release artifacts are
+  built from `git archive` of the commit. The only working-tree files the image
+  consumes are `TOOLCHAIN.env`, `sdk-metadata/` and the `flutter_ui` pubspec
+  pair, all of which are version controlled, and `build-in-container.sh` refuses
+  a dirty tree, so the two agree.
+
 ## Maintainer release process
 
 Follow the
@@ -267,6 +382,20 @@ When changing Gradle, update the wrapper and independently verify the new
 distribution SHA-256. When changing JDK or Android tools, update the exact
 version, archive checksum, and base-image digest together. Native updates follow
 [`tools/arti-build/README.md`](../tools/arti-build/README.md).
+
+When changing Flutter, update `FLUTTER_VERSION`, `FLUTTER_ARCHIVE`,
+`FLUTTER_SHA256`, `FLUTTER_FRAMEWORK_REVISION`, `FLUTTER_ENGINE_REVISION` and
+`FLUTTER_DART_VERSION` in `tools/reproducible-builds/TOOLCHAIN.env` together.
+The archive checksum is published in
+`https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json`;
+verify it independently. The image build re-checks the extracted framework
+revision against `TOOLCHAIN.env`, so a mismatched pair fails there rather than
+silently building against a different SDK.
+
+When changing Dart dependencies, run `flutter pub get` in `flutter_ui/`, commit
+the updated `flutter_ui/pubspec.lock`, and rebuild the image — the warmed
+`PUB_CACHE` layer keys off that lockfile, and a stale image makes the build's
+`--offline` resolution fail.
 
 ## References
 
