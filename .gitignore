@@ -78,3 +78,12 @@ tools/arti-build/target/
 
 # JVM heap dumps (a Gradle daemon OOM drops these in the repo root)
 *.hprof
+
+# Firestore 規則測試的 Node 相依套件與 emulator 產生的 log
+# 注意：firestore.rules 本身**必須**進版控（它是存取控制程式碼，不含機密）
+node_modules/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+.firebase/
