@@ -25,10 +25,15 @@ class PermissionManager(private val context: Context) {
 
     private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private fun shouldRequireWifiAwarePermission(): Boolean {
+    /**
+     * Whether this launch should ask for the Wi‑Fi Aware permissions at all: only when the
+     * transport is switched on and the hardware actually supports it. On a device without
+     * Wi‑Fi Aware we never prompt, so the permission sheet matches what the app will really use.
+     */
+    private fun shouldRequestWifiAwarePermission(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         val enabled = try {
-            com.bitchat.android.ui.debug.DebugPreferenceManager.getWifiAwareEnabled(false)
+            com.bitchat.android.ui.debug.DebugPreferenceManager.getWifiAwareEnabled()
         } catch (_: Exception) {
             false
         }
@@ -79,10 +84,15 @@ class PermissionManager(private val context: Context) {
     }
 
     /**
-     * Get required permissions that can be requested together.
+     * Get the permissions without which the app cannot function at all — Bluetooth and location.
      * Background location is handled separately to ensure correct request order.
      * Note: Notification permission is optional and not included here,
      * so the app works without notification access.
+     *
+     * Wi‑Fi Aware is deliberately NOT in this list even though CARES enables the transport by
+     * default: every caller treats this set as blocking (onboarding, the Flutter setup screen),
+     * so a single NEARBY_WIFI_DEVICES denial would take the BLE mesh down with it. It is asked
+     * for in [getPermissionsToRequest] instead and degrades to BLE-only when denied.
      */
     fun getRequiredPermissions(): List<String> {
         val permissions = mutableListOf<String>()
@@ -107,14 +117,29 @@ class PermissionManager(private val context: Context) {
             Manifest.permission.ACCESS_FINE_LOCATION
         ))
 
-        // Wi‑Fi Aware: Android 13+ requires NEARBY_WIFI_DEVICES runtime permission
-        if (shouldRequireWifiAwarePermission()) {
-            permissions.addAll(wifiAwarePermissions())
-        }
-
         // Notification permission intentionally excluded to keep it optional
 
         return permissions
+    }
+
+    /**
+     * The set to hand to a runtime permission request: everything required, plus Wi‑Fi Aware's
+     * permissions when that transport is on and supported, so both prompts arrive in one sheet
+     * rather than through a second, parallel flow.
+     *
+     * Denial of the Wi‑Fi Aware entries is not fatal — [areRequiredPermissionsGranted] ignores
+     * them and WifiAwareController re-checks NEARBY_WIFI_DEVICES before every start attempt.
+     */
+    fun getPermissionsToRequest(): List<String> {
+        val permissions = getRequiredPermissions().toMutableList()
+        if (shouldRequestWifiAwarePermission()) {
+            permissions.addAll(wifiAwarePermissions().filterNot { it in permissions })
+        }
+        return permissions
+    }
+
+    fun getMissingPermissionsToRequest(): List<String> {
+        return getPermissionsToRequest().filter { !isPermissionGranted(it) }
     }
 
     /**
@@ -279,7 +304,7 @@ class PermissionManager(private val context: Context) {
         )
 
         // Wi‑Fi Aware category (Android 13+)
-        if (shouldRequireWifiAwarePermission()) {
+        if (shouldRequestWifiAwarePermission()) {
             val wifiAwarePermissions = wifiAwarePermissions()
             categories.add(
                 PermissionCategory(
@@ -356,7 +381,7 @@ class PermissionManager(private val context: Context) {
                 appendLine()
             }
             
-            val missing = getMissingPermissions() + getMissingBackgroundLocationPermission()
+            val missing = getMissingPermissionsToRequest() + getMissingBackgroundLocationPermission()
             if (missing.isNotEmpty()) {
                 appendLine("Missing permissions:")
                 missing.forEach { permission ->
