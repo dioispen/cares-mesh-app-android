@@ -69,6 +69,42 @@ cd flutter_ui && flutter test  # Dart 測試
 
 需要 `app/google-services.json`。本 repo 未納入該檔，向組內索取。
 
+#### Firestore 安全規則
+
+`firestore.rules` **已納入版本控制**，是本專案的存取控制程式碼——它決定誰能讀寫災民的健康資料、SOS、物資與認領紀錄。
+它不含任何機密，內容本來就會被 Firebase 用於每一次請求。
+
+- 規則檔：[`firestore.rules`](firestore.rules)
+- Firebase CLI 設定：[`firebase.json`](firebase.json)（宣告規則檔位置，`deploy` 與 emulator 都靠它）
+
+**任何規則變更都必須走 PR**，與其他程式碼相同（見 [CONTRIBUTING.md](CONTRIBUTING.md)）。不要直接在 Firebase 主控台編輯規則——主控台的改動不會回到 repo，下一次部署就會被覆蓋掉。
+
+部署（需要該 Firebase 專案的權限；由專案擁有者執行）：
+
+```bash
+# 前置：安裝 Firebase CLI 並登入
+npm install -g firebase-tools
+firebase login
+
+# 先看變更內容（部署是覆蓋式的，會整份取代線上規則）
+git diff origin/main -- firestore.rules
+
+# 部署（<project-id> 換成實際的 Firebase 專案 ID）
+firebase deploy --only firestore:rules --project <project-id>
+```
+
+**部署前請先跑規則測試**（跑在本機 emulator 上，不會碰到線上專案；需要 Java 與 Node）：
+
+```bash
+cd firestore-tests
+npm install
+npm test        # 啟動 Firestore emulator 並執行 rules.test.mjs
+```
+
+測試涵蓋 `supply_items` 的欄位層級限制與 `pledges` 的擁有者比對，其中最關鍵的一條是「使用者必須能認領**別人建立的**物資」——那是加錯授權條件最容易弄壞的地方。
+
+規則語法錯誤會讓 `deploy` 直接失敗，不會部署出半套規則；但**語法正確不等於行為正確**，改動授權條件時請務必補上對應測試。
+
 ---
 
 ## 架構
