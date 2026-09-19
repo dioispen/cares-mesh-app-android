@@ -135,4 +135,4 @@ Dart 套件的完整清單與版本見 [`flutter_ui/pubspec.yaml`](flutter_ui/pu
 
 ## 6. 已知的待處理事項
 
-- `app/src/main/res/values/strings.xml` 的 `app_name` 目前為 `helloworld`，`settings.gradle.kts` 的 `rootProject.name` 仍為 `bitchat-android`，`applicationId` 仍為 `com.bitchat.droid`。GPLv3 §7(c) 允許上游要求修改版明確與原版區別；在對外散布前應改為本專案自己的名稱與 application ID，避免與上游 bitchat 混淆。
+- `app/src/main/res/values/strings.xml` 的 `app_name` 已改為 `cares-mesh-app`，但 `settings.gradle.kts` 的 `rootProject.name` 仍為 `bitchat-android`，`applicationId` 仍為 `com.bitchat.droid`，各語系 `values-*/strings.xml` 的 `app_name` 也仍為 `bitchat`。GPLv3 §7(c) 允許上游要求修改版明確與原版區別；在對外散布前應改為本專案自己的名稱與 application ID，避免與上游 bitchat 混淆。
