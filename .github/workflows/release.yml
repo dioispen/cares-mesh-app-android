@@ -52,7 +52,23 @@ jobs:
         with:
           cache-disabled: true
 
+      # app/google-services.json is not version controlled, so the tagged
+      # checkout does not contain it. Its contents reach resources.arsc, so
+      # both replicas must be built against the same file for the byte
+      # comparison below to mean anything. See docs/reproducible-builds.md.
+      - name: Write the injected Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "${GOOGLE_SERVICES_JSON:-}" ]; then
+            echo "error: the GOOGLE_SERVICES_JSON repository secret is not set" >&2
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > "$RUNNER_TEMP/google-services.json"
+
       - name: Build canonical unsigned APKs and AAB
+        env:
+          BITCHAT_GOOGLE_SERVICES_JSON: ${{ runner.temp }}/google-services.json
         run: tools/reproducible-builds/build-in-container.sh "$RUNNER_TEMP/release-${{ matrix.replica }}"
 
       - name: Upload unsigned replica
