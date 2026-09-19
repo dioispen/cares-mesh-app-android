@@ -60,6 +60,8 @@ gen/
 *.swp
 *.lock
 !tools/arti-build/Cargo.lock
+# flutter_ui is an application, not a library: its pubspec.lock must be tracked
+!flutter_ui/pubspec.lock
 .goosehints
 
 # Google services
