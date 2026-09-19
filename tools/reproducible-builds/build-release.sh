@@ -32,6 +32,12 @@ fi
 
 "$PROJECT_ROOT/tools/arti-build/verify-checksums.sh"
 
+# Both of these must happen before the first Gradle invocation: settings.gradle.kts
+# reads a file the Flutter tool generates, and the google-services plugin fails at
+# configuration time when the Firebase config is absent.
+google_services_sha256="$("$SCRIPT_DIR/install-google-services-json.sh")"
+"$SCRIPT_DIR/prepare-flutter.sh"
+
 export GRADLE_USER_HOME="${BITCHAT_GRADLE_USER_HOME:-$PROJECT_ROOT/.reproducible-build/gradle-home}"
 export LC_ALL=C.UTF-8
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$PROJECT_ROOT" log -1 --format=%ct)}"
@@ -111,13 +117,16 @@ native_manifest_sha256="$(sha256sum "$PROJECT_ROOT/tools/arti-build/SHA256SUMS" 
 
 cat > "$OUTPUT_DIR/BUILDINFO.json" <<EOF
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sourceCommit": "$source_commit",
   "sourceDateEpoch": $SOURCE_DATE_EPOCH,
   "javaVersion": "$JAVA_VERSION",
   "gradleVersion": "$GRADLE_VERSION",
   "androidCompileSdk": "$ANDROID_COMPILE_SDK",
   "androidBuildToolsVersion": "$ANDROID_BUILD_TOOLS_VERSION",
+  "flutterVersion": "$FLUTTER_VERSION",
+  "flutterEngineRevision": "$FLUTTER_ENGINE_REVISION",
+  "googleServicesSha256": "$google_services_sha256",
   "nativeManifestSha256": "$native_manifest_sha256"
 }
 EOF
