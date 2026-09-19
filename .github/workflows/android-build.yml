@@ -3,31 +3,85 @@ name: Android CI
 on:
   workflow_dispatch:
   push:
-    branches: [main, develop]
+    branches: [main, develop, merge/upstream-2026-09]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, merge/upstream-2026-09]
 
 permissions:
   contents: read
+  packages: write
 
 env:
-  SETUP_JAVA_VERSION: 21.0.11+10.0.LTS
+  # app/google-services.json is not version controlled. Every job that configures
+  # Gradle needs it, because the com.google.gms.google-services plugin fails at
+  # configuration time without it. See docs/reproducible-builds.md.
+  GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
 
 jobs:
-  verify:
-    name: Test and lint
+  toolchain-image:
+    name: Build toolchain image
     runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.reference }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up pinned JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.SETUP_JAVA_VERSION }}
+      - name: Resolve image reference
+        id: image
+        run: echo "reference=ghcr.io/${GITHUB_REPOSITORY,,}/reproducible-builder:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same pinned toolchain now serves local container builds, CI and
+      # releases: JDK, Android SDK and the Flutter SDK all live in this image.
+      - name: Build and push the pinned toolchain image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: tools/reproducible-builds/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.reference }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  verify:
+    name: Test and lint
+    runs-on: ubuntu-24.04
+    needs: toolchain-image
+    container:
+      image: ${{ needs.toolchain-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    # Repeated from the image so a step still sees them if the runner rewrites
+    # the container environment.
+    env:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      FLUTTER_ROOT: /opt/flutter
+      PUB_CACHE: /opt/pub-cache
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Prepare the build environment
+        run: tools/reproducible-builds/ci-prepare.sh
+
+      # No setup-java or setup-gradle JDK provisioning: the container already
+      # carries the pinned JDK that TOOLCHAIN.env names.
       - name: Set up and validate Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
@@ -59,17 +113,25 @@ jobs:
   build-debug:
     name: Build debug APK
     runs-on: ubuntu-24.04
-    needs: verify
+    needs: [toolchain-image, verify]
+    container:
+      image: ${{ needs.toolchain-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      FLUTTER_ROOT: /opt/flutter
+      PUB_CACHE: /opt/pub-cache
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up pinned JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.SETUP_JAVA_VERSION }}
+      - name: Prepare the build environment
+        run: tools/reproducible-builds/ci-prepare.sh
 
       - name: Set up and validate Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
@@ -85,8 +147,9 @@ jobs:
 
   reproducible-build:
     name: Reproducible release build ${{ matrix.replica }}
+    # Not a container job: this one drives Docker itself.
     runs-on: ubuntu-24.04
-    needs: verify
+    needs: [toolchain-image, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -96,18 +159,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up pinned JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.SETUP_JAVA_VERSION }}
+      - name: Write the injected Firebase configuration
+        run: |
+          if [ -z "${GOOGLE_SERVICES_JSON:-}" ]; then
+            echo "error: the GOOGLE_SERVICES_JSON repository secret is not set" >&2
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > "$RUNNER_TEMP/google-services.json"
 
-      - name: Set up and validate Gradle
-        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
-          cache-disabled: true
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Reuse the image the toolchain-image job already built instead of
+      # rebuilding it per replica; both replicas must share one toolchain anyway.
+      - name: Pull the pinned toolchain image
+        run: |
+          docker pull "${{ needs.toolchain-image.outputs.image }}"
+          docker tag "${{ needs.toolchain-image.outputs.image }}" \
+            bitchat-android-reproducible-builder:21.0.11
 
       - name: Build canonical unsigned release
+        env:
+          BITCHAT_REUSE_CONTAINER_IMAGE: "1"
+          BITCHAT_GOOGLE_SERVICES_JSON: ${{ runner.temp }}/google-services.json
         run: tools/reproducible-builds/build-in-container.sh "$RUNNER_TEMP/release-${{ matrix.replica }}"
 
       - name: Upload build replica
