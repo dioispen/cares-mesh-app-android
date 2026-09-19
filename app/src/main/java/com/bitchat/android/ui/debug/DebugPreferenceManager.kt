@@ -8,6 +8,16 @@ import android.content.SharedPreferences
  * Keeps the DebugSettingsManager stateless with regard to Android Context.
  */
 object DebugPreferenceManager {
+    /**
+     * Wi‑Fi Aware 的出廠預設。上游把它當除錯開關所以預設 false；CARES 是災害應變用途，
+     * 需要 Wi‑Fi Aware 的較長距離與高頻寬，因此預設開啟，使用者仍可在除錯面板關閉。
+     *
+     * 這裡是唯一的預設值來源：BitchatApplication（初始化 controller）、PermissionManager
+     * （決定要不要一併索取 NEARBY_WIFI_DEVICES）與除錯 UI 都讀這個值，三者必須一致，
+     * 否則會出現「預設開啟卻從不要權限」這種永遠啟動不了的狀態。
+     */
+    const val DEFAULT_WIFI_AWARE_ENABLED = true
+
     private const val PREFS_NAME = "bitchat_debug_settings"
     private const val KEY_VERBOSE = "verbose_logging"
     private const val KEY_GATT_SERVER = "gatt_server_enabled"
@@ -113,7 +123,7 @@ object DebugPreferenceManager {
         if (ready()) prefs.edit().putBoolean(KEY_BLE_ENABLED, value).apply()
     }
 
-    fun getWifiAwareEnabled(default: Boolean = false): Boolean =
+    fun getWifiAwareEnabled(default: Boolean = DEFAULT_WIFI_AWARE_ENABLED): Boolean =
         if (ready()) prefs.getBoolean(KEY_WIFI_AWARE_ENABLED, default) else default
 
     fun setWifiAwareEnabled(value: Boolean) {

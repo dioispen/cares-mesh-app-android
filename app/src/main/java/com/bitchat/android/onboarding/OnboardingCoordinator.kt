@@ -81,8 +81,10 @@ class OnboardingCoordinator(
     fun requestPermissions() {
         Log.d(TAG, "User accepted permission explanation, requesting permissions")
         
-        // Required permissions
-        val missingRequired = permissionManager.getMissingPermissions()
+        // Required permissions, plus Wi‑Fi Aware's when that transport is on and supported.
+        // Wi‑Fi Aware is not part of getCriticalPermissions(), so denying it only costs that
+        // transport — the mesh still comes up over BLE.
+        val missingRequired = permissionManager.getMissingPermissionsToRequest()
 
         // Optional permissions (ask, but do not block if denied)
         val optionalToRequest = permissionManager.getUnrequestedOptionalPermissions()

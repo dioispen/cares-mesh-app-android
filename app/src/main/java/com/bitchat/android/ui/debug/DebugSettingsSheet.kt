@@ -232,8 +232,9 @@ fun DebugSettingsSheet(
     val wifiAwareEnabled by manager.wifiAwareEnabled.collectAsState()
     val wifiAwareVerbose by manager.wifiAwareVerbose.collectAsState()
 
-    // Onboarding only asks for these when the toggle is already on, and it defaults to off,
-    // so enabling from here has to request them or the controller never starts.
+    // Onboarding asks for these while the toggle is on, but a user who turned Wi‑Fi Aware off
+    // and back on — or who declined the prompt then — still has to be asked from here, since
+    // the controller never starts without NEARBY_WIFI_DEVICES.
     val wifiAwarePermissions = remember { PermissionManager(context).wifiAwarePermissions() }
     val wifiAwarePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
