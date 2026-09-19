@@ -1,0 +1,17 @@
+# Windows checkouts default to core.autocrlf=true, which rewrites these files in
+# the working tree with CRLF line endings. That breaks two things at once:
+#
+#   * the reproducible-build image COPYs TOOLCHAIN.env out of the working tree,
+#     and a trailing CR turns every sourced value into a malformed string
+#     (curl reports "URL rejected: Malformed input to a URL function")
+#   * /bin/sh and /bin/bash on Linux do not tolerate a CR at end of line
+#
+# These paths are consumed by POSIX shells or by Linux containers, so they stay
+# LF on every platform. After pulling this file for the first time, a Windows
+# checkout needs `git checkout -- .` once to rewrite the affected files.
+*.sh text eol=lf
+gradlew text eol=lf
+tools/arti-build/SHA256SUMS text eol=lf
+tools/arti-build/TOOLCHAIN.env text eol=lf
+tools/reproducible-builds/TOOLCHAIN.env text eol=lf
+tools/reproducible-builds/container-local.properties text eol=lf
