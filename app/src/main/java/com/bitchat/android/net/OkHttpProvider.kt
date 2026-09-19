@@ -1,85 +1,81 @@
 package com.bitchat.android.net
 
-import android.content.Context
-import android.util.Log
-import com.bitchat.android.R
 import okhttp3.OkHttpClient
-import okhttp3.Protocol
-import java.security.KeyStore
-import java.security.cert.CertificateFactory
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.X509TrustManager
 
 /**
- * Centralized OkHttp provider.
+ * Centralized OkHttp provider to ensure all network traffic honors Tor settings.
  */
 object OkHttpProvider {
-    private val httpClientRef = AtomicReference<OkHttpClient?>(null)
-    private val wsClientRef = AtomicReference<OkHttpClient?>(null)
-
-    fun reset() {
-        httpClientRef.set(null)
-        wsClientRef.set(null)
+    enum class Route {
+        DIRECT,
+        TOR
     }
 
+    data class RoutedClient(
+        val client: OkHttpClient,
+        val route: Route
+    )
+
+    private val httpClientRef = AtomicReference<RoutedClient?>(null)
+    private val wsClientRef = AtomicReference<OkHttpClient?>(null)
+    private val clientLock = Any()
+
+    fun reset() {
+        synchronized(clientLock) {
+            httpClientRef.set(null)
+            wsClientRef.set(null)
+        }
+    }
+
+    fun httpClient(): OkHttpClient = routedHttpClient().client
+
     /**
-     * Get HTTP client.
-     * @param context Optional context to load the custom certificate from res/raw/cert.pem
+     * Returns the client and the route it was actually built with as one snapshot.
+     *
+     * The selected Tor mode can change while an existing client is still cached. Consumers that
+     * key cooldowns by network identity must use this value rather than re-reading the preference.
      */
-    fun httpClient(context: Context? = null): OkHttpClient {
+    fun routedHttpClient(): RoutedClient {
         httpClientRef.get()?.let { return it }
-
-        val builder = OkHttpClient.Builder()
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            .callTimeout(30, TimeUnit.SECONDS)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .writeTimeout(20, TimeUnit.SECONDS)
-            .hostnameVerifier { _, _ -> true }
-
-        if (context != null) {
-            try {
-                // 嘗試從 R.raw.cert 載入自定義憑證
-                val certInputStream = context.resources.openRawResource(R.raw.server)
-                val cf = CertificateFactory.getInstance("X.509")
-                val ca = cf.generateCertificate(certInputStream)
-                certInputStream.close()
-
-                val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-                    load(null, null)
-                    setCertificateEntry("ca", ca)
-                }
-
-                val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply {
-                    init(keyStore)
-                }
-
-                val sslContext = SSLContext.getInstance("TLS").apply {
-                    init(null, tmf.trustManagers, null)
-                }
-                builder.sslSocketFactory(sslContext.socketFactory, tmf.trustManagers[0] as X509TrustManager)
-            } catch (e: Exception) {
-                Log.e("OkHttpProvider", "Custom cert load failed, falling back to system default", e)
+        return synchronized(clientLock) {
+            httpClientRef.get() ?: run {
+                val (builder, route) = baseBuilderForCurrentProxy()
+                val client = builder
+                    .callTimeout(15, TimeUnit.SECONDS)
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .build()
+                RoutedClient(client, route).also(httpClientRef::set)
             }
         }
-
-        val client = builder.build()
-        httpClientRef.set(client)
-        return client
     }
 
     fun webSocketClient(): OkHttpClient {
         wsClientRef.get()?.let { return it }
-        val client = OkHttpClient.Builder()
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
-            .build()
-        wsClientRef.set(client)
-        return client
+        return synchronized(clientLock) {
+            wsClientRef.get() ?: baseBuilderForCurrentProxy().first
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.SECONDS)
+                .writeTimeout(10, TimeUnit.SECONDS)
+                .build()
+                .also(wsClientRef::set)
+        }
+    }
+
+    private fun baseBuilderForCurrentProxy(): Pair<OkHttpClient.Builder, Route> {
+        val builder = OkHttpClient.Builder()
+        val torProvider = ArtiTorManager.getInstance()
+        val socks: InetSocketAddress? = torProvider.currentSocksAddress()
+        // If a SOCKS address is defined, always use it. TorProvider sets this as soon as Tor mode is ON,
+        // even before bootstrap, to prevent any direct connections from occurring.
+        if (socks != null) {
+            val proxy = Proxy(Proxy.Type.SOCKS, socks)
+            builder.proxy(proxy)
+        }
+        return builder to if (socks == null) Route.DIRECT else Route.TOR
     }
 }

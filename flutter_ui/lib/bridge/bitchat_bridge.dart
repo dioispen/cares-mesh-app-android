@@ -106,10 +106,14 @@ class BitchatBridge {
     });
   }
 
-  /// 發送健康報告 (BLE 廣播 + 網路回報)
-  static Future<void> sendHealthReport(Map<String, dynamic> reportJson) async {
+  /// 發送 Health Report 的 Broadcast Tier（BLE 廣播 + 網路回報）。
+  ///
+  /// 傳入的 map 只應含不具識別性的欄位：`reporterHandle`、`status`（中文 label）、
+  /// 以及原始 `lat`/`lng`（由原生端就地降精度為 geohash）。姓名、電話、血型、自由文字
+  /// 等 Detail Tier 欄位不要放進來——原生端也會忽略（見 ADR-0003）。
+  static Future<void> sendHealthReport(Map<String, dynamic> broadcastTier) async {
     try {
-      await _method.invokeMethod<void>('sendHealthReport', reportJson);
+      await _method.invokeMethod<void>('sendHealthReport', broadcastTier);
     } catch (e) {
       // Ignore
     }

@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import '../models/health_report.dart';
+import 'geohash.dart';
 
 /// BLE 封包類型常數，與 Android MessageType 對應
 class BlePacketType {
@@ -40,122 +40,97 @@ class BlePacket {
   }
 }
 
-/// 健康報告 payload 解碼器
-/// 對應 Android HealthReportPayload.encode() 的二進位格式：
-///   [reporterIdLen:1B][reporterId:UTF8]
-///   [nameLen:1B][name:UTF8]
-///   [phoneLen:1B][phone:UTF8]
-///   [bloodTypeLen:1B][bloodType:UTF8 或 0 bytes]
-///   [statusLen:1B][status:UTF8]
-///   [descLen:2B big-endian][description:UTF8 或 0 bytes]
-///   [lat:8B double big-endian][lng:8B double big-endian]
-///   [reportTimeLen:1B][reportTime:UTF8]
+/// Broadcast Tier（A1，見 ADR-0003）—— Health Report 中每台裝置都能讀的部分。
+///
+/// **不含任何 PII**：沒有真實姓名、電話、血型、自由文字，也沒有公尺級座標。
+/// 對應 `app/.../protocol/DisasterReportPacket.kt` 的 `HealthReportPayload` 線路格式（big-endian）：
+/// ```
+///   [0]     version(1) = 1        未知版本一律拒收
+///   [1..6]  reporterHandle(6)     不具識別性的固定長度識別碼
+///   [7]     status(1)             0=安全 / 1=輕傷 / 2=重傷
+///   [8]     geohashLen(1)         0 或 geohashPrecision
+///   [9..]   geohash(ASCII)        降精度近似位置
+///   [末 4]  reportTime(4)         Unix 秒，uint32 big-endian
+/// ```
 class HealthReportPayload {
-  final String reporterId;
-  final String name;
-  final String phone;
-  final String? bloodType;
+  static const int version = 1;
+  static const int handleBytes = 6;
+  static const int geohashPrecision = 5;
+  static const int _minEncodedSize = 1 + handleBytes + 1 + 1 + 4;
+
+  /// 12 個十六進位字元（6 bytes）。
+  final String reporterHandle;
+
+  /// '安全' / '輕傷' / '重傷'。線路上是單一 byte，這裡還原成中文 label 供 UI 使用。
   final String status;
-  final String? description;
-  final double? lat;
-  final double? lng;
-  final String reportTime;
+
+  /// 降精度 geohash；無位置資訊時為 null。
+  final String? geohash;
+
+  /// 回報時間（線路上只保留到秒）。
+  final DateTime reportTime;
 
   const HealthReportPayload({
-    required this.reporterId,
-    required this.name,
-    required this.phone,
-    this.bloodType,
+    required this.reporterHandle,
     required this.status,
-    this.description,
-    this.lat,
-    this.lng,
+    this.geohash,
     required this.reportTime,
   });
 
+  /// status wire byte ↔ 中文 label 的單一對應（與 Kotlin `HealthStatus` 一致）。
+  static const Map<int, String> statusByWire = {0: '安全', 1: '輕傷', 2: '重傷'};
+
   static HealthReportPayload? decode(List<int> bytes) {
     try {
-      int offset = 0;
+      if (bytes.length < _minEncodedSize) return null;
+      final b = Uint8List.fromList(bytes);
+      var o = 0;
 
-      List<int> take(int len) {
-        final slice = bytes.sublist(offset, offset + len);
-        offset += len;
-        return slice;
-      }
+      if ((b[o++] & 0xFF) != version) return null;
 
-      String readUtf8Fixed() {
-        final len = bytes[offset] & 0xFF;
-        offset++;
-        if (len == 0) return '';
-        return utf8.decode(take(len));
-      }
+      final handle = [
+        for (var i = 0; i < handleBytes; i++)
+          (b[o + i] & 0xFF).toRadixString(16).padLeft(2, '0'),
+      ].join();
+      o += handleBytes;
 
-      String? readNullable1() {
-        final len = bytes[offset] & 0xFF;
-        offset++;
-        if (len == 0) return null;
-        return utf8.decode(take(len));
-      }
+      final status = statusByWire[b[o++] & 0xFF];
+      if (status == null) return null;
 
-      String? readNullable2() {
-        final hi = bytes[offset] & 0xFF;
-        final lo = bytes[offset + 1] & 0xFF;
-        final len = (hi << 8) | lo;
-        offset += 2;
-        if (len == 0) return null;
-        return utf8.decode(take(len));
-      }
+      final ghLen = b[o++] & 0xFF;
+      if (ghLen != 0 && ghLen != geohashPrecision) return null;
+      if (bytes.length - o < ghLen + 4) return null;
+      final geohash =
+          ghLen == 0 ? null : String.fromCharCodes(b.sublist(o, o + ghLen));
+      o += ghLen;
 
-      double readFloat64BE() {
-        final bd = ByteData(8);
-        for (int i = 0; i < 8; i++) {
-          bd.setUint8(i, bytes[offset + i] & 0xFF);
-        }
-        offset += 8;
-        return bd.getFloat64(0, Endian.big);
-      }
-
-      final reporterId  = readUtf8Fixed();
-      final name        = readUtf8Fixed();
-      final phone       = readUtf8Fixed();
-      final bloodType   = readNullable1();
-      final status      = readUtf8Fixed();
-      final description = readNullable2();
-      final latRaw      = readFloat64BE();
-      final lngRaw      = readFloat64BE();
-      final lat         = latRaw == 0.0 ? null : latRaw;
-      final lng         = lngRaw == 0.0 ? null : lngRaw;
-      final reportTime  = readUtf8Fixed();
-
-      if (reporterId.isEmpty || name.isEmpty || status.isEmpty) return null;
+      final secs = ByteData.sublistView(b, o, o + 4).getUint32(0, Endian.big);
 
       return HealthReportPayload(
-        reporterId:  reporterId,
-        name:        name,
-        phone:       phone,
-        bloodType:   bloodType,
-        status:      status,
-        description: description,
-        lat:         lat,
-        lng:         lng,
-        reportTime:  reportTime,
+        reporterHandle: handle,
+        status: status,
+        geohash: geohash,
+        reportTime:
+            DateTime.fromMillisecondsSinceEpoch(secs * 1000, isUtc: true),
       );
     } catch (_) {
       return null;
     }
   }
 
-  HealthReport toHealthReport() {
-    return HealthReport(
-      reporterId:  reporterId,
-      name:        name,
-      phone:       phone,
-      bloodType:   bloodType,
-      status:      status,
-      description: description,
-      lat:         lat,
-      lng:         lng,
-      reportTime:  DateTime.tryParse(reportTime) ?? DateTime.now(),
+  /// geohash 還原的近似中心座標；無位置時為 null。這是「大約在哪」而非確切位置。
+  (double, double)? approximateLatLng() =>
+      geohash == null ? null : Geohash.decodeCenter(geohash!);
+
+  BroadcastHealthReport toBroadcastReport() {
+    final approx = approximateLatLng();
+    return BroadcastHealthReport(
+      reporterHandle: reporterHandle,
+      status: status,
+      geohash: geohash,
+      approxLat: approx?.$1,
+      approxLng: approx?.$2,
+      reportTime: reportTime,
     );
   }
 }

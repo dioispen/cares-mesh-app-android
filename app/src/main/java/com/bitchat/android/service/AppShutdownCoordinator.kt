@@ -3,7 +3,7 @@ package com.bitchat.android.service
 import android.app.Application
 import android.os.Process
 import androidx.core.app.NotificationManagerCompat
-import com.bitchat.android.mesh.BluetoothMeshService
+import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.net.ArtiTorManager
 import com.bitchat.android.net.TorMode
 import kotlinx.coroutines.CoroutineScope
@@ -39,7 +39,7 @@ object AppShutdownCoordinator {
 
     fun requestFullShutdownAndKill(
         app: Application,
-        mesh: BluetoothMeshService?,
+        mesh: MeshService?,
         notificationManager: NotificationManagerCompat,
         stopForeground: () -> Unit,
         stopService: () -> Unit
@@ -56,11 +56,19 @@ object AppShutdownCoordinator {
 
             // Stop mesh (best-effort)
             try { mesh?.stopServices() } catch (_: Exception) { }
+            try { com.bitchat.android.nostr.NostrRelayManager.shared.disconnect() } catch (_: Exception) { }
+            try { com.bitchat.android.mesh.PowerManager.getInstance(app).shutdown() } catch (_: Exception) { }
 
             // Stop Tor temporarily (do not change user setting)
             val torProvider = ArtiTorManager.getInstance()
             val torStop = async {
                 try { torProvider.applyMode(app, TorMode.OFF) } catch (_: Exception) { }
+            }
+            val conversationFlush = async {
+                try {
+                    com.bitchat.android.services.AppStateStore
+                        .awaitConversationPersistence()
+                } catch (_: Exception) { }
             }
 
             // Clear AppState in-memory store
@@ -73,6 +81,7 @@ object AppShutdownCoordinator {
             // Wait up to 5 seconds for shutdown tasks
             withTimeoutOrNull(5000) {
                 try { torStop.await() } catch (_: Exception) { }
+                try { conversationFlush.await() } catch (_: Exception) { }
                 delay(100)
             }
 
