@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // health_reports: 登入用戶可讀所有；只能建立/修改/刪除自己的回報
+    match /health_reports/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.reporterId == request.auth.uid;
+      allow update, delete: if request.auth != null
+                             && resource.data.reporterId == request.auth.uid;
+    }
+
+    // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS
+    match /sos_requests/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null
+                             && resource.data.userId == request.auth.uid;
+    }
+
+    // users: 登入用戶可讀所有人資料；只能寫入自己的文件
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // supply_items: 登入用戶可讀寫
+    match /supply_items/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // pledges: 登入用戶可讀寫
+    match /pledges/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+  }
+}
