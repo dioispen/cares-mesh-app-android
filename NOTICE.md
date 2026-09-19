@@ -45,10 +45,8 @@ git log 632ee88..main          # 修改的逐筆紀錄與日期
 | `app/src/main/java/com/bitchat/android/protocol/DisasterReportPacket.kt` | Health Report 封包結構與序列化 |
 | `app/src/main/java/com/bitchat/android/flutter/BitchatFlutterChannels.kt` | Flutter ↔ Android MethodChannel／EventChannel 橋接 |
 | `app/src/main/java/com/bitchat/android/flutter/FlutterChatActivity.kt` | 嵌入 Flutter 的 Activity |
-| `app/src/main/java/com/bitchat/android/net/PacketUplinkManager.kt` | 封包的網際網路上行轉送 |
 | `app/src/main/java/com/bitchat/android/service/MeshServiceHolder.kt` | mesh 服務單例存取點 |
 | `app/src/test/kotlin/com/bitchat/android/protocol/DisasterReportTest.kt` | Health Report 封包測試 |
-| `app/src/main/res/xml/network_security_config.xml`、`app/src/main/res/raw/server.crt` | 上行連線的網路安全設定 |
 | `flutter_ui/`（整個目錄） | Flutter UI 模組 — 本組原創 |
 
 ### 修改的上游檔案

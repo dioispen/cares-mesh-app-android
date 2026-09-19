@@ -5,14 +5,6 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.X509TrustManager
-import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.SSLContext
-import java.security.cert.CertificateFactory
-import java.security.KeyStore
-import com.bitchat.android.R
-import android.util.Log
-import android.content.Context
 
 /**
  * Centralized OkHttp provider to ensure all network traffic honors Tor settings.
@@ -85,38 +77,5 @@ object OkHttpProvider {
             builder.proxy(proxy)
         }
         return builder to if (socks == null) Route.DIRECT else Route.TOR
-    }
-
-    /**
-     * HTTP client that additionally trusts the self-signed CA in res/raw/server.crt, for the
-     * CARES management-centre uplink when it is fronted by a private certificate.
-     *
-     * Deliberately NOT the shared [httpClient]: this trust store is additive and scoped to the
-     * caller. Unlike the pre-merge version, hostname verification stays enabled.
-     */
-    fun customCertHttpClient(context: Context): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-            .callTimeout(30, TimeUnit.SECONDS)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .writeTimeout(20, TimeUnit.SECONDS)
-        try {
-            val ca = context.resources.openRawResource(R.raw.server).use { stream ->
-                CertificateFactory.getInstance("X.509").generateCertificate(stream)
-            }
-            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-                load(null, null)
-                setCertificateEntry("ca", ca)
-            }
-            val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-                .apply { init(keyStore) }
-            val sslContext = SSLContext.getInstance("TLS").apply {
-                init(null, tmf.trustManagers, null)
-            }
-            builder.sslSocketFactory(sslContext.socketFactory, tmf.trustManagers[0] as X509TrustManager)
-        } catch (e: Exception) {
-            Log.e("OkHttpProvider", "Custom cert load failed, falling back to system default", e)
-        }
-        return builder.build()
     }
 }

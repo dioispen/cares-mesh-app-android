@@ -614,28 +614,10 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         )
         delegate?.onMessageReceived(message)
 
-        // 2. BACKEND CONCEPT: Automatic upload to management center if network is available
-        uploadToManagementCenter(report)
-
-        // 3. 轉發給 Flutter EventChannel
+        // 2. 轉發給 Flutter EventChannel
         InboundPacketBridge.onPacketReceived?.invoke(packet)
     }
 
-    private fun uploadToManagementCenter(report: HealthReportPayload) {
-        handlerScope.launch {
-            // Check network availability (simplified)
-            val cm = appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
-            val network = cm?.activeNetwork
-            val caps = cm?.getNetworkCapabilities(network)
-            val hasInternet = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-
-            if (hasInternet) {
-                Log.d(TAG, "🌐 Internet available, uploading health report ${report.reporterHandle} to management center")
-                // TODO: Implement actual HTTP upload to your management center
-            }
-        }
-    }
-    
     /**
      * Handle leave message
      */

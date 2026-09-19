@@ -21,7 +21,6 @@
 |---|---|
 | **Health Report 封包** — 受災者自述狀況（Status）、位置與聯絡資訊的線路格式與序列化 | `app/.../protocol/DisasterReportPacket.kt` |
 | **Flutter ↔ Android 橋接** — MethodChannel／EventChannel，讓 Flutter UI 驅動原生 mesh | `app/.../flutter/BitchatFlutterChannels.kt`、`FlutterChatActivity.kt` |
-| **網際網路上行** — 在有網路時將封包轉送至雲端 | `app/.../net/PacketUplinkManager.kt` |
 | **Flutter UI 全套畫面** — 登入／註冊／信箱驗證、首頁、SOS、避難所地圖、物資、防災知識、健康回報 | `flutter_ui/lib/screens/` |
 | **Firebase 整合** — 使用者驗證與健康資料儲存 | `flutter_ui/lib/services/auth_service.dart` |
 
