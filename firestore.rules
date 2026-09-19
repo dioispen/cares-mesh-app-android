@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // health_reports: 登入用戶可讀所有；只能建立/修改/刪除自己的回報
+    // NOTE: 「任何註冊帳號皆可讀取他人健康資料」的 PII 問題另見 issue #33，
+    //       牽涉角色機制設計，本 issue 刻意不在此處理。
+    match /health_reports/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.reporterId == request.auth.uid;
+      allow update, delete: if request.auth != null
+                             && resource.data.reporterId == request.auth.uid;
+    }
+
+    // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS
+    match /sos_requests/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null
+                             && resource.data.userId == request.auth.uid;
+    }
+
+    // users: 登入用戶可讀所有人資料；只能寫入自己的文件
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // supply_items: 共用的物資型錄，「沒有擁有者」。
+    //
+    // 這裡不能做擁有者比對：認領流程（supply_screen.dart 的 _showPledgeSheet）
+    // 會讓「別人建立的物資」被其他使用者更新已認領總量：
+    //     itemRef.update({'pledgedQty': FieldValue.increment(qty)})
+    // 加上擁有者檢查會讓整個認領功能失效（見 issue #34 的更正留言）。
+    //
+    // 因此改用「欄位層級限制」：只允許改動 pledgedQty，其餘欄位不可竄改。
+    match /supply_items/{docId} {
+      allow read: if request.auth != null;
+
+      // create 目前僅供客戶端種子寫入使用（_initSupplyItems() 在 collection
+      // 為空時批次寫入 _seedItems）。限定欄位組成與型別，pledgedQty 必須從 0 起算。
+      // NOTE: 由客戶端寫入共用型錄的種子資料本身是設計問題，另案處理。
+      allow create: if request.auth != null
+                    && request.resource.data.keys().hasOnly(
+                         ['name', 'unit', 'category', 'neededQty', 'pledgedQty'])
+                    && request.resource.data.keys().hasAll(
+                         ['name', 'unit', 'category', 'neededQty', 'pledgedQty'])
+                    && request.resource.data.name is string
+                    && request.resource.data.unit is string
+                    && request.resource.data.category is string
+                    && request.resource.data.neededQty is int
+                    && request.resource.data.neededQty >= 0
+                    && request.resource.data.pledgedQty == 0;
+
+      // update 只允許改動已認領總量，其餘欄位（名稱、單位、分類、需求量）不可被竄改。
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['pledgedQty'])
+                    && request.resource.data.pledgedQty is int
+                    && request.resource.data.pledgedQty >= 0;
+
+      // delete 在程式碼中找不到任何呼叫端，一律禁止。
+      allow delete: if false;
+    }
+
+    // pledges: 認領紀錄，有 userId 欄位，比照 sos_requests 做擁有者比對。
+    match /pledges/{docId} {
+      // NOTE: 目前維持「登入即可讀」。收斂為僅能讀自己的認領紀錄是可行的
+      //       （supply_screen.dart 的查詢已用 where('userId', ...) 限定），
+      //       但不在 issue #34 範圍內，另案處理。
+      allow read: if request.auth != null;
+
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasOnly(
+                         ['userId', 'userName', 'itemId', 'itemName',
+                          'unit', 'quantity', 'status', 'pledgedAt'])
+                    && request.resource.data.keys().hasAll(
+                         ['userId', 'itemId', 'quantity', 'status'])
+                    && request.resource.data.itemId is string
+                    && request.resource.data.status is string
+                    && request.resource.data.quantity is int
+                    && request.resource.data.quantity > 0;
+
+      // 只有擁有者能改自己的認領，且不得把文件「轉手」給別人或換成別的物資。
+      allow update: if request.auth != null
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.itemId == resource.data.itemId
+                    && request.resource.data.quantity is int
+                    && request.resource.data.quantity > 0;
+
+      allow delete: if request.auth != null
+                    && resource.data.userId == request.auth.uid;
+    }
+  }
+}

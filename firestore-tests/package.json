@@ -1,0 +1,15 @@
+{
+  "name": "cares-firestore-rules-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Firestore 安全規則的 emulator 測試（不連線到任何線上 Firebase 專案）",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-cares --config ../firebase.json \"node --test rules.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.4.0",
+    "firebase-tools": "^15.30.2"
+  }
+}
