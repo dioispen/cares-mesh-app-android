@@ -88,6 +88,24 @@ RUN source /tmp/TOOLCHAIN.env \
     && rm -f "/tmp/${ANDROID_NDK_ARCHIVE}" \
     && test -x "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 
+# The `jni` Dart package builds native code, so AGP runs its own default CMake
+# while configuring :jni and :flutter for release. Same sealed-SDK problem as the
+# NDK above, same fix. The archive unpacks flat into cmake/<version>/ and carries
+# bin/ninja alongside bin/cmake. `unzip` rather than `jar`: executable bits again.
+RUN source /tmp/TOOLCHAIN.env \
+    && curl -fsSL \
+        "https://dl.google.com/android/repository/${ANDROID_CMAKE_ARCHIVE}" \
+        -o "/tmp/${ANDROID_CMAKE_ARCHIVE}" \
+    && echo "${ANDROID_CMAKE_SHA256}  /tmp/${ANDROID_CMAKE_ARCHIVE}" | sha256sum -c - \
+    && mkdir -p "$ANDROID_HOME/cmake/${ANDROID_CMAKE_VERSION}" \
+    && unzip -qq "/tmp/${ANDROID_CMAKE_ARCHIVE}" \
+        -d "$ANDROID_HOME/cmake/${ANDROID_CMAKE_VERSION}" \
+    && cp "/tmp/sdk-metadata/cmake-${ANDROID_CMAKE_VERSION}.xml" \
+        "$ANDROID_HOME/cmake/${ANDROID_CMAKE_VERSION}/package.xml" \
+    && rm -f "/tmp/${ANDROID_CMAKE_ARCHIVE}" \
+    && test -x "$ANDROID_HOME/cmake/${ANDROID_CMAKE_VERSION}/bin/cmake" \
+    && test -x "$ANDROID_HOME/cmake/${ANDROID_CMAKE_VERSION}/bin/ninja"
+
 ENV FLUTTER_ROOT=/opt/flutter
 ENV PUB_CACHE=/opt/pub-cache
 ENV PATH=/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:${PATH}
