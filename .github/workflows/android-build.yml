@@ -10,8 +10,11 @@ on:
 permissions:
   contents: read
 
-env:
-  SETUP_JAVA_VERSION: 21.0.11+10.0.LTS
+# Every job runs inside tools/reproducible-builds/Dockerfile, the same image the
+# release build uses. The JDK, Android SDK, and Flutter SDK all come from that
+# image, so there is no actions/setup-java step and no second toolchain to keep
+# in sync with TOOLCHAIN.env. The image build is layer-cached within a job but
+# not across jobs, so each job pays the image build once.
 
 jobs:
   verify:
@@ -22,23 +25,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up pinned JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.SETUP_JAVA_VERSION }}
+      - name: Free runner disk space for the toolchain image
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
 
-      - name: Set up and validate Gradle
+      - name: Validate the Gradle wrapper
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-disabled: true
 
       - name: Verify native library inputs
-        run: tools/arti-build/verify-checksums.sh
+        run: |
+          BITCHAT_SKIP_FLUTTER_PREPARE=1 \
+            tools/reproducible-builds/run-in-container.sh \
+            tools/arti-build/verify-checksums.sh
+
+      - name: Run Flutter tests
+        run: |
+          tools/reproducible-builds/run-in-container.sh \
+            bash -c 'cd flutter_ui && flutter --no-version-check test'
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest
+        run: tools/reproducible-builds/run-in-container.sh ./gradlew testDebugUnitTest
 
       - name: Run lint
-        run: ./gradlew lintDebug
+        run: tools/reproducible-builds/run-in-container.sh ./gradlew lintDebug
 
       - name: Upload test reports
         if: always()
@@ -65,17 +77,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up pinned JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.SETUP_JAVA_VERSION }}
+      - name: Free runner disk space for the toolchain image
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
 
-      - name: Set up and validate Gradle
+      - name: Validate the Gradle wrapper
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-disabled: true
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug
+        run: tools/reproducible-builds/run-in-container.sh ./gradlew assembleDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -96,13 +109,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up pinned JDK
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.SETUP_JAVA_VERSION }}
+      - name: Free runner disk space for the toolchain image
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
 
-      - name: Set up and validate Gradle
+      - name: Validate the Gradle wrapper
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
           cache-disabled: true

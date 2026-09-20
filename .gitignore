@@ -66,6 +66,11 @@ gen/
 
 # Google services
 google-services.json
+# app/google-services.json is a build input, not a secret: the gms plugin turns
+# it into string resources that land in resources.arsc, so a third party cannot
+# reproduce the release bytes without the exact same file. Every value in it is
+# already shipped inside every published APK.
+!app/google-services.json
 
 # Keystore files
 *.jks

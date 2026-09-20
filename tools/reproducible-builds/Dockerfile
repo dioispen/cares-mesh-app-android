@@ -50,6 +50,101 @@ RUN source /tmp/TOOLCHAIN.env \
 
 ENV PATH=/opt/android-sdk/build-tools/37.0.0:${PATH}
 
+# The Flutter SDK is installed from the official pinned stable archive and
+# verified by SHA-256, exactly like the Android SDK packages above. Deliberately
+# not `git clone`: a channel checkout floats, while app/gradle.lockfile locks the
+# eight io.flutter engine artifacts to one engine revision under STRICT locking.
+#
+# git       the flutter entrypoint runs `git rev-parse HEAD` and
+#           `git ls-files bin/internal/engine.version` inside FLUTTER_ROOT on
+#           every invocation, so the SDK has to stay a usable Git checkout
+# xz-utils  the official Flutter archive is .tar.xz
+# unzip     verify-no-host-paths.sh prefers it over `jar` when inspecting
+#           release APK and AAB payloads
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git \
+        unzip \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# The generated Flutter module declares `ndkVersion = flutter.ndkVersion`, so
+# AGP resolves that exact side-by-side NDK while configuring :flutter and tries
+# to install it when it is absent — which fails against a read-only SDK and
+# would reach the network anyway. Pin it like every other SDK package.
+# `unzip` rather than `jar`: the NDK archive carries symlinks and executable
+# bits that `jar` silently drops.
+RUN source /tmp/TOOLCHAIN.env \
+    && curl -fsSL \
+        "https://dl.google.com/android/repository/${ANDROID_NDK_ARCHIVE}" \
+        -o "/tmp/${ANDROID_NDK_ARCHIVE}" \
+    && echo "${ANDROID_NDK_SHA256}  /tmp/${ANDROID_NDK_ARCHIVE}" | sha256sum -c - \
+    && mkdir -p "$ANDROID_HOME/ndk" \
+    && unzip -qq "/tmp/${ANDROID_NDK_ARCHIVE}" -d "$ANDROID_HOME/ndk" \
+    && mv "$ANDROID_HOME/ndk/${ANDROID_NDK_ARCHIVE_ROOT}" \
+        "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" \
+    && cp "/tmp/sdk-metadata/ndk-${ANDROID_NDK_VERSION}.xml" \
+        "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/package.xml" \
+    && rm -f "/tmp/${ANDROID_NDK_ARCHIVE}" \
+    && test -x "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+
+ENV FLUTTER_ROOT=/opt/flutter
+ENV PUB_CACHE=/opt/pub-cache
+ENV PATH=/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:${PATH}
+ENV FLUTTER_SUPPRESS_ANALYTICS=true
+
+# The container runs as an arbitrary non-root uid, so every path the Flutter
+# tool writes to at build time has to be writable by that uid: bin/cache holds
+# the startup lockfile and the engine.stamp that update_engine_version.sh
+# rewrites on every invocation, and Gradle builds the flutter-gradle-plugin
+# included build underneath packages/flutter_tools/gradle. The tool snapshot and
+# every artifact are generated here so that no runtime invocation needs network.
+RUN source /tmp/TOOLCHAIN.env \
+    && test "$FLUTTER_SDK_DIR" = "$FLUTTER_ROOT" \
+    && test "$PUB_CACHE_DIR" = "$PUB_CACHE" \
+    && curl -fsSL \
+        "https://storage.googleapis.com/flutter_infra_release/releases/${FLUTTER_ARCHIVE}" \
+        -o /tmp/flutter-sdk.tar.xz \
+    && echo "${FLUTTER_SHA256}  /tmp/flutter-sdk.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/flutter-sdk.tar.xz -C /opt \
+    && rm -f /tmp/flutter-sdk.tar.xz \
+    && git config --system --add safe.directory '*' \
+    && test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = "$FLUTTER_FRAMEWORK_REVISION" \
+    && test "$(cat "$FLUTTER_ROOT/bin/internal/engine.version")" = "$FLUTTER_ENGINE_REVISION" \
+    && flutter --no-version-check --disable-analytics --version \
+    && grep -Fq "\"frameworkVersion\": \"$FLUTTER_VERSION\"" \
+        "$FLUTTER_ROOT/bin/cache/flutter.version.json" \
+    && grep -Fq "\"engineContentHash\": \"$FLUTTER_ENGINE_CONTENT_HASH\"" \
+        "$FLUTTER_ROOT/bin/cache/flutter.version.json" \
+    && flutter --no-version-check precache \
+        --universal \
+        --android \
+        --android_gen_snapshot \
+        --android_maven \
+        --android_internal_build \
+        --no-ios \
+        --no-web \
+        --no-linux \
+        --no-macos \
+        --no-windows \
+        --no-fuchsia \
+    && rm -rf "$FLUTTER_ROOT/bin/cache/flutter_web_sdk" \
+        "$FLUTTER_ROOT/bin/cache/downloads" \
+    && chmod -R a+rwX "$FLUTTER_ROOT"
+
+# `docker run --rm` throws the container layer away, so anything that is not
+# baked into the image is downloaded again on every single build. Resolving the
+# module's dependencies here lets the build stage run `pub get --offline`
+# against a warm PUB_CACHE. Only the two pubspec files are copied, so this layer
+# is invalidated by a dependency change and not by every source edit.
+COPY flutter_ui/pubspec.yaml flutter_ui/pubspec.lock /tmp/pub-warmup/
+
+RUN cd /tmp/pub-warmup \
+    && flutter --no-version-check pub get --enforce-lockfile \
+    && cd / \
+    && rm -rf /tmp/pub-warmup \
+    && chmod -R a+rwX "$PUB_CACHE" "$FLUTTER_ROOT/bin/cache"
+
 ENV TZ=UTC
 ENV LC_ALL=C.UTF-8
 

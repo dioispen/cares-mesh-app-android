@@ -21,8 +21,13 @@ GitHub/Google Play publication checklist.
 - dependency versions, strict Gradle dependency locks, and downloaded-artifact
   SHA-256 verification metadata
 - exact Temurin JDK release and digest-pinned Linux builder image
-- Android platform, Platform Tools, and Build Tools archives by filename and
-  SHA-256, plus the accepted SDK license-text SHA-1 required to use them
+- Android platform, Platform Tools, Build Tools, and side-by-side NDK archives
+  by filename and SHA-256, plus the accepted SDK license-text SHA-1 required to
+  use them
+- the Flutter SDK release archive by filename and SHA-256, plus the framework
+  and engine revisions the extracted SDK must report
+- Dart package versions and their `sha256:` content hashes in
+  `flutter_ui/pubspec.lock`
 - Kotlin/JVM toolchain and bytecode target
 - Arti source tag and full commit, stable native build epoch, Rust, `cargo-ndk`,
   Android NDK, Cargo lockfile, digest-pinned Rust builder image, and immutable
@@ -39,7 +44,9 @@ because its duplicate-key selection depends on unspecified class-file iteration
 order across clean builds. Native builds remap source paths and release
 validation rejects host paths in packaged libraries. The container overlays a
 canonical `local.properties`, so an ignored Android Studio file cannot redirect
-Gradle to a host-specific SDK.
+Gradle to a host-specific SDK. The embedded Flutter module has a second,
+independent `flutter_ui/.android/local.properties`; the container regenerates
+that one with container paths for both `sdk.dir` and `flutter.sdk`.
 
 AGP's embedded VCS record is disabled because its Git discovery depends on the
 host checkout layout. The canonical `BUILDINFO.json` and GitHub provenance
@@ -56,6 +63,143 @@ The authoritative pins are:
 - `tools/reproducible-builds/TOOLCHAIN.env`
 - `tools/arti-build/TOOLCHAIN.env`
 - `tools/arti-build/Cargo.lock`
+- `flutter_ui/pubspec.lock`
+
+## One image for local builds, CI, and releases
+
+`tools/reproducible-builds/Dockerfile` is the only supported build environment.
+Two drivers use it:
+
+- `build-in-container.sh` — the release path. It builds from `git archive` of
+  the committed tree, refuses a dirty checkout, and runs `build-release.sh` as
+  the image entrypoint.
+- `run-in-container.sh` — the everyday path. It bind-mounts the working tree and
+  runs any command inside the image:
+
+  ```bash
+  tools/reproducible-builds/run-in-container.sh ./gradlew testDebugUnitTest
+  tools/reproducible-builds/run-in-container.sh \
+    bash -c 'cd flutter_ui && flutter --no-version-check test'
+  ```
+
+  It swaps the canonical `local.properties` in for the duration of the run and
+  restores the host one afterwards, and regenerates `flutter_ui/.android` before
+  the requested command (skip with `BITCHAT_SKIP_FLUTTER_PREPARE=1`).
+
+  Because the working tree is bind-mounted, that leaves `flutter_ui/.android`
+  and `flutter_ui/.dart_tool` pointing at container paths. Both are gitignored
+  build state; run `flutter pub get` in `flutter_ui/` again to restore the IDE
+  setup on the host.
+
+`.github/workflows/android-build.yml` runs the unit tests, `flutter test`, lint,
+and the debug APK through `run-in-container.sh`, so CI, a developer machine, and
+the release build share one toolchain. There is no `actions/setup-java` step:
+the JDK comes from the image. The image build is layer-cached within a job but
+not between jobs, so every job pays to build it once.
+
+The image tag carries both pinned versions,
+`bitchat-android-reproducible-builder:<jdk>-flutter<flutter>`. Changing either
+version — or anything else in the `Dockerfile` — leaves the previous image
+behind as an untagged `<none>` image of several gigabytes. Reclaim them with:
+
+```bash
+docker image prune
+```
+
+## The embedded Flutter module
+
+`settings.gradle.kts` applies `flutter_ui/.android/include_flutter.groovy`
+during settings evaluation. That directory is `flutter pub get` output and is
+gitignored, so it is absent from the `git archive` tree the canonical build
+uses, and `include_flutter.groovy` itself asserts on a separate
+`flutter_ui/.android/local.properties` that has to carry `flutter.sdk`.
+
+`tools/reproducible-builds/prepare-flutter-module.sh` closes that gap. It runs
+inside the container before any Gradle invocation and:
+
+1. refuses to continue unless `$FLUTTER_ROOT/bin/internal/engine.version`
+   equals `FLUTTER_ENGINE_REVISION` from `TOOLCHAIN.env`;
+2. runs `flutter pub get --enforce-lockfile --offline` in `flutter_ui/`; and
+3. rewrites `flutter_ui/.android/local.properties` with the container's
+   `sdk.dir` and `flutter.sdk`.
+
+The generated `flutter_ui/.android/Flutter/build.gradle` also declares
+`ndkVersion = flutter.ndkVersion`, so AGP resolves one exact side-by-side NDK
+while configuring `:flutter`. That version is chosen by the pinned Flutter
+release, not by this repository, and it is installed into the image from a
+SHA-256-pinned archive: without it the build fails with
+`InstallFailedException: The SDK directory is not writable`. A Flutter upgrade
+can therefore require a new `ANDROID_NDK_*` block in `TOOLCHAIN.env` and a new
+`sdk-metadata/ndk-<version>.xml`.
+
+The engine check in step 1 is not a formality. `app/gradle.lockfile` STRICT-locks
+eight `io.flutter:*:1.0.0-<engine revision>` coordinates, so any Flutter release
+other than the pinned one fails the build with an opaque lock error. The Flutter
+version in `TOOLCHAIN.env` is a hard requirement, not a recommendation.
+
+Step 2 is offline because the image prewarms `PUB_CACHE` from the same
+`flutter_ui/pubspec.lock`. Set `BITCHAT_PUB_GET_OFFLINE=0` to allow network
+resolution, which should only ever be needed while changing dependencies.
+
+## Firebase configuration
+
+`app/google-services.json` is tracked in version control. It is a build input,
+not a secret:
+
+- `app/build.gradle.kts` applies `com.google.gms.google-services`, which turns
+  the file into Android string resources. Those resources end up in
+  `resources.arsc` inside every release APK and AAB, so the file's contents
+  change the release bytes. A third party cannot reproduce a release without
+  the exact same file.
+- Every value in it already ships inside every published APK, so committing it
+  discloses nothing that a download does not.
+
+`.gitignore` still ignores `google-services.json` everywhere else; only
+`app/google-services.json` is excepted. Forks that point at their own Firebase
+project will produce different, internally consistent release bytes.
+
+## Hermeticity boundary
+
+Reproducibility is only as strong as the weakest pin. These inputs are pinned by
+content, so substitution is detected during the build:
+
+| Input | Pinned by |
+| --- | --- |
+| Builder base image | image digest in `Dockerfile` |
+| Gradle distribution | SHA-256 in `gradle-wrapper.properties` |
+| Android platform, Platform Tools, Build Tools, NDK | SHA-256 in `TOOLCHAIN.env` |
+| Flutter SDK (and the Dart SDK inside it) | SHA-256 in `TOOLCHAIN.env` |
+| Dart packages | `sha256:` per package in `flutter_ui/pubspec.lock`, enforced with `--enforce-lockfile` |
+| Most Maven artifacts | `gradle/verification-metadata.xml` |
+| Arti native libraries | `tools/arti-build/SHA256SUMS` |
+| Source tree | commit SHA in `BUILDINFO.json` |
+
+These inputs are pinned only by version or URL. Their bytes are taken on trust
+from the server that serves them:
+
+- **`io.flutter:*` engine AARs.** `gradle/verification-metadata.xml` carries
+  `<trust group="io.flutter"/>`, so the eight engine artifacts resolved from
+  `https://storage.googleapis.com/download.flutter.io` are *not* checksum
+  verified. Their version string embeds the engine revision, so a substitution
+  has to keep the same coordinates, but nothing in this repository would notice
+  different bytes under them. Closing this means recording their checksums in
+  the verification metadata; it is deliberately out of scope here.
+
+  The neighbouring `<trust group="dev.flutter"/>` rule is a weaker concern: the
+  Flutter Gradle plugin is built from `packages/flutter_tools/gradle` inside the
+  SDK, and the SDK archive is checksum-verified.
+- **Flutter engine artifacts under `bin/cache/artifacts/engine`.** The Flutter
+  tool fetches these by engine revision without a checksum this repository
+  controls. They are downloaded once while the image is built, so any given
+  image is fixed, but rebuilding the image refetches them.
+- **Ubuntu packages added to the image** (`git`, `unzip`, `xz-utils`). The base
+  image digest is pinned; the apt archive state at image-build time is not.
+  None of these programs contributes bytes to the release artifacts.
+
+The build container itself is therefore not byte-reproducible — the release
+artifacts it produces are. The canonical build stage performs no pub.dev access
+at all: `PUB_CACHE` and the Flutter engine artifacts are baked into the image,
+and `docker run --rm` would otherwise re-download roughly 900 MB on every build.
 
 ## Reproduce a release locally
 
@@ -257,6 +401,14 @@ intermediates cannot coexist:
 Review every new repository, component, artifact name, version, and checksum.
 Do not accept verification metadata generated after an unexplained checksum
 failure.
+
+The Flutter Gradle plugin is an included build
+(`$FLUTTER_ROOT/packages/flutter_tools/gradle`) and pins its own Kotlin plugin
+version, so its plugin classpath needs verification-metadata entries too — a
+Flutter upgrade can therefore require new checksums even when no project
+dependency changed. A clean Gradle user home surfaces those immediately;
+a warm developer cache can hide them, which is another reason to run the
+container before pushing.
 
 The verification metadata deliberately trusts only IDE documentation and source
 attachments (`*-javadoc.jar`, `*-sources.jar`, and Gradle's `*-src.zip`). Android
