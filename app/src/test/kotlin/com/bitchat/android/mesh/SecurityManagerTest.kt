@@ -220,6 +220,32 @@ class SecurityManagerTest {
     }
 
     @Test
+    fun `validatePacket rejects unsigned HEALTH_REPORT`() {
+        setupKnownPeer(otherPeerID, otherSigningKey)
+        val packet = BitchatPacket(
+            type = MessageType.HEALTH_REPORT.value,
+            ttl = 7u,
+            senderID = otherPeerID,
+            payload = byteArrayOf(0x01)
+        )
+
+        assertFalse("Unsigned HEALTH_REPORT must be rejected", securityManager.validatePacket(packet, otherPeerID))
+    }
+
+    @Test
+    fun `validatePacket accepts signed HEALTH_REPORT from known peer`() {
+        setupKnownPeer(otherPeerID, otherSigningKey)
+        val packet = BitchatPacket(
+            type = MessageType.HEALTH_REPORT.value,
+            ttl = 7u,
+            senderID = otherPeerID,
+            payload = byteArrayOf(0x01)
+        ).also { it.signature = validSignature }
+
+        assertTrue("Signed HEALTH_REPORT from a known peer should be accepted", securityManager.validatePacket(packet, otherPeerID))
+    }
+
+    @Test
     fun `validatePacket rejects unsigned and invalidly signed LEAVE packets`() {
         setupKnownPeer(otherPeerID, otherSigningKey)
 

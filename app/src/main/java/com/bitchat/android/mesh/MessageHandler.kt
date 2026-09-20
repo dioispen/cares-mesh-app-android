@@ -589,6 +589,12 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 
+        val peerInfo = delegate?.getPeerInfo(peerID)
+        if (peerInfo == null || !peerInfo.isVerifiedNickname) {
+            Log.w(TAG, "Dropping health report from unverified peer ${peerID.take(8)}")
+            return
+        }
+
         Log.d(TAG, "🔍 收到健康報告封包，大小: ${packet.payload.size} 字節")
         val report = HealthReportPayload.decode(packet.payload)
         if (report == null) {
