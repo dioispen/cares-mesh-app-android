@@ -61,6 +61,11 @@ fi
   "$FLUTTER_ROOT/bin/flutter" "${pub_get_args[@]}"
 )
 
+# Third-party packages that do not build against this toolchain are repaired
+# here, after pub has extracted them and before Gradle configures the generated
+# plugin projects.
+"$SCRIPT_DIR/apply-pub-cache-patches.sh"
+
 generated_local_properties="$FLUTTER_MODULE_DIR/.android/local.properties"
 if [ ! -f "$FLUTTER_MODULE_DIR/.android/include_flutter.groovy" ]; then
   echo "error: flutter pub get did not generate flutter_ui/.android" >&2
