@@ -17,9 +17,9 @@ final RouteObserver<ModalRoute<void>> mascotRouteObserver =
 
 // Always notifies listeners regardless of value equality,
 // so the mascot renders correctly on initial push (not just pop-back).
-class _MascotOptionsNotifier extends ChangeNotifier
+class MascotOptionsNotifier extends ChangeNotifier
     implements ValueListenable<List<MascotOption>> {
-  _MascotOptionsNotifier(this._value);
+  MascotOptionsNotifier(this._value);
   List<MascotOption> _value;
 
   @override
@@ -31,29 +31,29 @@ class _MascotOptionsNotifier extends ChangeNotifier
   }
 }
 
-final _MascotOptionsNotifier mascotOptionsNotifier =
-    _MascotOptionsNotifier(const []);
+final MascotOptionsNotifier mascotOptionsNotifier =
+    MascotOptionsNotifier(const []);
 
 // ─── Per-screen option sets ───────────────────────────────────────────────────
 
 const homeOptions = [
   MascotOption(
-    icon: '🏠',
-    label: '防空洞在哪裡？',
-    response:
-        '點選下方的「防空洞地圖」功能卡 🗺️\n系統會根據你的位置，顯示附近的避難場所！\n\n也可以撥打\n📞 1991 災害應變中心\n直接向專人詢問。',
-  ),
-  MascotOption(
-    icon: '🆘',
-    label: '怎麼求救？',
-    response:
-        '緊急狀況請立刻撥打：\n\n🚒 消防／救護 → 119\n👮 警察報案 → 110\n📞 災害應變中心 → 1991\n\n也可以點選「SOS 緊急求救」功能卡，一鍵傳送位置！',
-  ),
-  MascotOption(
     icon: '📋',
     label: '這個 APP 怎麼用？',
     response:
-        '主畫面有 6 大功能 👇\n\n🆘 SOS 緊急求救\n📖 防災知識\n🗺️ 防空洞地圖\n❤️ 健康回報\n💬 聊天室\n📦 物資捐贈\n\n點擊任一功能卡即可進入！',
+        '主畫面有 6 大功能 👇\n\n🆘 SOS 緊急求救\n📖 防災知識\n🗺️ 防災避難所\n❤️ 健康回報\n💬 互助通訊\n📦 物資捐贈\n\n點擊任一功能卡即可進入！',
+  ),
+  MascotOption(
+    icon: '📦',
+    label: '物資捐贈怎麼用？',
+    response:
+        '這裡顯示目前需要募集的物資清單 📋\n\n上方可依分類篩選物資：\n🥤 食品飲水　🏠 生活用品\n💊 醫療衛生　👔 衣物\n\n點擊任一物資卡片\n→ 輸入想捐贈的數量\n→ 點「確認認領」即完成登記 ✅\n\n感謝你的善心支持！',
+  ),
+  MascotOption(
+    icon: '📧',
+    label: '聯絡客服',
+    response:
+        '有任何問題或建議，歡迎聯絡我們 💙\n\n📧 客服信箱：\nhu_cares@gmail.com\n\n來信請附上：\n· 問題描述\n· 使用裝置型號\n· 發生時間\n\n我們會盡快回覆你！',
   ),
 ];
 
@@ -81,9 +81,9 @@ const knowledgeOptions = [
 const shelterOptions = [
   MascotOption(
     icon: '📍',
-    label: '如何找最近的防空洞？',
+    label: '如何找最近的避難所？',
     response:
-        '請先允許 APP 存取你的位置 📡\n地圖會自動將你的位置置中，\n並顯示附近所有的避難場所！\n\n藍色圖釘 = 防空洞\n點擊圖釘可看詳細資訊 ℹ️',
+        '請先允許 APP 存取你的位置 📡\n地圖會自動將你的位置置中，\n並顯示附近所有的避難場所！\n\n藍色圖釘 = 避難所\n點擊圖釘可看詳細資訊 ℹ️',
   ),
   MascotOption(
     icon: '🗺️',
@@ -144,7 +144,7 @@ const healthOptions = [
 const chatOptions = [
   MascotOption(
     icon: '💬',
-    label: '聊天室怎麼使用？',
+    label: '互助通訊怎麼使用？',
     response:
         '這裡是災民互助聯絡頻道 💙\n\n你可以：\n📢 發布求助或資訊\n👥 與附近的人互動\n📍 分享你的位置與狀況\n\n請保持禮貌，優先傳遞重要資訊！',
   ),
@@ -152,13 +152,13 @@ const chatOptions = [
     icon: '🔒',
     label: '訊息安全嗎？',
     response:
-        '聊天室使用 Mesh 網路傳輸 📡\n即使網路中斷也能透過藍牙\n與附近裝置進行通訊！\n\n請勿在聊天室分享個人隱私資訊\n（如身份證號、銀行帳號等）🔐',
+        '互助通訊使用 Mesh 網路傳輸 📡\n即使網路中斷也能透過藍牙\n與附近裝置進行通訊！\n\n請勿在互助通訊分享個人隱私資訊\n（如身份證號、銀行帳號等）🔐',
   ),
   MascotOption(
     icon: '📡',
     label: '沒有網路也能用嗎？',
     response:
-        '可以！這個聊天室支援\n藍牙 Mesh 網路 📶\n\n只要開啟手機藍牙，\n就能與附近 100 公尺內的裝置\n互相傳遞訊息，完全不需要 WiFi！',
+        '可以！這個互助通訊支援\n藍牙 Mesh 網路 📶\n\n只要開啟手機藍牙，\n就能與附近 100 公尺內的裝置\n互相傳遞訊息，完全不需要 WiFi！',
   ),
 ];
 
@@ -179,6 +179,6 @@ const supplyOptions = [
     icon: '🔍',
     label: '找不到需要的物資？',
     response:
-        '可以在搜尋欄輸入物資名稱 🔎\n\n或是在聊天室發布求助訊息，\n讓附近的人知道你的需求！\n\n也可以撥打\n📞 1991 災害應變中心 詢問物資調配。',
+        '可以在搜尋欄輸入物資名稱 🔎\n\n或是在互助通訊發布求助訊息，\n讓附近的人知道你的需求！\n\n也可以撥打\n📞 1991 災害應變中心 詢問物資調配。',
   ),
 ];
