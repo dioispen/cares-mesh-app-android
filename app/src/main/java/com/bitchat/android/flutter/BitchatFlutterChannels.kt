@@ -227,8 +227,7 @@ class BitchatFlutterChannels(
     private fun sendHealthReportPacket(payload: ByteArray): Boolean {
         val service = MeshServiceHolder.meshService
         return if (service != null) {
-            val publicKey = identityManager.loadStaticKey()?.second
-            val senderIdHex = publicKey?.toHexString() ?: "0000000000000000"
+            val senderIdHex = service.myPeerID
             
             val taggedPayload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload
             val packet = BitchatPacket(
