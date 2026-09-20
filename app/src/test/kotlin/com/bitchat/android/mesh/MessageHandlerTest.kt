@@ -12,6 +12,9 @@ import com.bitchat.android.noise.NoisePeerIdentity
 import com.bitchat.android.noise.AuthenticatedNoiseSession
 import com.bitchat.android.noise.NoiseDecryptionResult
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.BroadcastContentTag
+import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.services.meshgraph.MeshGraphService
@@ -212,6 +215,26 @@ class MessageHandlerTest {
             verify(delegate).verifySignature(packet, peerID)
             verify(delegate).onMessageReceived(any())
         }
+    }
+
+    @Test
+    fun `health report from unverified peer is not delivered`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey).copy(isVerifiedNickname = false))
+        val packet = healthReportPacket()
+
+        handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+        verify(delegate, never()).onMessageReceived(any())
+    }
+
+    @Test
+    fun `health report from verified peer is delivered`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val packet = healthReportPacket()
+
+        handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+        verify(delegate).onMessageReceived(any())
     }
 
     @Test
@@ -483,4 +506,22 @@ class MessageHandlerTest {
         isVerifiedNickname = true,
         lastSeen = System.currentTimeMillis()
     )
+
+    private fun healthReportPacket(): BitchatPacket {
+        val payload = HealthReportPayload.fromLocation(
+            reporterHandle = "abcdef012345",
+            status = HealthStatus.SAFE,
+            lat = null,
+            lng = null,
+            reportTimeMillis = 1_700_000_000_000L
+        ).encode()
+        return BitchatPacket(
+            version = 1u,
+            type = MessageType.HEALTH_REPORT.value,
+            senderID = peerID.hexToBytes(),
+            payload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload,
+            signature = signature,
+            ttl = 7u
+        )
+    }
 }
