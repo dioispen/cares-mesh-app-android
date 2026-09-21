@@ -91,6 +91,12 @@ Two drivers use it:
   build state; run `flutter pub get` in `flutter_ui/` again to restore the IDE
   setup on the host.
 
+Both drivers source `container-common.sh`, the one place that defines the image
+name, how the image is built, and the container settings they share (platform,
+user IDs, `HOME`, the Gradle user home mount). Change those there, never in one
+driver alone: a difference between the two would mean CI tests on a different
+toolchain from the one that builds releases.
+
 `.github/workflows/android-build.yml` runs the unit tests, `flutter test`, lint,
 and the debug APK through `run-in-container.sh`, so CI, a developer machine, and
 the release build share one toolchain. There is no `actions/setup-java` step:

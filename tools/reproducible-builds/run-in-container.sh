@@ -14,44 +14,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CONTAINER_LOCAL_PROPERTIES="$SCRIPT_DIR/container-local.properties"
-GRADLE_HOME_NAME="${BITCHAT_CONTAINER_GRADLE_HOME_NAME:-gradle-home-ci}"
-
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/TOOLCHAIN.env"
-
-IMAGE_NAME="bitchat-android-reproducible-builder:${JAVA_VERSION%%+*}-flutter${FLUTTER_VERSION}"
-
-# See build-in-container.sh: Git Bash rewrites the container side of --volume
-# into a Windows path, leaving /workspace empty. No-op on Linux.
-if command -v cygpath >/dev/null 2>&1; then
-  MSYS_DOCKER_ENV=(env "MSYS2_ARG_CONV_EXCL=*")
-  docker_host_path() { cygpath -w "$1"; }
-else
-  MSYS_DOCKER_ENV=()
-  docker_host_path() { printf '%s' "$1"; }
-fi
+# shellcheck source=container-common.sh
+source "$SCRIPT_DIR/container-common.sh"
 
 if [ "$#" -eq 0 ]; then
   echo "usage: run-in-container.sh COMMAND [ARG...]" >&2
   exit 1
 fi
-if ! command -v docker >/dev/null 2>&1; then
-  echo "error: Docker is required for the canonical toolchain" >&2
-  exit 1
-fi
-if ! [[ "$GRADLE_HOME_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "error: BITCHAT_CONTAINER_GRADLE_HOME_NAME must be a simple directory name" >&2
-  exit 1
-fi
+require_docker
+resolve_gradle_home gradle-home-ci
 
 if [ "${BITCHAT_SKIP_IMAGE_BUILD:-0}" != "1" ]; then
-  docker build \
-    --platform linux/amd64 \
-    --file "$SCRIPT_DIR/Dockerfile" \
-    --tag "$IMAGE_NAME" \
-    "$PROJECT_ROOT"
+  build_toolchain_image
 fi
 
 # Gradle reads the repository-root local.properties, which is gitignored and on
@@ -91,29 +65,23 @@ fi
 installed_container_properties=1
 cp "$CONTAINER_LOCAL_PROPERTIES" "$host_local_properties"
 
-gradle_home="$PROJECT_ROOT/.reproducible-build/$GRADLE_HOME_NAME"
-mkdir -p "$gradle_home"
-
 # HOME is a scratch path that does not exist in the image, and flutter_ui/
 # .android is `flutter pub get` output that settings.gradle.kts needs during
 # settings evaluation. Both are prepared before the requested command runs;
 # BITCHAT_SKIP_FLUTTER_PREPARE=1 skips the second for non-Gradle commands.
+# shellcheck disable=SC2016 # $HOME is meant to expand inside the container
 container_script='mkdir -p "$HOME"; '
 if [ "${BITCHAT_SKIP_FLUTTER_PREPARE:-0}" != "1" ]; then
   container_script+='tools/reproducible-builds/prepare-flutter-module.sh; '
 fi
 container_script+="$(printf '%q ' "$@")"
 
-"${MSYS_DOCKER_ENV[@]}" docker run \
-  --rm \
-  --platform linux/amd64 \
-  --user "$(id -u):$(id -g)" \
+# Unlike the release path, the command here calls Gradle directly rather than
+# through build-release.sh, so GRADLE_USER_HOME itself has to point at the mount.
+run_toolchain_container \
   --env BITCHAT_ALLOW_DIRTY=1 \
-  --env BITCHAT_GRADLE_USER_HOME=/gradle-home \
   --env GRADLE_USER_HOME=/gradle-home \
-  --env HOME=/tmp/build-home \
   --volume "$(docker_host_path "$PROJECT_ROOT"):/workspace" \
-  --volume "$(docker_host_path "$gradle_home"):/gradle-home" \
   --entrypoint /bin/bash \
   "$IMAGE_NAME" \
   -euo pipefail -c "$container_script"
