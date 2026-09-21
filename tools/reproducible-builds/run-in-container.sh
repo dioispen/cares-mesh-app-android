@@ -60,19 +60,35 @@ fi
 mkdir -p "$PROJECT_ROOT/.reproducible-build"
 
 host_local_properties="$PROJECT_ROOT/local.properties"
-backup_local_properties=""
+backup_local_properties="$PROJECT_ROOT/.reproducible-build/local.properties.host-backup"
+
+# A leftover backup means an earlier run was killed before its trap could put
+# the host file back, so the backup may be the only copy of it. Moving the
+# current file over it would destroy it, and so would a concurrent run.
+if [ -e "$backup_local_properties" ]; then
+  echo "error: $backup_local_properties already exists" >&2
+  echo "  An earlier run did not restore it. Move it back to local.properties" >&2
+  echo "  (or delete it if it is stale) and try again." >&2
+  exit 1
+fi
+
+# The trap is armed before anything is touched, so it must decide from what has
+# actually happened rather than from which branch ran: an interrupt before the
+# swap has to leave the host file exactly as it was.
+installed_container_properties=0
 restore_local_properties() {
-  if [ -n "$backup_local_properties" ]; then
+  if [ -f "$backup_local_properties" ]; then
     mv -f "$backup_local_properties" "$host_local_properties"
-  else
+  elif [ "$installed_container_properties" = 1 ]; then
     rm -f "$host_local_properties"
   fi
 }
+trap restore_local_properties EXIT
+
 if [ -f "$host_local_properties" ]; then
-  backup_local_properties="$PROJECT_ROOT/.reproducible-build/local.properties.host-backup"
   mv -f "$host_local_properties" "$backup_local_properties"
 fi
-trap restore_local_properties EXIT
+installed_container_properties=1
 cp "$CONTAINER_LOCAL_PROPERTIES" "$host_local_properties"
 
 gradle_home="$PROJECT_ROOT/.reproducible-build/$GRADLE_HOME_NAME"
