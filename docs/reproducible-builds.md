@@ -258,7 +258,8 @@ content, so substitution is detected during the build:
 | --- | --- |
 | Builder base image | image digest in `Dockerfile` |
 | Gradle distribution | SHA-256 in `gradle-wrapper.properties` |
-| Android platform, Platform Tools, Build Tools, NDK | SHA-256 in `TOOLCHAIN.env` |
+| Android platform, Platform Tools, Build Tools, NDK, CMake | SHA-256 in `TOOLCHAIN.env` |
+| Ubuntu packages added to the image (`git`, `unzip`, `xz-utils`) | `UBUNTU_SNAPSHOT` in `TOOLCHAIN.env`; apt verifies each package against that snapshot's index, signed by the Ubuntu archive key |
 | Flutter SDK (and the Dart SDK inside it) | SHA-256 in `TOOLCHAIN.env` |
 | Dart packages | `sha256:` per package in `flutter_ui/pubspec.lock`, enforced with `--enforce-lockfile` |
 | Most Maven artifacts | `gradle/verification-metadata.xml` |
@@ -283,9 +284,6 @@ from the server that serves them:
   tool fetches these by engine revision without a checksum this repository
   controls. They are downloaded once while the image is built, so any given
   image is fixed, but rebuilding the image refetches them.
-- **Ubuntu packages added to the image** (`git`, `unzip`, `xz-utils`). The base
-  image digest is pinned; the apt archive state at image-build time is not.
-  None of these programs contributes bytes to the release artifacts.
 
 The build container itself is therefore not byte-reproducible — the release
 artifacts it produces are. The canonical build stage performs no pub.dev access

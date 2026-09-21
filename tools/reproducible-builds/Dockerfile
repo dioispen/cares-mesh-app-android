@@ -61,7 +61,22 @@ ENV PATH=/opt/android-sdk/build-tools/37.0.0:${PATH}
 # xz-utils  the official Flutter archive is .tar.xz
 # unzip     verify-no-host-paths.sh prefers it over `jar` when inspecting
 #           release APK and AAB payloads
-RUN apt-get update \
+#
+# The base image's ubuntu.sources is replaced, not supplemented: with the live
+# archive still listed, apt would pick whatever is newest there and the
+# snapshot would pin nothing. Snapshot Release files carry an expired
+# Valid-Until by design, hence Check-Valid-Until: no; every package is still
+# verified against the snapshot's index signed by the Ubuntu archive key.
+RUN source /tmp/TOOLCHAIN.env \
+    && printf '%s\n' \
+        'Types: deb' \
+        "URIs: https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}" \
+        'Suites: noble noble-updates noble-security' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        > /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         git \
         unzip \
