@@ -290,6 +290,20 @@ artifacts it produces are. The canonical build stage performs no pub.dev access
 at all: `PUB_CACHE` and the Flutter engine artifacts are baked into the image,
 and `docker run --rm` would otherwise re-download roughly 900 MB on every build.
 
+The build stage is **not offline**, though. Gradle still resolves the Gradle
+distribution and every Maven dependency — the `io.flutter` engine AARs included
+— into the Gradle user home at build time, and the container runs with normal
+network access (there is no `--network none`). A first release build fills an
+empty Gradle user home to about 4 GB. Almost everything it downloads is
+checksum-verified,
+so a flaky connection shows up as a hard failure rather than as different
+bytes: a truncated Gradle distribution is rejected with
+`Verification of Gradle distribution failed!`, and a truncated Maven artifact
+fails dependency verification. The `io.flutter` AARs are the exception listed
+above. Reusing a warm Gradle user home (`BITCHAT_CONTAINER_GRADLE_HOME_NAME`)
+removes most of the network exposure without affecting the output, because the
+build runs with `--no-build-cache` and `--rerun-tasks`.
+
 ## Reproduce a release locally
 
 Requirements are Git and Docker with Linux/amd64 support. The figures below were
@@ -353,6 +367,17 @@ The output contains:
 
 The output directory must not already contain files. The script rejects a dirty
 checkout so the commit in `BUILDINFO.json` identifies all source inputs.
+
+`BUILDINFO.json` records the toolchain as well as the commit, so its layout
+follows the build scripts of the commit being built. Adding Flutter to the image
+added `flutterVersion` and `flutterEngineRevision`; `schemaVersion` stayed at 1
+because the change only adds fields. A commit from before that change therefore
+produces a `BUILDINFO.json` without them. This does not break verification of
+older releases, as long as each release is rebuilt from a checkout of its own
+tag: `verify-github-release.sh` refuses to run unless `HEAD` is the release
+commit, and then uses that checkout's own `build-in-container.sh`. Rebuilding
+an old commit with newer build scripts is not a supported comparison and will
+not match.
 
 To test reproducibility yourself, build into two empty directories and compare:
 
