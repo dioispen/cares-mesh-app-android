@@ -295,8 +295,7 @@ and `docker run --rm` would otherwise re-download roughly 900 MB on every build.
 ## Reproduce a release locally
 
 Requirements are Git and Docker with Linux/amd64 support. The figures below were
-measured on Windows 11 with Docker Desktop's WSL2 backend, Docker server 29.1.3,
-on the commit that added Flutter to the image.
+measured on Windows 11 with Docker Desktop's WSL2 backend, Docker server 29.1.3.
 
 | Resource | Measured |
 | --- | --- |
@@ -305,21 +304,37 @@ on the commit that added Flutter to the image.
 | — of which Flutter SDK, engine artifacts included | 2.4 GB |
 | — of which prewarmed `PUB_CACHE` | 288 MB |
 | Docker build cache for the image | several GB; `docker builder prune` reclaims it |
-| `.reproducible-build/` Gradle user home, after test + lint | 4.6 GB |
-| Peak Docker VM memory, `:app:testDebugUnitTest` | 8.7 GiB |
-| Peak Docker VM memory, `lintDebug` | 9.6 GiB |
+| Gradle user home after one release build, starting empty | 4.0 GB |
+| Gradle user home after test, lint, and a release build | 5.4 GB |
+| Release output directory | 906 MB |
+| Release build, warm Gradle user home | 55 min |
+| Release build, empty Gradle user home | 124 min |
+| Peak container memory, full release build | 7.90 GiB (cgroup `memory.peak`) |
+| Peak Docker VM memory, `:app:testDebugUnitTest` | 8.7 GiB (`vmmemWSL`, sampled) |
+| Peak Docker VM memory, `lintDebug` | 9.6 GiB (`vmmemWSL`, sampled) |
 
-Peak memory was sampled from the host as the `vmmemWSL` working set at five-
-second intervals, so the true peak may be slightly higher. Allow **16 GiB** of
-memory to the Docker VM. 8 GiB is no longer enough: R8's single-threaded
-deterministic mode could already exceed it while optimizing the phone app, and
-the Flutter module adds a second Kotlin compiler and ten more Gradle projects on
-top.
+The two memory metrics are not comparable. The release figure is the kernel's
+own high-water mark for the build container, read from its cgroup at the end
+of the run, so no spike can be missed. The test and lint figures were sampled
+from the host every five seconds as the working set of the whole WSL2 VM, which
+also counts other containers and the VM's own caches. Both include reclaimable
+page cache, so the memory a build strictly needs is lower than either.
+
+Allow **16 GiB** to the Docker VM. The release build's peak, R8's single-threaded
+deterministic mode included, sits just under 8 GiB, which leaves no headroom at
+an 8 GiB limit; whether it still completes there, with the kernel reclaiming
+page cache under pressure, has not been tested.
 
 For disk, budget the 9 GB image plus roughly 5 GB per Gradle user home plus
 Docker's build cache for the image layers. Each replica needs its own Gradle
 user home (`BITCHAT_CONTAINER_GRADLE_HOME_NAME`), so disk grows per replica
 while memory does not — the replicas are built one after another.
+
+Never point two runs that use different user IDs at the same Gradle user home.
+A run as root leaves root-owned lock files and caches behind, and the next run
+as the regular user then fails with `Permission denied` or
+`Could not write cache value`. On Docker Desktop's Windows bind mounts,
+`chmod -R a+rwX` does not reliably repair this; start from a fresh directory.
 
 ```bash
 git clone https://github.com/permissionlesstech/bitchat-android.git
