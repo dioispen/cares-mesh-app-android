@@ -2,15 +2,43 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // health_reports: 登入用戶可讀所有；只能建立/修改/刪除自己的回報
-    // NOTE: 「任何註冊帳號皆可讀取他人健康資料」的 PII 問題另見 issue #33，
-    //       牽涉角色機制設計，本 issue 刻意不在此處理。
+    // 救援者身分的唯一依據：rescuers/{uid} 文件存在與否。
+    //
+    // 刻意不放在 users/{uid} 的 role 欄位——使用者本來就能寫自己的 users 文件，
+    // 把角色放在那裡等於讓人自我提權。rescuers 對客戶端一律唯讀，只能由後台
+    // （Firebase console 或 Admin SDK）授予與撤銷。
+    function isRescuer() {
+      return request.auth != null
+          && exists(/databases/$(database)/documents/rescuers/$(request.auth.uid));
+    }
+
+    match /rescuers/{uid} {
+      // 只能查自己是不是救援者；名單本身不外流。
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // health_reports: 文件是 Reporter 對後端自願揭露的完整 Health Report，內容涵蓋
+    // Detail Tier 的全部欄位（姓名、電話、血型、精確座標、自由文字），見 CONTEXT.md。
+    //
+    // 只有 Reporter 本人與救援者可讀（issue #33）。「有登入」不是授權依據——註冊是
+    // 開放的自助流程，任何人都能取得帳號。一般使用者要看附近的求救，走的是 BLE 的
+    // Broadcast Tier，不是這裡。
+    // NOTE: 這條路徑是對「全體救援者」整批開放，比 CONTEXT.md 對 Detail Tier 的
+    //       「逐一請求、經 secure session 釋出」寬鬆；兩條揭露路徑並存是既有設計。
     match /health_reports/{docId} {
-      allow read: if request.auth != null;
+      allow read: if isRescuer()
+                  || (request.auth != null
+                      && resource.data.reporterId == request.auth.uid);
       allow create: if request.auth != null
                     && request.resource.data.reporterId == request.auth.uid;
-      allow update, delete: if request.auth != null
-                             && resource.data.reporterId == request.auth.uid;
+      // 救援者身分只放寬讀取，不能竄改或刪除他人的回報。
+      // update 不得改動 reporterId：轉手給他人等於把讀取權交給對方。
+      allow update: if request.auth != null
+                    && resource.data.reporterId == request.auth.uid
+                    && request.resource.data.reporterId == resource.data.reporterId;
+      allow delete: if request.auth != null
+                    && resource.data.reporterId == request.auth.uid;
     }
 
     // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS
@@ -22,10 +50,11 @@ service cloud.firestore {
                              && resource.data.userId == request.auth.uid;
     }
 
-    // users: 登入用戶可讀所有人資料；只能寫入自己的文件
+    // users: 個人檔案含電話、緊急聯絡人、血型、病史等 PII（models/user.dart），
+    // 只能讀寫自己的文件。客戶端也只讀自己的（login / setup 流程）。
+    // NOTE: 這裡的任何欄位（例如 role）都不構成授權依據，救援者身分見 rescuers。
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
     // supply_items: 共用的物資型錄，「沒有擁有者」。
