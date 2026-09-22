@@ -4,11 +4,17 @@
 //   npm install
 //   npm test
 //
-// 測試重點是 issue #34 的兩個 collection：
+// 測試重點：
+//   issue #34
 //   - supply_items：共用型錄，沒有擁有者，只能改 pledgedQty
 //   - pledges：有 userId，只有擁有者能改／刪
+//   最關鍵的一條是「使用者能認領別人建立的物資」——那是加擁有者檢查最容易弄壞的地方。
 //
-// 最關鍵的一條是「使用者能認領別人建立的物資」——那是加擁有者檢查最容易弄壞的地方。
+//   issue #33
+//   - health_reports：含 Detail Tier 全部欄位，只有 Reporter 本人與救援者可讀
+//   - rescuers：救援者身分的唯一依據，客戶端一律不可寫（不可自我提權）
+//   - users：含電話、緊急聯絡人、病史，只能讀自己的
+//   最關鍵的一條是「在 users 自填 role 不會變成救援者」——角色機制最容易寫錯的地方。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -18,17 +24,22 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   increment,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 
 const ALICE = 'uid-alice';
 const BOB = 'uid-bob';
+const RESCUER = 'uid-rescuer';
 
 let testEnv;
 
@@ -68,6 +79,27 @@ beforeEach(async () => {
       quantity: 10,
       status: 'pledged',
       pledgedAt: new Date(),
+    });
+    // 救援者身分只能由後台（Firebase console / Admin SDK）寫入
+    await setDoc(doc(db, `rescuers/${RESCUER}`), { grantedAt: new Date() });
+    await setDoc(doc(db, 'health_reports/report-alice'), {
+      id: 'report-alice',
+      reporterId: ALICE,
+      name: 'Alice',
+      phone: '0912345678',
+      bloodType: 'O',
+      status: '重傷',
+      description: '左腿骨折，無法行走',
+      lat: 25.0339,
+      lng: 121.5645,
+      reportTime: new Date().toISOString(),
+    });
+    await setDoc(doc(db, `users/${ALICE}`), {
+      id: ALICE,
+      name: 'Alice',
+      phone: '0912345678',
+      emergencyContactPhone: '0987654321',
+      medicalInfo: '盤尼西林過敏',
     });
   });
 });
@@ -276,5 +308,138 @@ describe('完整認領流程（supply_screen.dart 的實際呼叫）', () => {
     await assertSucceeds(
       updateDoc(doc(db, 'supply_items/water'), { pledgedQty: increment(-6) }),
     );
+  });
+});
+
+describe('health_reports（issue #33：Detail Tier 只給 Reporter 本人與救援者）', () => {
+  const newReport = (uid) => ({
+    id: `report-${uid}`,
+    reporterId: uid,
+    name: 'Someone',
+    phone: '0900000000',
+    bloodType: null,
+    status: '輕傷',
+    description: null,
+    lat: 25.0,
+    lng: 121.5,
+    reportTime: new Date().toISOString(),
+  });
+
+  it('★ 一般註冊帳號不可讀取他人的回報', async () => {
+    await assertFails(getDoc(doc(dbFor(BOB), 'health_reports/report-alice')));
+  });
+
+  it('★ 一般註冊帳號不可列出全部回報（health_screen 的互助任務查詢）', async () => {
+    await assertFails(getDocs(query(
+      collection(dbFor(BOB), 'health_reports'),
+      where('status', 'in', ['輕傷', '重傷']),
+    )));
+  });
+
+  it('未登入不可讀', async () => {
+    await assertFails(getDoc(doc(anonDb(), 'health_reports/report-alice')));
+  });
+
+  it('Reporter 可讀自己的回報', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), 'health_reports/report-alice')));
+  });
+
+  it('Reporter 可用 reporterId 條件查詢自己的回報', async () => {
+    await assertSucceeds(getDocs(query(
+      collection(dbFor(ALICE), 'health_reports'),
+      where('reporterId', '==', ALICE),
+    )));
+  });
+
+  it('★ 救援者可讀取他人的回報', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(RESCUER), 'health_reports/report-alice')));
+  });
+
+  it('★ 救援者可列出全部待救援回報（health_screen 的互助任務查詢）', async () => {
+    await assertSucceeds(getDocs(query(
+      collection(dbFor(RESCUER), 'health_reports'),
+      where('status', 'in', ['輕傷', '重傷']),
+    )));
+  });
+
+  it('可以建立自己的回報', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(BOB), 'health_reports/report-bob'), newReport(BOB)));
+  });
+
+  it('不可冒用他人 reporterId 建立回報', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), 'health_reports/report-fake'), newReport(ALICE)));
+  });
+
+  it('Reporter 不可把自己的回報轉手給他人（會連帶交出讀取權）', async () => {
+    await assertFails(
+      updateDoc(doc(dbFor(ALICE), 'health_reports/report-alice'), { reporterId: BOB }),
+    );
+  });
+
+  it('Reporter 可更新自己回報的狀態', async () => {
+    await assertSucceeds(
+      updateDoc(doc(dbFor(ALICE), 'health_reports/report-alice'), { status: '輕傷' }),
+    );
+  });
+
+  it('救援者不因身分而能竄改他人的回報', async () => {
+    await assertFails(
+      updateDoc(doc(dbFor(RESCUER), 'health_reports/report-alice'), { status: '安全' }),
+    );
+    await assertFails(deleteDoc(doc(dbFor(RESCUER), 'health_reports/report-alice')));
+  });
+});
+
+describe('rescuers（issue #33：救援者身分不可自我提權）', () => {
+  it('★ 使用者不可把自己登記為救援者', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `rescuers/${BOB}`), { grantedAt: new Date() }));
+  });
+
+  it('★ 救援者也不可替他人授權', async () => {
+    await assertFails(
+      setDoc(doc(dbFor(RESCUER), `rescuers/${BOB}`), { grantedAt: new Date() }),
+    );
+  });
+
+  it('救援者不可改動或撤銷自己的身分文件', async () => {
+    await assertFails(updateDoc(doc(dbFor(RESCUER), `rescuers/${RESCUER}`), { extra: 1 }));
+    await assertFails(deleteDoc(doc(dbFor(RESCUER), `rescuers/${RESCUER}`)));
+  });
+
+  it('★ 在 users 文件自填 role 不會取得救援者讀取權', async () => {
+    const db = dbFor(BOB);
+    await assertSucceeds(setDoc(doc(db, `users/${BOB}`), { id: BOB, role: 'rescuer' }));
+    await assertFails(getDoc(doc(db, 'health_reports/report-alice')));
+  });
+
+  it('使用者可讀自己的救援者身分文件（供 App 判斷顯示）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(RESCUER), `rescuers/${RESCUER}`)));
+    await assertSucceeds(getDoc(doc(dbFor(BOB), `rescuers/${BOB}`)));
+  });
+
+  it('不可讀取他人的救援者身分文件', async () => {
+    await assertFails(getDoc(doc(dbFor(BOB), `rescuers/${RESCUER}`)));
+  });
+});
+
+describe('users（issue #33：個人檔案含 PII，只能讀自己的）', () => {
+  it('★ 不可讀取他人的個人檔案', async () => {
+    await assertFails(getDoc(doc(dbFor(BOB), `users/${ALICE}`)));
+  });
+
+  it('可讀自己的個人檔案（login / setup 流程）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), `users/${ALICE}`)));
+  });
+
+  it('可寫入自己的個人檔案（verify_email 流程）', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(BOB), `users/${BOB}`), { id: BOB, name: 'Bob' }));
+  });
+
+  it('不可寫入他人的個人檔案', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `users/${ALICE}`), { id: ALICE, name: '竄改' }));
+  });
+
+  it('未登入不可讀', async () => {
+    await assertFails(getDoc(doc(anonDb(), `users/${ALICE}`)));
   });
 });
