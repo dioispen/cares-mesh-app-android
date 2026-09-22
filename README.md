@@ -39,22 +39,34 @@
 
 ## 建置
 
-### 前置需求
+有兩種建置方式，產出相同：
+
+- **主機建置**：日常開發與 Android Studio 用。需要自己裝齊工具鏈，版本必須與下方一致。
+- **容器建置**：只需要 Docker，工具鏈與 CI、正式 release 完全相同。在 Windows 上跑單元測試時建議用這個（見下方）。
+
+### 主機建置
+
+#### 前置需求
 
 - Android Studio（含 Android SDK，compileSdk 36、minSdk 26）
-- JDK 17 以上
-- Flutter SDK（Dart SDK `^3.11.1`）— `flutter_ui/` 以 Gradle 子專案形式嵌入，建置 Android 前必須先取得 Flutter 相依套件
+- JDK 21 — `app/build.gradle.kts` 以 `jvmToolchain(21)` 指定，且沒有設定自動下載；近期 Android Studio 內建的 JBR 即為 21
+- **Flutter 3.41.4**（stable，Dart 3.11.1）— 必須是這個版本，不是「以上」。`app/gradle.lockfile` 以 STRICT 模式鎖住帶 engine revision 的 `io.flutter:*` 套件，其他 Flutter 版本會在建置時出現 lock 錯誤。釘版的權威來源是 [`tools/reproducible-builds/TOOLCHAIN.env`](tools/reproducible-builds/TOOLCHAIN.env)
+- Git Bash（Windows）或任一 bash — 執行下方的修補腳本用
 
-### 步驟
+#### 步驟
 
 ```bash
 git clone https://github.com/dioispen/cares-mesh-app-android.git
 cd cares-mesh-app-android
 
 # 1. 取得 Flutter 相依套件（缺這一步 Gradle 會失敗）
-cd flutter_ui && flutter pub get && cd ..
+cd flutter_ui && flutter pub get --enforce-lockfile && cd ..
 
-# 2. 建置
+# 2. 修補 PUB_CACHE 中的第三方套件（每台機器做一次；清除 pub cache 後要重做）
+tools/reproducible-builds/apply-pub-cache-patches.sh                                 # macOS / Linux
+PUB_CACHE="$LOCALAPPDATA/Pub/Cache" tools/reproducible-builds/apply-pub-cache-patches.sh   # Windows（Git Bash）
+
+# 3. 建置
 ./gradlew assembleDebug        # per-ABI + universal APK
 ./gradlew installDebug         # 安裝到已連接的裝置
 
@@ -63,11 +75,34 @@ cd flutter_ui && flutter pub get && cd ..
 cd flutter_ui && flutter test  # Dart 測試
 ```
 
+**為什麼要做第 2 步**：`flutter_inappwebview_android` 1.1.3 呼叫了 AGP 9 已移除的 `getDefaultProguardFile('proguard-android.txt')`。沒修補的話，連 debug 建置都會在 Gradle 設定階段失敗：
+
+```
+A problem occurred evaluating project ':flutter_inappwebview_android'.
+> `getDefaultProguardFile('proguard-android.txt')` is no longer supported ...
+```
+
+pub 沒有 patch 機制，只能改 PUB_CACHE 裡的副本。腳本會比對修補前後的 SHA-256，重複執行不會重複修補，套件改版時也會直接報錯，不會默默套錯。容器建置會自動執行這一步。細節見 [docs/reproducible-builds.md](docs/reproducible-builds.md#patching-third-party-dart-packages)。
+
 `assembleDebug` / `assembleRelease` 會產生分 ABI 的 APK（arm64、x86_64、armeabi-v7a、x86）加上一個 universal APK；`bundleRelease` 會關閉 split（由 Play Store 處理 ABI 分發）。
+
+### 容器建置
+
+只需要 Docker（Windows 用 Docker Desktop + WSL2）。第一次執行會建置約 9 GB 的映像檔，之後會沿用。
+
+```bash
+tools/reproducible-builds/run-in-container.sh ./gradlew testDebugUnitTest
+tools/reproducible-builds/run-in-container.sh ./gradlew lint
+tools/reproducible-builds/run-in-container.sh bash -c 'cd flutter_ui && flutter --no-version-check test'
+```
+
+- **Windows 上的單元測試請用容器跑。** Windows 主機上的單元測試會因為檔案鎖定出現 22–23 個與程式邏輯無關的失敗（#29），同一套 623 個測試在容器裡是 0 失敗。
+- 容器會把 `flutter_ui/.android` 與 `flutter_ui/.dart_tool` 改寫成容器內的路徑。跑完後回到主機開發前，在 `flutter_ui/` 再執行一次 `flutter pub get`，Android Studio 才會恢復正常。
+- 正式 release 固定走容器，流程與硬體需求見 [docs/reproducible-builds.md](docs/reproducible-builds.md)。
 
 ### Firebase
 
-需要 `app/google-services.json`。本 repo 未納入該檔，向組內索取。
+`app/google-services.json` **已納入版本控制**，clone 下來即可建置。它會被編進 APK 的字串資源，影響 release 的位元組，所以必須進版控才能重現 release；裡面的值本來就包含在每個公開的 APK 中，提交它不會多洩漏任何東西。詳見 [docs/reproducible-builds.md](docs/reproducible-builds.md#firebase-configuration)。
 
 #### Firestore 安全規則
 

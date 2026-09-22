@@ -120,6 +120,15 @@ cd flutter_ui && flutter test  # Dart 測試
 ./gradlew lint                 # Lint
 ```
 
+CI 在可重現建置容器裡跑同樣的檢查。要在本機得到與 CI 一致的結果，或在 Windows 上避開 #29 的檔案鎖定假失敗，改用容器：
+
+```bash
+tools/reproducible-builds/run-in-container.sh ./gradlew testDebugUnitTest lint
+tools/reproducible-builds/run-in-container.sh bash -c 'cd flutter_ui && flutter --no-version-check test'
+```
+
+主機建置的前置需求（Flutter 版本、PUB_CACHE 修補）見 [README 的建置章節](README.md#建置)。
+
 改到協定或封包格式時，`app/src/test/kotlin/com/bitchat/android/protocol/` 下的測試必須通過。這些測試是三端封包格式的權威（見 PLAN.md 的 R6）。
 
 ---
