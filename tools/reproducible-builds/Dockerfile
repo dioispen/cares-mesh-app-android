@@ -67,6 +67,14 @@ ENV PATH=/opt/android-sdk/build-tools/37.0.0:${PATH}
 # snapshot would pin nothing. Snapshot Release files carry an expired
 # Valid-Until by design, hence Check-Valid-Until: no; every package is still
 # verified against the snapshot's index signed by the Ubuntu archive key.
+#
+# snapshot.ubuntu.com has answered 502/500 for minutes at a time, and CI builds
+# this image once per job with no shared cache, so one outage failed three jobs
+# at once. The whole update-and-install is retried, backing off for up to five
+# minutes. Acquire::Retries does not help here: apt 2.8 does not retry an HTTP
+# 5xx response. Error-Mode=any makes a failed index a hard failure, so that the
+# loop retries it instead of installing from a partial index. Retrying only
+# changes how often apt asks; the snapshot pins what it gets.
 RUN source /tmp/TOOLCHAIN.env \
     && printf '%s\n' \
         'Types: deb' \
@@ -76,11 +84,17 @@ RUN source /tmp/TOOLCHAIN.env \
         'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
         'Check-Valid-Until: no' \
         > /etc/apt/sources.list.d/ubuntu.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        git \
-        unzip \
-        xz-utils \
+    && for attempt in 1 2 3 4 5; do \
+        apt-get update -o APT::Update::Error-Mode=any \
+            && apt-get install -y --no-install-recommends \
+                git \
+                unzip \
+                xz-utils \
+            && break; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        echo "apt attempt $attempt failed; retrying in $((attempt * 30)) s" >&2; \
+        sleep "$((attempt * 30))"; \
+    done \
     && rm -rf /var/lib/apt/lists/*
 
 # The generated Flutter module declares `ndkVersion = flutter.ndkVersion`, so
