@@ -29,7 +29,8 @@ git checkout -b feat/severity-relay-policy
 | `fix/` | 修 bug |
 | `exp/` | 實驗程式碼、模擬器情境 |
 | `docs/` | 只動文件 |
-| `chore/` | 建置設定、相依套件、雜項 |
+| `build/` | 建置系統與工具鏈：Gradle 設定、相依套件與鎖定檔、可重現建置容器、CI |
+| `chore/` | 不屬於上述類別的雜項維護 |
 
 例：`feat/broadcast-tier`、`fix/health-report-content-tag`、`exp/simulator-baseline`。
 
@@ -76,7 +77,8 @@ repo admin 在緊急情況下可 bypass 保護規則 — 這是逃生口，不�
 | `test` | 測試 |
 | `refactor` | 重構，不改行為 |
 | `perf` | 效能改善 |
-| `chore` | 建置、相依套件、設定 |
+| `build` | 建置系統與工具鏈：Gradle 設定、相依套件與鎖定檔（`gradle.lockfile`、`verification-metadata.xml`、`pubspec.lock`）、可重現建置容器、CI |
+| `chore` | 不屬於上述類別的雜項維護，例如授權變更、移除死碼 |
 
 ### 語言
 

@@ -1,0 +1,12 @@
+# Everything under tools/ and .github/ is executed by Linux (the reproducible
+# build container and the GitHub Actions runners). A CRLF checkout on Windows
+# makes `#!/usr/bin/env bash` fail inside the container with a bare
+# "bad interpreter" once the working tree is bind-mounted, so pin these to LF
+# regardless of the local core.autocrlf setting.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.dockerignore text eol=lf
+tools/reproducible-builds/TOOLCHAIN.env text eol=lf
+tools/reproducible-builds/container-local.properties text eol=lf
+.github/workflows/*.yml text eol=lf
+gradlew text eol=lf

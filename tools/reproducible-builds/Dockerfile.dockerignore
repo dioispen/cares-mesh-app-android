@@ -1,0 +1,10 @@
+# The canonical toolchain image only needs the pinned toolchain manifest, the
+# Android SDK package metadata, and the two pubspec files used to prewarm
+# PUB_CACHE. Excluding everything else keeps the build context at a few
+# kilobytes instead of shipping the whole working tree (including Gradle and
+# Flutter build directories) to the daemon on every image build.
+**
+!tools/reproducible-builds/TOOLCHAIN.env
+!tools/reproducible-builds/sdk-metadata/**
+!flutter_ui/pubspec.yaml
+!flutter_ui/pubspec.lock

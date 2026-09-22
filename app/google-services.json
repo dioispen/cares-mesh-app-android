@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1037557501335",
+    "project_id": "bitchat-android-disaster-app",
+    "storage_bucket": "bitchat-android-disaster-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1037557501335:android:d1ba1d6e1f83d99a6b48d2",
+        "android_client_info": {
+          "package_name": "com.bitchat.droid"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhKVLrEYJsvtOYuaIPOVNwtoKt3h5T8eo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

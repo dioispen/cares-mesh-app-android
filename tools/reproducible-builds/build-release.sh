@@ -16,6 +16,11 @@ if [ "${BITCHAT_SOURCE_TREE_VERIFIED:-0}" != "1" ] &&
   exit 1
 fi
 
+# Set by `docker run --env HOME=/tmp/build-home`, but never created: the
+# Flutter tool and pub both fail without a real home directory.
+export HOME="${HOME:-/tmp/build-home}"
+mkdir -p "$HOME"
+
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 if [ -n "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -31,6 +36,11 @@ if [ "$actual_java_version" != "$expected_java_version" ]; then
 fi
 
 "$PROJECT_ROOT/tools/arti-build/verify-checksums.sh"
+
+# settings.gradle.kts applies flutter_ui/.android/include_flutter.groovy, which
+# `git archive` cannot supply because it is `flutter pub get` output. Every
+# Gradle invocation below depends on this running first.
+"$SCRIPT_DIR/prepare-flutter-module.sh"
 
 export GRADLE_USER_HOME="${BITCHAT_GRADLE_USER_HOME:-$PROJECT_ROOT/.reproducible-build/gradle-home}"
 export LC_ALL=C.UTF-8
@@ -118,6 +128,8 @@ cat > "$OUTPUT_DIR/BUILDINFO.json" <<EOF
   "gradleVersion": "$GRADLE_VERSION",
   "androidCompileSdk": "$ANDROID_COMPILE_SDK",
   "androidBuildToolsVersion": "$ANDROID_BUILD_TOOLS_VERSION",
+  "flutterVersion": "$FLUTTER_VERSION",
+  "flutterEngineRevision": "$FLUTTER_ENGINE_REVISION",
   "nativeManifestSha256": "$native_manifest_sha256"
 }
 EOF
