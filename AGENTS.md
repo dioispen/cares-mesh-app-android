@@ -80,6 +80,16 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - **Lint Check**: `./gradlew lint`
 - **Clean Build**: `./gradlew clean`
 
+### Host build prerequisites
+A host build only works when all of these hold; check them before debugging a Gradle failure:
+- **Flutter exactly 3.41.4** (pinned in `tools/reproducible-builds/TOOLCHAIN.env`). `app/gradle.lockfile` STRICT-locks the engine-revision `io.flutter:*` artifacts, so any other version fails with a lock error.
+- **JDK 21** (`jvmToolchain(21)`, no auto-provisioning).
+- `flutter pub get --enforce-lockfile` has run in `flutter_ui/`.
+- `tools/reproducible-builds/apply-pub-cache-patches.sh` has run against the machine's PUB_CACHE (on Windows: `PUB_CACHE="$LOCALAPPDATA/Pub/Cache"`). Without it, configuring `:flutter_inappwebview_android` fails with `getDefaultProguardFile('proguard-android.txt') is no longer supported`. Never hand-edit PUB_CACHE; add patches to that script.
+
+### Container build
+`tools/reproducible-builds/run-in-container.sh <command>` runs any command in the same pinned image CI and releases use, e.g. `run-in-container.sh ./gradlew testDebugUnitTest`. Prefer it for unit tests on Windows (see #29). Afterwards, run `flutter pub get` in `flutter_ui/` to restore the host IDE setup. Details: `docs/reproducible-builds.md`.
+
 ## Agent skills
 
 ### Issue tracker
