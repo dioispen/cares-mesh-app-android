@@ -519,6 +519,7 @@ class MessageHandlerTest {
             version = 1u,
             type = MessageType.HEALTH_REPORT.value,
             senderID = peerID.hexToBytes(),
+            timestamp = System.currentTimeMillis().toULong(),
             payload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload,
             signature = signature,
             ttl = 7u
