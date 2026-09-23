@@ -81,6 +81,7 @@ class _MascotAssistantState extends State<MascotAssistant> {
             // Speech bubble
             if (_state != _MascotState.idle && options.isNotEmpty)
               Positioned(
+                key: const ValueKey('speech_bubble'),
                 right: 62,
                 bottom: 184,
                 child: _SpeechBubble(
@@ -95,29 +96,39 @@ class _MascotAssistantState extends State<MascotAssistant> {
 
             // Mascot character
             Positioned(
+              key: const ValueKey('mascot_character'),
               right: _state == _MascotState.idle ? -11 : -8,
               bottom: 20,
-              child: GestureDetector(
-                onTap: options.isNotEmpty ? _tapMascot : null,
-                child: Image.asset(
-                  _image,
-                  width: 175,
-                  height: 175,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Container(
-                    width: 175,
-                    height: 175,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xFFE8C99A),
-                    ),
-                    child: const Icon(
-                      Icons.support_agent_rounded,
-                      size: 64,
-                      color: Colors.white,
+              child: Stack(
+                alignment: Alignment.bottomRight,
+                children: [
+                  IgnorePointer(
+                    child: Image.asset(
+                      _image,
+                      width: 175,
+                      height: 175,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stack) => Container(
+                        width: 175,
+                        height: 175,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0xFFE8C99A),
+                        ),
+                        child: const Icon(
+                          Icons.support_agent_rounded,
+                          size: 64,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                  GestureDetector(
+                    onTap: options.isNotEmpty ? _tapMascot : null,
+                    behavior: HitTestBehavior.opaque,
+                    child: const SizedBox(width: 95, height: 150),
+                  ),
+                ],
               ),
             ),
           ],

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
-import 'home_screen.dart';
 import 'login_screen.dart';
 import 'onboarding_screen.dart';
 
@@ -37,9 +36,10 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
       final user = FirebaseAuth.instance.currentUser;
 
       if (user != null && user.emailVerified) {
-        // 信箱已驗證，儲存資料到本地與 Firestore
+        // 信箱已驗證，儲存資料到本地與 Firestore，並清除暫存
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('app_user', jsonEncode(widget.pendingUser.toJson()));
+        await prefs.remove('pending_app_user');
 
         await FirebaseFirestore.instance
             .collection('users')
