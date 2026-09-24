@@ -33,6 +33,8 @@ class MutualAidTask {
   final double distanceKm;
   final String note;
   TaskStatus status;
+  /// 認領這筆任務的協助者 uid；無人認領時為 null。BLE 任務永遠為 null。
+  final String? helperId;
   final bool isBle;
 
   MutualAidTask({
@@ -44,6 +46,7 @@ class MutualAidTask {
     required this.distanceKm,
     required this.note,
     this.status = TaskStatus.waiting,
+    this.helperId,
     this.isBle = false,
   });
 }
@@ -254,6 +257,71 @@ class _HealthScreenState extends State<HealthScreen>
     } catch (_) {}
   }
 
+  static TaskStatus _taskStatusFrom(Object? raw) => switch (raw) {
+        'accepted' => TaskStatus.accepted,
+        'done' => TaskStatus.done,
+        _ => TaskStatus.waiting,
+      };
+
+  /// 把任務狀態寫回 Firestore，讓被協助者與其他協助者看到同一份進度。
+  ///
+  /// 先前這裡只改 [_taskStatusOverrides]（純記憶體 Map），所以「已接受／已完成」
+  /// 既不會同步給別人，App 重開也會整批退回等待中。
+  ///
+  /// BLE 任務沒有對應的 Firestore 文件——它只存在於現場廣播——因此仍走本機覆寫。
+  Future<void> _updateTaskStatus(
+    MutualAidTask task,
+    TaskStatus next,
+    String successMessage,
+    Color successColor,
+  ) async {
+    if (task.isBle) {
+      setState(() => _taskStatusOverrides[task.id] = next);
+      _showTaskSnackBar(successMessage, successColor);
+      return;
+    }
+
+    // 規則要求 helperId 必須等於 request.auth.uid，沒有本機使用者就一定會被擋，
+    // 與其讓使用者看到 permission-denied，不如直接說明原因。
+    if (_currentUserId == null) {
+      _showTaskSnackBar('請先完成註冊驗證，才能接任務', _red);
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('health_reports')
+          .doc(task.id)
+          .update({
+        'taskStatus': next.name,
+        'helperId': next == TaskStatus.waiting ? null : _currentUserId,
+      });
+      // 不必 setState：snapshots() 監聽會帶回新狀態並重繪。
+      _showTaskSnackBar(successMessage, successColor);
+    } catch (e) {
+      debugPrint('updateTaskStatus failed: $e');
+      _showTaskSnackBar(
+        next == TaskStatus.accepted
+            ? '接任務失敗，可能已被其他夥伴接走'
+            : '更新任務狀態失敗，請稍後再試',
+        _red,
+      );
+    }
+  }
+
+  void _showTaskSnackBar(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
   void _subscribeToTasks() {
     _tasksSubscription = FirebaseFirestore.instance
         .collection('health_reports')
@@ -297,7 +365,8 @@ class _HealthScreenState extends State<HealthScreen>
                 : '位置未提供',
             distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
             note: data['description'] as String? ?? '無補充說明',
-            status: _taskStatusOverrides[doc.id] ?? TaskStatus.waiting,
+            status: _taskStatusFrom(data['taskStatus']),
+            helperId: data['helperId'] as String?,
           );
         });
     
@@ -441,31 +510,17 @@ class _HealthScreenState extends State<HealthScreen>
       builder: (_) => _TaskDetailSheet(
         task: task,
         injuryColor: _injuryColor(task.injury),
+        // 任務同步之後，看到「進行中」不代表是自己接的。BLE 任務只存在本機，
+        // 沒有被別人先接走的問題。
+        canComplete: task.isBle || task.helperId == _currentUserId,
         onAccept: () {
-          setState(() => _taskStatusOverrides[task.id] = TaskStatus.accepted);
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已接受協助 ${task.name} 的任務'),
-              backgroundColor: _purple,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              margin: const EdgeInsets.all(16),
-            ),
-          );
+          _updateTaskStatus(
+              task, TaskStatus.accepted, '已接受協助 ${task.name} 的任務', _purple);
         },
         onDone: () {
-          setState(() => _taskStatusOverrides[task.id] = TaskStatus.done);
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已完成協助 ${task.name}'),
-              backgroundColor: _green,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              margin: const EdgeInsets.all(16),
-            ),
-          );
+          _updateTaskStatus(task, TaskStatus.done, '已完成協助 ${task.name}', _green);
         },
       ),
     );
@@ -901,6 +956,8 @@ class _HealthScreenState extends State<HealthScreen>
 class _TaskDetailSheet extends StatelessWidget {
   final MutualAidTask task;
   final Color injuryColor;
+  /// 這位使用者是不是當初認領的人——只有他能按「完成協助」。
+  final bool canComplete;
   final VoidCallback onAccept;
   final VoidCallback onDone;
 
@@ -914,6 +971,7 @@ class _TaskDetailSheet extends StatelessWidget {
   const _TaskDetailSheet({
     required this.task,
     required this.injuryColor,
+    required this.canComplete,
     required this.onAccept,
     required this.onDone,
   });
@@ -1029,7 +1087,23 @@ class _TaskDetailSheet extends StatelessWidget {
               ),
             ),
 
-          if (isAccepted) ...[
+          if (isAccepted && !canComplete)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                color: _purple.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _purple.withValues(alpha: 0.3)),
+              ),
+              child: const Text(
+                '已由其他夥伴接手協助中',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _purple),
+              ),
+            ),
+
+          if (isAccepted && canComplete) ...[
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(

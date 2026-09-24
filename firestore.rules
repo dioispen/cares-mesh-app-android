@@ -6,11 +6,46 @@ service cloud.firestore {
     // NOTE: 「任何註冊帳號皆可讀取他人健康資料」的 PII 問題另見 issue #33，
     //       牽涉角色機制設計，本 issue 刻意不在此處理。
     match /health_reports/{docId} {
+      // 任務狀態欄位缺席時一律視為「等待中／無人認領」，讓規則能相容
+      // 既有那批沒有 taskStatus 的舊文件。
+      function curStatus() { return resource.data.get('taskStatus', 'waiting'); }
+      function newStatus() { return request.resource.data.get('taskStatus', 'waiting'); }
+      function curHelper() { return resource.data.get('helperId', null); }
+      function newHelper() { return request.resource.data.get('helperId', null); }
+
       allow read: if request.auth != null;
       allow create: if request.auth != null
                     && request.resource.data.reporterId == request.auth.uid;
       allow update, delete: if request.auth != null
                              && resource.data.reporterId == request.auth.uid;
+
+      // 互助任務狀態：協助者不是回報者，卻必須能改動「別人的文件」才能認領任務。
+      //
+      // 這裡不能放寬成整份文件可寫——姓名、電話、血型、傷勢、座標都在同一份文件裡。
+      // 因此比照 supply_items 的 pledgedQty 做欄位層級限制：只開放 taskStatus 與
+      // helperId 兩個欄位，其餘一律不可竄改。
+      //
+      // 狀態機同時擋掉三種搗亂：搶走別人已認領的任務、冒名把 helperId 填成第三人、
+      // 把任務從「已完成」翻回去。
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['taskStatus', 'helperId'])
+                    && (
+                         // 認領：等待中 → 已接受，且只能把自己填為協助者
+                         (curStatus() == 'waiting'
+                          && newStatus() == 'accepted'
+                          && newHelper() == request.auth.uid)
+                         // 完成：已接受 → 已完成，限當初認領的本人
+                         || (curStatus() == 'accepted'
+                             && newStatus() == 'done'
+                             && curHelper() == request.auth.uid
+                             && newHelper() == request.auth.uid)
+                         // 放棄：已接受 → 等待中，限本人，並且要把 helperId 清掉
+                         || (curStatus() == 'accepted'
+                             && newStatus() == 'waiting'
+                             && curHelper() == request.auth.uid
+                             && newHelper() == null)
+                       );
     }
 
     // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS
