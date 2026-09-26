@@ -48,10 +48,11 @@
 
 #### 前置需求
 
-- Android Studio（含 Android SDK，compileSdk 36、minSdk 26）
-- JDK 21 — `app/build.gradle.kts` 以 `jvmToolchain(21)` 指定，且沒有設定自動下載；近期 Android Studio 內建的 JBR 即為 21
-- **Flutter 3.41.4**（stable，Dart 3.11.1）— 必須是這個版本，不是「以上」。`app/gradle.lockfile` 以 STRICT 模式鎖住帶 engine revision 的 `io.flutter:*` 套件，其他 Flutter 版本會在建置時出現 lock 錯誤。釘版的權威來源是 [`tools/reproducible-builds/TOOLCHAIN.env`](tools/reproducible-builds/TOOLCHAIN.env)
-- Git Bash（Windows）或任一 bash — 執行下方的修補腳本用
+- Android SDK (compileSdk 37、minSdk 26，後續會自動下載NDK 28.2.13676358和CMake 3.22.1)
+- JDK 21
+- Flutter 3.41.4（stable，Dart 3.11.1）
+- Git Bash（Windows）
+- 磁碟容量約15GB
 
 #### 步驟
 
@@ -59,7 +60,7 @@
 git clone https://github.com/dioispen/cares-mesh-app-android.git
 cd cares-mesh-app-android
 
-# 1. 取得 Flutter 相依套件（缺這一步 Gradle 會失敗）
+# 1. 取得 Flutter 相依套件
 cd flutter_ui && flutter pub get --enforce-lockfile && cd ..
 
 # 2. 修補 PUB_CACHE 中的第三方套件（每台機器做一次；清除 pub cache 後要重做）
