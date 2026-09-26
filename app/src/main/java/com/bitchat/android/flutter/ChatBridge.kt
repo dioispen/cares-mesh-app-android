@@ -1,6 +1,7 @@
 package com.bitchat.android.flutter
 
 import com.bitchat.android.ui.ChatViewModel
+import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CoroutineScope
@@ -9,8 +10,10 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -42,7 +45,9 @@ import kotlinx.coroutines.launch
 class ChatBridge(
     private val chatViewModel: ChatViewModel,
     private val events: BridgeEventEmitter,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    /** Peers linked over Wi-Fi Aware (peer ID → address), as the native peer list reads them. */
+    private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers
 ) : BridgeMethodHandler {
 
     /** One `chat_*` snapshot event: re-pushed when [changes] emits, built from current state. */
@@ -60,6 +65,20 @@ class ChatBridge(
         Projection(
             changes = chatViewModel.nickname,
             snapshot = { ChatSerialization.nicknameEvent(chatViewModel.nickname.value) }
+        ),
+        // Every flow the native list reads. Upstream refreshes nicknames, RSSI and directness
+        // once a second and the peer set on every join/leave; the debounce folds a refresh that
+        // touches several flows into one snapshot, read from all of them at once.
+        Projection(
+            changes = merge(
+                chatViewModel.connectedPeers,
+                chatViewModel.peerNicknames,
+                chatViewModel.peerRSSI,
+                chatViewModel.peerDirect,
+                chatViewModel.privateChats,
+                wifiAwarePeers
+            ),
+            snapshot = { ChatSerialization.peersEvent(currentPeerInputs(), ::isDirectOnMesh) }
         )
     )
 
@@ -132,6 +151,24 @@ class ChatBridge(
         peerID = chatViewModel.myPeerID,
         nickname = chatViewModel.nickname.value
     )
+
+    private fun currentPeerInputs() = ChatPeerList.Inputs(
+        myPeerID = chatViewModel.myPeerID,
+        connectedPeers = chatViewModel.connectedPeers.value,
+        peerNicknames = chatViewModel.peerNicknames.value,
+        peerRSSI = chatViewModel.peerRSSI.value,
+        peerDirect = chatViewModel.peerDirect.value,
+        wifiAwarePeerIDs = wifiAwarePeers.value.keys,
+        privateChats = chatViewModel.privateChats.value
+    )
+
+    /** `PeopleSection`'s fallback while `peerDirect` has not caught up with a new peer. */
+    private fun isDirectOnMesh(peerID: String): Boolean =
+        try {
+            chatViewModel.getMeshPeerInfo(peerID)?.isDirectConnection == true
+        } catch (_: Exception) {
+            false
+        }
 
     fun destroy() {
         scope.cancel()

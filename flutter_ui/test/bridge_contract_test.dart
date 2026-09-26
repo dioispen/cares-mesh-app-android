@@ -87,6 +87,11 @@ void main() {
     test('the dead register / getProfile calls are gone', () {
       expect(_dartInvokedMethods(), isNot(anyOf(contains('register'), contains('getProfile'))));
     });
+
+    test('the polled getNearbyPeers is gone on both sides (#53: chat_peers snapshots)', () {
+      expect(_nativeMethods(), isNot(contains('getNearbyPeers')));
+      expect(_dartInvokedMethods(), isNot(contains('getNearbyPeers')));
+    });
   });
 
   group('the mesh nickname is only written from the nickname editor (#52, ADR-0003)', () {

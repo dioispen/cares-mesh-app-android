@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
+import '../models/chat_peer.dart';
 import '../services/chat_service.dart';
 import '../services/mascot_service.dart';
+import '../widgets/peer_list_sheet.dart';
 
 /// 公開 mesh 聊天室。訊息與送出都經由 [ChatService]（原生 `ChatViewModel` 的投影），
 /// 畫面本身不保存聊天狀態。
@@ -167,6 +169,43 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         },
       );
 
+  /// 打開「附近的人」；列表隨 [ChatService.peerList] 即時更新。
+  /// 列表項目目前不可點，#55 在這裡傳入 `onPeerTap` 開私訊。
+  Future<void> _showPeerList() => showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        isScrollControlled: true,
+        builder: (_) => PeerListSheet(peerList: _chat.peerList),
+      );
+
+  /// AppBar 最右側的線上人數（對照原生標頭的 `PeerCounter`：人數在最右、點了打開 peer 列表）。
+  /// 原生端回報前不顯示；沒有人在線時變淡。
+  Widget _peerCountAction() => ValueListenableBuilder<ChatPeerList?>(
+        valueListenable: _chat.peerList,
+        builder: (context, peerList, _) {
+          if (peerList == null) return const SizedBox.shrink();
+          final count = peerList.onlineCount;
+          final color = count > 0 ? _accent : _textSecondary;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Tooltip(
+              message: '附近的人',
+              child: TextButton.icon(
+                onPressed: _showPeerList,
+                style: TextButton.styleFrom(
+                  foregroundColor: count > 0 ? _textPrimary : _textSecondary,
+                  backgroundColor: _bg,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: const StadiumBorder(),
+                ),
+                icon: Icon(Icons.people_alt_outlined, size: 16, color: color),
+                label: Text('$count', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          );
+        },
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -176,12 +215,22 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('防災互助通訊', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
-            Text('公開頻道 · 即時互助', style: TextStyle(fontSize: 11, color: _textSecondary)),
+            Text(
+              '防災互助通訊',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary),
+            ),
+            Text(
+              '公開頻道 · 即時互助',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, color: _textSecondary),
+            ),
           ],
         ),
         iconTheme: const IconThemeData(color: _textPrimary),
-        actions: [_nicknameAction()],
+        actions: [_nicknameAction(), _peerCountAction()],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Divider(height: 1, color: const Color(0xFFE8E0D5)),

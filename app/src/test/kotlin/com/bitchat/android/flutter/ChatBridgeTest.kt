@@ -1,5 +1,6 @@
 package com.bitchat.android.flutter
 
+import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.ui.ChatViewModel
 import io.flutter.plugin.common.MethodCall
@@ -35,6 +36,12 @@ class ChatBridgeTest {
 
     private val messages = MutableStateFlow<List<BitchatMessage>>(emptyList())
     private val nickname = MutableStateFlow("me")
+    private val connectedPeers = MutableStateFlow<List<String>>(emptyList())
+    private val peerNicknames = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val peerRSSI = MutableStateFlow<Map<String, Int>>(emptyMap())
+    private val peerDirect = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    private val privateChats = MutableStateFlow<Map<String, List<BitchatMessage>>>(emptyMap())
+    private val wifiAwarePeers = MutableStateFlow<Map<String, String>>(emptyMap())
     private val viewModel = mock<ChatViewModel>().also { vm ->
         whenever(vm.messages).thenReturn(messages)
         // Not thenReturn: in bytecode ChatViewModel has two getNickname() methods that differ
@@ -43,8 +50,13 @@ class ChatBridgeTest {
         // JVM, and thenReturn's return-type check then fails at random. thenAnswer is not checked.
         whenever(vm.nickname).thenAnswer { nickname }
         whenever(vm.myPeerID).thenReturn(MY_PEER_ID)
+        whenever(vm.connectedPeers).thenAnswer { connectedPeers }
+        whenever(vm.peerNicknames).thenAnswer { peerNicknames }
+        whenever(vm.peerRSSI).thenAnswer { peerRSSI }
+        whenever(vm.peerDirect).thenAnswer { peerDirect }
+        whenever(vm.privateChats).thenAnswer { privateChats }
     }
-    private val bridge = ChatBridge(viewModel, events, scope)
+    private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers)
 
     // --- method dispatch ---------------------------------------------------------------------
 
@@ -287,6 +299,121 @@ class ChatBridgeTest {
         assertEquals(listOf("anon1234"), nicknames())
     }
 
+    // --- mesh peers --------------------------------------------------------------------------
+
+    @Test
+    fun `Dart subscribing receives the current peer list`() {
+        connectedPeers.value = listOf(ALICE, MY_PEER_ID)
+        peerNicknames.value = mapOf(ALICE to "alice")
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf(1 to listOf(ALICE)), peerSnapshots())
+    }
+
+    @Test
+    fun `requestSnapshot pushes the current peer list`() {
+        events.onListen(null, sink)
+        poster.runAll()
+        sink.events.clear()
+        connectedPeers.value = listOf(ALICE)
+
+        bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        poster.runAll()
+
+        assertEquals(listOf(1 to listOf(ALICE)), peerSnapshots())
+    }
+
+    @Test
+    fun `a peer joining and leaving is pushed after the debounce`() {
+        settleAndClear()
+
+        connectedPeers.value = listOf(ALICE)
+        dispatcher.scheduler.advanceTimeBy(ChatBridge.SNAPSHOT_DEBOUNCE_MS / 2)
+        connectedPeers.value = listOf(ALICE, BOB)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+        assertEquals("still inside the debounce window", emptyList<Any?>(), peerSnapshots())
+
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        assertEquals(listOf(2 to listOf(ALICE, BOB)), peerSnapshots())
+        sink.events.clear()
+
+        connectedPeers.value = listOf(BOB)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        assertEquals(listOf(1 to listOf(BOB)), peerSnapshots())
+    }
+
+    @Test
+    fun `a burst across several peer flows is pushed as one consistent snapshot`() {
+        settleAndClear()
+
+        connectedPeers.value = listOf(ALICE)
+        peerNicknames.value = mapOf(ALICE to "alice")
+        peerRSSI.value = mapOf(ALICE to -50)
+        peerDirect.value = mapOf(ALICE to true)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        val peer = peerRows().single().single()
+        assertEquals(listOf("alice", -50, "bluetooth"), listOf(peer["displayName"], peer["rssi"], peer["connection"]))
+    }
+
+    @Test
+    fun `rssi and nickname refreshes are pushed`() {
+        connectedPeers.value = listOf(ALICE)
+        settleAndClear()
+
+        peerRSSI.value = mapOf(ALICE to -80)
+        peerNicknames.value = mapOf(ALICE to "alice")
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        val peer = peerRows().single().single()
+        assertEquals(listOf("alice", -80, 1), listOf(peer["displayName"], peer["rssi"], peer["signalBars"]))
+    }
+
+    @Test
+    fun `a wifi aware link is pushed as the peer's connection`() {
+        connectedPeers.value = listOf(ALICE)
+        peerDirect.value = mapOf(ALICE to false)
+        settleAndClear()
+
+        wifiAwarePeers.value = mapOf(ALICE to "fe80::1")
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals("wifiAware", peerRows().single().single()["connection"])
+    }
+
+    @Test
+    fun `directness missing from peerDirect is read from the mesh peer info`() {
+        whenever(viewModel.getMeshPeerInfo(ALICE)).thenReturn(peerInfo(ALICE, isDirect = true))
+        connectedPeers.value = listOf(ALICE, BOB)
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(
+            listOf("bluetooth", "routed"),
+            peerRows().single().map { it["connection"] }
+        )
+    }
+
+    @Test
+    fun `a failing mesh peer lookup counts as routed`() {
+        whenever(viewModel.getMeshPeerInfo(ALICE)).thenThrow(IllegalStateException("mesh gone"))
+        connectedPeers.value = listOf(ALICE)
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals("routed", peerRows().single().single()["connection"])
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
 
     @Test
@@ -415,7 +542,41 @@ class ChatBridgeTest {
         .filter { it["type"] == ChatSerialization.EVENT_NICKNAME }
         .map { it["nickname"] }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun peerEvents(): List<Map<String, Any?>> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_PEERS }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun peerRows(): List<List<Map<String, Any?>>> =
+        peerEvents().map { it["peers"] as List<Map<String, Any?>> }
+
+    /** Each pushed peer snapshot as (onlineCount, peer IDs in list order). */
+    private fun peerSnapshots(): List<Pair<Any?, List<Any?>>> =
+        peerEvents().zip(peerRows()) { event, rows -> event["onlineCount"] to rows.map { it["peerID"] } }
+
+    /** Subscribes, lets the initial projections run, and forgets what they pushed. */
+    private fun settleAndClear() {
+        events.onListen(null, sink)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        sink.events.clear()
+    }
+
+    private fun peerInfo(id: String, isDirect: Boolean) = PeerInfo(
+        id = id,
+        nickname = "",
+        isConnected = true,
+        isDirectConnection = isDirect,
+        noisePublicKey = null,
+        signingPublicKey = null,
+        isVerifiedNickname = false,
+        lastSeen = 0L
+    )
+
     private companion object {
         const val MY_PEER_ID = "a1b2c3d4e5f60718"
+        const val ALICE = "1111111111111111"
+        const val BOB = "2222222222222222"
     }
 }

@@ -269,6 +269,108 @@ class ChatSerializationTest {
         assertEquals(event, codec.decodeMessage(encoded))
     }
 
+    // --- mesh peers ----------------------------------------------------------------------------
+
+    private val alice = "1111111111111111"
+    private val bob = "2222222222222222"
+
+    private fun peerInputs(
+        connectedPeers: List<String>,
+        peerNicknames: Map<String, String> = emptyMap(),
+        peerRSSI: Map<String, Int> = emptyMap(),
+        peerDirect: Map<String, Boolean> = emptyMap(),
+        wifiAwarePeerIDs: Set<String> = emptySet()
+    ) = ChatPeerList.Inputs(
+        myPeerID = me.peerID,
+        connectedPeers = connectedPeers,
+        peerNicknames = peerNicknames,
+        peerRSSI = peerRSSI,
+        peerDirect = peerDirect,
+        wifiAwarePeerIDs = wifiAwarePeerIDs,
+        privateChats = emptyMap()
+    )
+
+    @Test
+    fun `peer maps every bridge field`() {
+        val event = ChatSerialization.peersEvent(
+            peerInputs(
+                connectedPeers = listOf(alice),
+                peerNicknames = mapOf(alice to "alice"),
+                peerRSSI = mapOf(alice to -67),
+                peerDirect = mapOf(alice to true)
+            )
+        ) { false }
+
+        assertEquals(
+            listOf(
+                mapOf(
+                    "peerID" to alice,
+                    "nickname" to "alice",
+                    "displayName" to "alice",
+                    "displaySuffix" to "",
+                    "rssi" to -67,
+                    "signalBars" to 2,
+                    "connection" to "bluetooth"
+                )
+            ),
+            peerMaps(event)
+        )
+    }
+
+    @Test
+    fun `peer upstream knows little about keeps its nulls`() {
+        val peer = peerMaps(ChatSerialization.peersEvent(peerInputs(connectedPeers = listOf(alice))) { false }).single()
+
+        assertNull(peer["nickname"])
+        assertNull(peer["rssi"])
+        assertNull(peer["signalBars"])
+        assertEquals(alice.take(12), peer["displayName"])
+        assertEquals("routed", peer["connection"])
+        assertTrue("null values are present, not missing keys", peer.containsKey("rssi"))
+    }
+
+    @Test
+    fun `peers event carries the online count and the rows in list order`() {
+        val event = ChatSerialization.peersEvent(
+            peerInputs(
+                connectedPeers = listOf(bob, me.peerID, alice),
+                peerNicknames = mapOf(alice to "alice", bob to "bob")
+            )
+        ) { false }
+
+        assertEquals("chat_peers", event["type"])
+        assertEquals(2, event["onlineCount"])
+        assertEquals(listOf(alice, bob), peerMaps(event).map { it["peerID"] })
+    }
+
+    @Test
+    fun `nobody connected is a zero count and an empty list, not missing keys`() {
+        val event = ChatSerialization.peersEvent(peerInputs(connectedPeers = emptyList())) { false }
+
+        assertEquals(0, event["onlineCount"])
+        assertEquals(emptyList<Any?>(), event["peers"])
+    }
+
+    @Test
+    fun `peers event survives a StandardMessageCodec round trip`() {
+        val event = ChatSerialization.peersEvent(
+            peerInputs(
+                connectedPeers = listOf(alice, bob),
+                peerNicknames = mapOf(alice to "小明#beef", bob to "小明#0a1b"),
+                peerRSSI = mapOf(alice to -40),
+                peerDirect = mapOf(alice to true, bob to false),
+                wifiAwarePeerIDs = setOf(bob)
+            )
+        ) { false }
+        val codec = StandardMessageCodec.INSTANCE
+        val encoded = codec.encodeMessage(event)!!.also { it.rewind() }
+
+        assertEquals(event, codec.decodeMessage(encoded))
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun peerMaps(event: Map<String, Any?>) = event["peers"] as List<Map<String, Any?>>
+
     @Suppress("UNCHECKED_CAST")
     private fun messageMaps(event: Map<String, Any?>) = event["messages"] as List<Map<String, Any?>>
 }

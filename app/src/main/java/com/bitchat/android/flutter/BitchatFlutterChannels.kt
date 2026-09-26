@@ -202,13 +202,8 @@ class BitchatFlutterChannels(
                 }
             }
 
-            "getNearbyPeers" -> {
-                val service = MeshServiceHolder.meshService
-                val peers = service?.getPeerNicknames() ?: emptyMap<String, String>()
-                result.success(peers)
-            }
-
-            // 聊天的送出改由 ChatBridge 的 chat_sendMessage 轉呼叫 ChatViewModel（#9、#51）。
+            // 聊天的送出改由 ChatBridge 的 chat_sendMessage 轉呼叫 ChatViewModel（#9、#51）；
+            // 附近的 peer 改由 ChatBridge 的 chat_peers 快照提供（#53，取代舊的 getNearbyPeers）。
             // 這裡不能再認領任何聊天 method：本類別先被詢問，會遮蔽 ChatBridge。
 
             else -> return false

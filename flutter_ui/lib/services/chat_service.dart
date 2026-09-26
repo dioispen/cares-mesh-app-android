@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../bridge/bitchat_bridge.dart';
 import '../models/chat_message.dart';
+import '../models/chat_peer.dart';
 
 /// Flutter 端的聊天狀態持有者（#49），整個 app 生命週期只有一個：[ChatService.instance]。
 ///
@@ -35,6 +36,7 @@ class ChatService {
   final ValueNotifier<List<ChatMessage>> _publicMessages =
       ValueNotifier<List<ChatMessage>>(const []);
   final ValueNotifier<String?> _nickname = ValueNotifier<String?>(null);
+  final ValueNotifier<ChatPeerList?> _peerList = ValueNotifier<ChatPeerList?>(null);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
@@ -46,6 +48,12 @@ class ChatService {
   /// 原樣反映原生 `ChatViewModel.nickname`（可能是空字串），任何來源的變更都會經快照更新。
   /// 與帳號的真實姓名（`AppUser.name`）無關，兩者不互相帶入（ADR-0003）。
   ValueListenable<String?> get nickname => _nickname;
+
+  /// 目前 mesh 上的線上人數與 peer 列表（原生標頭人數與 peer 列表的投影），peer 加入、
+  /// 離開、改名或訊號變化時整份更新；原生端還沒回報前是 null。
+  ///
+  /// 人數與列表放在同一個值裡，一定來自同一份快照。
+  ValueListenable<ChatPeerList?> get peerList => _peerList;
 
   /// 開始接收聊天快照。可重複呼叫，只有第一次有效。
   ///
@@ -91,6 +99,13 @@ class ChatService {
           return;
         }
         _nickname.value = nickname;
+      case ChatEvents.peers:
+        final peerList = ChatPeerList.fromEvent(event);
+        if (peerList == null) {
+          debugPrint('ChatService: ignoring malformed ${ChatEvents.peers} event');
+          return;
+        }
+        _peerList.value = peerList;
     }
   }
 
@@ -100,5 +115,6 @@ class ChatService {
     _subscription = null;
     _publicMessages.dispose();
     _nickname.dispose();
+    _peerList.dispose();
   }
 }

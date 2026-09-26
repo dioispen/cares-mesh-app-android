@@ -16,6 +16,10 @@ abstract final class ChatEvents {
 
   /// `{type, nickname: String}`：自己的 mesh 暱稱（原生 `ChatViewModel.nickname`），原樣、可能是空字串。
   static const nickname = 'chat_nickname';
+
+  /// `{type, onlineCount: int, peers: List<Map>}`：線上人數與 mesh peer 列表的完整快照，
+  /// 依原生列表的顯示順序（見 `models/chat_peer.dart`）。
+  static const peers = 'chat_peers';
 }
 
 class BitchatBridge {
@@ -142,16 +146,6 @@ class BitchatBridge {
       await _method.invokeMethod<void>('sendHealthReport', broadcastTier);
     } catch (e) {
       // Ignore
-    }
-  }
-
-  /// 獲取附近裝置
-  static Future<Map<String, String>> getNearbyPeers() async {
-    try {
-      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getNearbyPeers');
-      return result?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? {};
-    } catch (e) {
-      return {};
     }
   }
 }

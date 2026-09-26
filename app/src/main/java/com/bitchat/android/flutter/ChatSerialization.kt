@@ -11,11 +11,11 @@ import com.bitchat.android.ui.isFromSelf
 data class ChatSelf(val peerID: String, val nickname: String)
 
 /**
- * Pure `BitchatMessage` → MethodChannel/EventChannel value conversion for the Flutter chat (#49).
+ * Pure chat state → MethodChannel/EventChannel value conversion for the Flutter chat (#49).
  *
  * Every value is a `StandardMessageCodec` type: String, Boolean, Int, Long (epoch millis), null,
- * List and String-keyed Map. The Dart side (`flutter_ui/lib/models/chat_message.dart`) mirrors
- * these keys; change both together.
+ * List and String-keyed Map. The Dart side (`flutter_ui/lib/models/chat_message.dart`,
+ * `chat_peer.dart`) mirrors these keys; change both together.
  */
 object ChatSerialization {
 
@@ -24,6 +24,9 @@ object ChatSerialization {
 
     /** Snapshot of our own mesh nickname (`ChatViewModel.nickname`). */
     const val EVENT_NICKNAME = "chat_nickname"
+
+    /** Snapshot of the mesh peer list and online count (see [ChatPeerList]). */
+    const val EVENT_PEERS = "chat_peers"
 
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
@@ -89,6 +92,33 @@ object ChatSerialization {
     fun nicknameEvent(nickname: String): Map<String, Any?> = mapOf(
         "type" to EVENT_NICKNAME,
         "nickname" to nickname
+    )
+
+    /**
+     * One peer-list row. Every key is always present; `nickname`, `rssi` and `signalBars` may be
+     * null. `connection` is a [ChatPeerList.Connection.wire] name. Dart mirrors these keys in
+     * `flutter_ui/lib/models/chat_peer.dart`; later fields (private chat, unread, favourites) are
+     * added here and there together.
+     */
+    fun peer(row: ChatPeerList.Row): Map<String, Any?> = mapOf(
+        "peerID" to row.peerID,
+        "nickname" to row.nickname,
+        "displayName" to row.displayName,
+        "displaySuffix" to row.displaySuffix,
+        "rssi" to row.rssi,
+        "signalBars" to row.signalBars,
+        "connection" to row.connection.wire
+    )
+
+    /**
+     * `{type: "chat_peers", onlineCount, peers: [peer, ...]}` — the native header count and list
+     * rows, built from one reading of [inputs] so the two always agree. Rows are in display order.
+     * Peer IDs and nicknames are what every device in range already sees in ANNOUNCE packets.
+     */
+    fun peersEvent(inputs: ChatPeerList.Inputs, isDirectFallback: (String) -> Boolean): Map<String, Any?> = mapOf(
+        "type" to EVENT_PEERS,
+        "onlineCount" to ChatPeerList.onlineCount(inputs),
+        "peers" to ChatPeerList.rows(inputs, isDirectFallback).map(::peer)
     )
 
     /** True for the chat line MessageHandler.handleHealthReport() makes out of a Health Report. */

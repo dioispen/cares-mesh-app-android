@@ -260,4 +260,98 @@ void main() {
       await expectLater(service.setNickname('bob'), throwsA(isA<PlatformException>()));
     });
   });
+
+  group('mesh peers', () {
+    Map<String, dynamic> peers(int onlineCount, List<String> ids) => {
+          'type': 'chat_peers',
+          'onlineCount': onlineCount,
+          'peers': [
+            for (final id in ids)
+              {
+                'peerID': id,
+                'nickname': 'nick-$id',
+                'displayName': 'nick-$id',
+                'displaySuffix': '',
+                'rssi': -60,
+                'signalBars': 2,
+                'connection': 'bluetooth',
+              },
+          ],
+        };
+
+    test('are unknown until Kotlin reports them', () {
+      expect(service.peerList.value, isNull);
+    });
+
+    test('a peers snapshot sets the count and the list', () async {
+      await service.start();
+
+      events.add(peers(2, ['A', 'B']));
+      await pumpEventQueue();
+
+      expect(service.peerList.value!.onlineCount, 2);
+      expect(service.peerList.value!.peers.map((p) => p.peerID), ['A', 'B']);
+    });
+
+    test('peers joining and leaving replace the whole list', () async {
+      await service.start();
+      events.add(peers(1, ['A']));
+      await pumpEventQueue();
+
+      events.add(peers(2, ['A', 'B']));
+      await pumpEventQueue();
+      expect(service.peerList.value!.onlineCount, 2);
+
+      events.add(peers(1, ['B']));
+      await pumpEventQueue();
+      expect(service.peerList.value!.onlineCount, 1);
+      expect(service.peerList.value!.peers.map((p) => p.peerID), ['B']);
+
+      events.add(peers(0, []));
+      await pumpEventQueue();
+      expect(service.peerList.value!.onlineCount, 0);
+      expect(service.peerList.value!.peers, isEmpty);
+    });
+
+    test('count and list change together, in one notification', () async {
+      final seen = <String>[];
+      service.peerList.addListener(() {
+        final list = service.peerList.value!;
+        seen.add('${list.onlineCount}:${list.peers.length}');
+      });
+      await service.start();
+
+      events.add(peers(1, ['A']));
+      events.add(peers(2, ['A', 'B']));
+      await pumpEventQueue();
+
+      expect(seen, ['1:1', '2:2']);
+    });
+
+    test('a malformed peers snapshot keeps the current list', () async {
+      await service.start();
+      events.add(peers(1, ['A']));
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_peers'});
+      events.add({'type': 'chat_peers', 'onlineCount': 1, 'peers': 'nope'});
+      events.add({'type': 'chat_peers', 'onlineCount': 'many', 'peers': []});
+      await pumpEventQueue();
+
+      expect(service.peerList.value!.peers.map((p) => p.peerID), ['A']);
+    });
+
+    test('peers, nickname and timeline snapshots do not disturb each other', () async {
+      await service.start();
+
+      events.add(_publicMessages(['M']));
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      events.add(peers(1, ['A']));
+      await pumpEventQueue();
+
+      expect(service.publicMessages.value.map((m) => m.id), ['M']);
+      expect(service.nickname.value, 'anon4821');
+      expect(service.peerList.value!.peers.map((p) => p.peerID), ['A']);
+    });
+  });
 }

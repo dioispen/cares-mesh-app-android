@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/screens/chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
+import 'package:flutter_ui/widgets/peer_list_sheet.dart';
 
 void main() {
   late StreamController<Map<String, dynamic>> events;
@@ -269,6 +270,150 @@ void main() {
       await openEditor(tester);
 
       expect(find.textContaining('請勿使用真實姓名'), findsOneWidget);
+    });
+  });
+
+  group('mesh peers', () {
+    Map<String, Object?> peer(
+      String peerID, {
+      String displayName = 'alice',
+      String displaySuffix = '',
+      int? rssi = -67,
+      int? signalBars = 2,
+      String connection = 'bluetooth',
+    }) =>
+        {
+          'peerID': peerID,
+          'nickname': displayName,
+          'displayName': displayName,
+          'displaySuffix': displaySuffix,
+          'rssi': rssi,
+          'signalBars': signalBars,
+          'connection': connection,
+        };
+
+    Future<void> pushPeers(WidgetTester tester, int onlineCount, List<Map<String, Object?>> peers) async {
+      events.add({'type': 'chat_peers', 'onlineCount': onlineCount, 'peers': peers});
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Finder peerCount() => find.byTooltip('附近的人');
+    Finder inCount(String text) => find.descendant(of: peerCount(), matching: find.text(text));
+    Finder sheet() => find.byType(PeerListSheet);
+    Finder inSheet(Finder finder) => find.descendant(of: sheet(), matching: finder);
+
+    Future<void> openPeerList(WidgetTester tester) async {
+      await tester.tap(peerCount());
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('there is no count until the native side reports the peers', (tester) async {
+      await pumpChat(tester);
+
+      expect(peerCount(), findsNothing);
+    });
+
+    testWidgets('the app bar shows the online count next to the nickname', (tester) async {
+      await pumpChat(tester);
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+
+      await pushPeers(tester, 2, [peer('1111111111111111'), peer('2222222222222222', displayName: 'bob')]);
+
+      expect(inCount('2'), findsOneWidget);
+      expect(find.text('@anon4821'), findsOneWidget);
+    });
+
+    testWidgets('the count follows peers joining and leaving', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 1, [peer('1111111111111111')]);
+
+      await pushPeers(tester, 2, [peer('1111111111111111'), peer('2222222222222222', displayName: 'bob')]);
+      expect(inCount('2'), findsOneWidget);
+
+      await pushPeers(tester, 0, []);
+      expect(inCount('0'), findsOneWidget);
+    });
+
+    testWidgets('tapping the count lists each peer with name, link and signal', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 3, [
+        peer('1111111111111111', displayName: 'alice', rssi: -48, signalBars: 2, connection: 'bluetooth'),
+        peer('2222222222222222', displayName: 'bob', rssi: null, signalBars: null, connection: 'routed'),
+        peer('3333333333333333', displayName: 'carol', rssi: -80, signalBars: 1, connection: 'wifiAware'),
+      ]);
+
+      await openPeerList(tester);
+
+      expect(inSheet(find.text('附近的人（3）')), findsOneWidget);
+      expect(inSheet(find.text('alice')), findsOneWidget);
+      expect(inSheet(find.text('-48 dBm')), findsOneWidget);
+      expect(inSheet(find.text('藍牙直連')), findsOneWidget);
+      expect(inSheet(find.text('bob')), findsOneWidget);
+      expect(inSheet(find.text('經 mesh 轉傳')), findsOneWidget);
+      expect(inSheet(find.byTooltip('沒有直接連線，無訊號強度')), findsOneWidget);
+      expect(inSheet(find.text('Wi-Fi Aware 直連')), findsOneWidget);
+      expect(inSheet(find.text('-80 dBm')), findsOneWidget);
+    });
+
+    testWidgets('peers are listed in the order the native side sends', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 2, [
+        peer('2222222222222222', displayName: 'zoe'),
+        peer('1111111111111111', displayName: 'amy'),
+      ]);
+
+      await openPeerList(tester);
+
+      final zoe = tester.getTopLeft(inSheet(find.text('zoe'))).dy;
+      final amy = tester.getTopLeft(inSheet(find.text('amy'))).dy;
+      expect(zoe, lessThan(amy), reason: 'Dart must not re-sort');
+    });
+
+    testWidgets('a shared name shows its dimmed hash suffix', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 2, [
+        peer('1111111111111111', displayName: 'sam', displaySuffix: '#0a1b'),
+        peer('2222222222222222', displayName: 'sam', displaySuffix: '#ffff'),
+      ]);
+
+      await openPeerList(tester);
+
+      expect(inSheet(find.text('sam#0a1b', findRichText: true)), findsOneWidget);
+      expect(inSheet(find.text('sam#ffff', findRichText: true)), findsOneWidget);
+    });
+
+    testWidgets('the open list updates as peers come and go', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
+      await openPeerList(tester);
+
+      await pushPeers(tester, 1, [peer('2222222222222222', displayName: 'bob')]);
+
+      expect(inSheet(find.text('alice')), findsNothing);
+      expect(inSheet(find.text('bob')), findsOneWidget);
+    });
+
+    testWidgets('nobody online says so', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 0, []);
+
+      await openPeerList(tester);
+
+      expect(inSheet(find.text('目前沒有人連線')), findsOneWidget);
+    });
+
+    testWidgets('rows are not tappable yet', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
+      await openPeerList(tester);
+
+      final tile = tester.widget<PeerListTile>(find.byType(PeerListTile));
+      expect(tile.onTap, isNull, reason: '#55 adds opening a private chat');
+
+      await tester.tap(inSheet(find.text('alice')));
+      await tester.pumpAndSettle();
+      expect(sheet(), findsOneWidget);
     });
   });
 }
