@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/chat_suggestions.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 
 Map<String, dynamic> _publicMessages(List<String> ids) => {
@@ -21,6 +22,8 @@ void main() {
     Future<void> Function()? requestSnapshot,
     Future<bool> Function(String text)? sendMessage,
     Future<void> Function(String nickname)? setNickname,
+    Future<String?> Function(String command)? selectCommandSuggestion,
+    Future<String> Function(String nickname, String currentText)? selectMentionSuggestion,
   }) =>
       ChatService(
         events: () => events.stream,
@@ -37,6 +40,22 @@ void main() {
             (nickname) async {
               calls.add('setNickname:$nickname');
             },
+        updateInput: (text) async {
+          calls.add('updateInput:$text');
+        },
+        selectCommandSuggestion: selectCommandSuggestion ??
+            (command) async {
+              calls.add('selectCommand:$command');
+              return '$command ';
+            },
+        selectMentionSuggestion: selectMentionSuggestion ??
+            (nickname, currentText) async {
+              calls.add('selectMention:$nickname|$currentText');
+              return '@$nickname ';
+            },
+        clearSuggestions: () async {
+          calls.add('clearSuggestions');
+        },
       );
 
   setUp(() {
@@ -352,6 +371,122 @@ void main() {
       expect(service.publicMessages.value.map((m) => m.id), ['M']);
       expect(service.nickname.value, 'anon4821');
       expect(service.peerList.value!.peers.map((p) => p.peerID), ['A']);
+    });
+  });
+
+  group('mention and command suggestions', () {
+    Map<String, dynamic> suggestions({
+      bool showCommands = false,
+      List<String> commands = const [],
+      bool showMentions = false,
+      List<String> mentions = const [],
+    }) =>
+        {
+          'type': 'chat_suggestions',
+          'showCommands': showCommands,
+          'commands': [
+            for (final c in commands) {'command': c, 'aliases': <String>[], 'syntax': null, 'description': 'd'},
+          ],
+          'showMentions': showMentions,
+          'mentions': mentions,
+        };
+
+    test('start with nothing to show', () {
+      expect(service.suggestions.value.commandsVisible, isFalse);
+      expect(service.suggestions.value.mentionsVisible, isFalse);
+    });
+
+    test('a suggestions snapshot replaces both popups', () async {
+      await service.start();
+
+      events.add(suggestions(showCommands: true, commands: ['/hug', '/w']));
+      await pumpEventQueue();
+      expect(service.suggestions.value.commands.map((c) => c.command), ['/hug', '/w']);
+      expect(service.suggestions.value.mentionsVisible, isFalse);
+
+      events.add(suggestions(showMentions: true, mentions: ['alice']));
+      await pumpEventQueue();
+      expect(service.suggestions.value.commandsVisible, isFalse);
+      expect(service.suggestions.value.mentions, ['alice']);
+    });
+
+    test('a malformed suggestions snapshot keeps the current popups', () async {
+      await service.start();
+      events.add(suggestions(showMentions: true, mentions: ['alice']));
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_suggestions'});
+      events.add({...suggestions(), 'mentions': 'bob'});
+      await pumpEventQueue();
+
+      expect(service.suggestions.value.mentions, ['alice']);
+    });
+
+    test('suggestions and the other snapshots do not disturb each other', () async {
+      await service.start();
+
+      events.add(_publicMessages(['M']));
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      events.add(suggestions(showMentions: true, mentions: ['alice']));
+      await pumpEventQueue();
+
+      expect(service.publicMessages.value.map((m) => m.id), ['M']);
+      expect(service.nickname.value, 'anon4821');
+      expect(service.suggestions.value.mentions, ['alice']);
+    });
+
+    test('updateInput hands the text to the bridge untouched', () async {
+      await service.updateInput('  @al');
+      await service.updateInput('');
+
+      expect(calls, ['updateInput:  @al', 'updateInput:']);
+    });
+
+    test('selecting a command names it by its command and answers the new input', () async {
+      const hug = CommandSuggestion(command: '/hug', syntax: '<nickname>', description: 'hug');
+
+      final text = await service.selectCommandSuggestion(hug);
+
+      expect(calls, ['selectCommand:/hug']);
+      expect(text, '/hug ');
+    });
+
+    test('a command the native side no longer offers answers null', () async {
+      service = buildService(selectCommandSuggestion: (command) async => null);
+
+      expect(await service.selectCommandSuggestion(const CommandSuggestion(command: '/hug', description: '')), isNull);
+    });
+
+    test('selecting a mention hands over the nickname and the current text', () async {
+      final text = await service.selectMentionSuggestion('alice', 'hi @al');
+
+      expect(calls, ['selectMention:alice|hi @al']);
+      expect(text, '@alice ');
+    });
+
+    test('clearSuggestions is forwarded', () async {
+      await service.clearSuggestions();
+
+      expect(calls, ['clearSuggestions']);
+    });
+
+    test('suggestions are not changed locally; they wait for the snapshot', () async {
+      await service.start();
+      events.add(suggestions(showMentions: true, mentions: ['alice']));
+      await pumpEventQueue();
+
+      await service.selectMentionSuggestion('alice', '@al');
+      await service.clearSuggestions();
+
+      expect(service.suggestions.value.mentions, ['alice']);
+    });
+
+    test('a bridge error from selecting a mention is surfaced', () async {
+      service = buildService(selectMentionSuggestion: (nickname, currentText) async {
+        throw PlatformException(code: 'INVALID_ARGUMENT');
+      });
+
+      await expectLater(service.selectMentionSuggestion('alice', '@al'), throwsA(isA<PlatformException>()));
     });
   });
 }

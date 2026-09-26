@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../models/chat_message.dart';
 import '../models/chat_peer.dart';
+import '../models/chat_suggestions.dart';
 
 /// Flutter 端的聊天狀態持有者（#49），整個 app 生命週期只有一個：[ChatService.instance]。
 ///
@@ -21,10 +22,18 @@ class ChatService {
     Future<void> Function()? requestSnapshot,
     Future<bool> Function(String text)? sendMessage,
     Future<void> Function(String nickname)? setNickname,
+    Future<void> Function(String text)? updateInput,
+    Future<String?> Function(String command)? selectCommandSuggestion,
+    Future<String> Function(String nickname, String currentText)? selectMentionSuggestion,
+    Future<void> Function()? clearSuggestions,
   })  : _events = events ?? BitchatBridge.events,
         _requestSnapshot = requestSnapshot ?? BitchatBridge.requestChatSnapshot,
         _send = sendMessage ?? BitchatBridge.sendMessage,
-        _setNickname = setNickname ?? BitchatBridge.setNickname;
+        _setNickname = setNickname ?? BitchatBridge.setNickname,
+        _updateInput = updateInput ?? BitchatBridge.updateChatInput,
+        _selectCommand = selectCommandSuggestion ?? BitchatBridge.selectCommandSuggestion,
+        _selectMention = selectMentionSuggestion ?? BitchatBridge.selectMentionSuggestion,
+        _clearSuggestions = clearSuggestions ?? BitchatBridge.clearChatSuggestions;
 
   static final ChatService instance = ChatService();
 
@@ -32,11 +41,16 @@ class ChatService {
   final Future<void> Function() _requestSnapshot;
   final Future<bool> Function(String text) _send;
   final Future<void> Function(String nickname) _setNickname;
+  final Future<void> Function(String text) _updateInput;
+  final Future<String?> Function(String command) _selectCommand;
+  final Future<String> Function(String nickname, String currentText) _selectMention;
+  final Future<void> Function() _clearSuggestions;
 
   final ValueNotifier<List<ChatMessage>> _publicMessages =
       ValueNotifier<List<ChatMessage>>(const []);
   final ValueNotifier<String?> _nickname = ValueNotifier<String?>(null);
   final ValueNotifier<ChatPeerList?> _peerList = ValueNotifier<ChatPeerList?>(null);
+  final ValueNotifier<ChatSuggestions> _suggestions = ValueNotifier<ChatSuggestions>(ChatSuggestions.none);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
@@ -54,6 +68,10 @@ class ChatService {
   ///
   /// 人數與列表放在同一個值裡，一定來自同一份快照。
   ValueListenable<ChatPeerList?> get peerList => _peerList;
+
+  /// 輸入框上方的 `/` 指令與 `@` 提及補完（原生 `ChatViewModel` 補完狀態的投影）；
+  /// 原生端還沒回報前是 [ChatSuggestions.none]。只隨快照更新，這裡的方法不會先行改動它。
+  ValueListenable<ChatSuggestions> get suggestions => _suggestions;
 
   /// 開始接收聊天快照。可重複呼叫，只有第一次有效。
   ///
@@ -83,6 +101,22 @@ class ChatService {
   /// 等原生端的快照回推，才會與原生實際持有的值一致。bridge 錯誤會往上拋。
   Future<void> setNickname(String nickname) => _setNickname(nickname);
 
+  /// 輸入框文字改變（使用者輸入）時呼叫，原生核心據此更新補完。文字原樣傳過去；
+  /// 程式設定文字（選取補完、送出後清空）時不要呼叫，與原生輸入框相同。bridge 錯誤會往上拋。
+  Future<void> updateInput(String text) => _updateInput(text);
+
+  /// 選取 [suggestion]，回傳輸入框的新文字；原生端已不再提供它時回傳 null（輸入框不要變）。
+  /// 只把 `command` 交回原生端。bridge 錯誤會往上拋。
+  Future<String?> selectCommandSuggestion(CommandSuggestion suggestion) => _selectCommand(suggestion.command);
+
+  /// 選取提及 [nickname]，[currentText] 是當下輸入框的文字；回傳輸入框的新文字。
+  /// bridge 錯誤會往上拋。
+  Future<String> selectMentionSuggestion(String nickname, String currentText) =>
+      _selectMention(nickname, currentText);
+
+  /// 關閉補完清單（送出後、或輸入框重新開始時）。bridge 錯誤會往上拋。
+  Future<void> clearSuggestions() => _clearSuggestions();
+
   void _handleEvent(Map<String, dynamic> event) {
     switch (event['type']) {
       case ChatEvents.publicMessages:
@@ -106,6 +140,13 @@ class ChatService {
           return;
         }
         _peerList.value = peerList;
+      case ChatEvents.suggestions:
+        final suggestions = ChatSuggestions.fromEvent(event);
+        if (suggestions == null) {
+          debugPrint('ChatService: ignoring malformed ${ChatEvents.suggestions} event');
+          return;
+        }
+        _suggestions.value = suggestions;
     }
   }
 
@@ -116,5 +157,6 @@ class ChatService {
     _publicMessages.dispose();
     _nickname.dispose();
     _peerList.dispose();
+    _suggestions.dispose();
   }
 }

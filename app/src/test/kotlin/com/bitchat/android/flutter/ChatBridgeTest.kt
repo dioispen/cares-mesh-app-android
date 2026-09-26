@@ -3,6 +3,7 @@ package com.bitchat.android.flutter
 import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.ui.ChatViewModel
+import com.bitchat.android.ui.CommandSuggestion
 import io.flutter.plugin.common.MethodCall
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -17,8 +18,10 @@ import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.same
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.Date
@@ -42,6 +45,10 @@ class ChatBridgeTest {
     private val peerDirect = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     private val privateChats = MutableStateFlow<Map<String, List<BitchatMessage>>>(emptyMap())
     private val wifiAwarePeers = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val showCommandSuggestions = MutableStateFlow(false)
+    private val commandSuggestions = MutableStateFlow<List<CommandSuggestion>>(emptyList())
+    private val showMentionSuggestions = MutableStateFlow(false)
+    private val mentionSuggestions = MutableStateFlow<List<String>>(emptyList())
     private val viewModel = mock<ChatViewModel>().also { vm ->
         whenever(vm.messages).thenReturn(messages)
         // Not thenReturn: in bytecode ChatViewModel has two getNickname() methods that differ
@@ -55,6 +62,10 @@ class ChatBridgeTest {
         whenever(vm.peerRSSI).thenAnswer { peerRSSI }
         whenever(vm.peerDirect).thenAnswer { peerDirect }
         whenever(vm.privateChats).thenAnswer { privateChats }
+        whenever(vm.showCommandSuggestions).thenAnswer { showCommandSuggestions }
+        whenever(vm.commandSuggestions).thenAnswer { commandSuggestions }
+        whenever(vm.showMentionSuggestions).thenAnswer { showMentionSuggestions }
+        whenever(vm.mentionSuggestions).thenAnswer { mentionSuggestions }
     }
     private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers)
 
@@ -414,7 +425,229 @@ class ChatBridgeTest {
         assertEquals("routed", peerRows().single().single()["connection"])
     }
 
+    // --- mention and command suggestions (#54) --------------------------------------------------
+
+    @Test
+    fun `updateInput makes upstream's text-change calls in the native composer's order`() {
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(updateInputCall("/h"), result)
+
+        assertTrue(claimed)
+        inOrder(viewModel) {
+            verify(viewModel).updateCommandSuggestions("/h")
+            verify(viewModel).updateMentionSuggestions("/h")
+        }
+        assertEquals(listOf("success:null"), result.calls)
+    }
+
+    @Test
+    fun `updateInput passes the text untouched, blank included`() {
+        listOf("", "  @al", "hi @").forEach { text ->
+            bridge.handle(updateInputCall(text), RecordingResult())
+
+            verify(viewModel).updateCommandSuggestions(text)
+            verify(viewModel).updateMentionSuggestions(text)
+        }
+    }
+
+    @Test
+    fun `updateInput without a text string is rejected`() {
+        listOf(
+            MethodCall(ChatBridge.METHOD_UPDATE_INPUT, null),
+            MethodCall(ChatBridge.METHOD_UPDATE_INPUT, mapOf("text" to 42)),
+            MethodCall(ChatBridge.METHOD_UPDATE_INPUT, "/h")
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            val claimed = bridge.handle(call, result)
+
+            assertTrue(claimed)
+            assertEquals(listOf("error:INVALID_ARGUMENT"), result.calls)
+        }
+        verify(viewModel, never()).updateCommandSuggestions(any())
+        verify(viewModel, never()).updateMentionSuggestions(any())
+    }
+
+    @Test
+    fun `selectCommandSuggestion hands upstream its own suggestion and answers the new input`() {
+        val hug = CommandSuggestion("/hug", emptyList(), "<nickname>", "send someone a warm hug")
+        commandSuggestions.value = listOf(CLEAR, hug)
+        whenever(viewModel.selectCommandSuggestion(any())).thenAnswer { invocation ->
+            "${(invocation.arguments[0] as CommandSuggestion).command} "
+        }
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(selectCommandCall("/hug"), result)
+
+        assertTrue(claimed)
+        verify(viewModel).selectCommandSuggestion(same(hug))
+        assertEquals(listOf("success:/hug "), result.calls)
+    }
+
+    @Test
+    fun `a command upstream no longer suggests answers null and selects nothing`() {
+        commandSuggestions.value = listOf(CLEAR)
+        val result = RecordingResult()
+
+        bridge.handle(selectCommandCall("/hug"), result)
+
+        assertEquals(listOf("success:null"), result.calls)
+        verify(viewModel, never()).selectCommandSuggestion(any())
+    }
+
+    @Test
+    fun `selectCommandSuggestion without a command string is rejected`() {
+        commandSuggestions.value = listOf(CLEAR)
+        listOf(
+            MethodCall(ChatBridge.METHOD_SELECT_COMMAND_SUGGESTION, null),
+            MethodCall(ChatBridge.METHOD_SELECT_COMMAND_SUGGESTION, mapOf("command" to 1)),
+            MethodCall(ChatBridge.METHOD_SELECT_COMMAND_SUGGESTION, mapOf("suggestion" to "/clear")),
+            MethodCall(ChatBridge.METHOD_SELECT_COMMAND_SUGGESTION, "/clear")
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            bridge.handle(call, result)
+
+            assertEquals(listOf("error:INVALID_ARGUMENT"), result.calls)
+        }
+        verify(viewModel, never()).selectCommandSuggestion(any())
+    }
+
+    @Test
+    fun `selectMentionSuggestion forwards nickname and current text and answers the new input`() {
+        whenever(viewModel.selectMentionSuggestion("alice", "hi @al")).thenReturn("hi @alice ")
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(selectMentionCall("alice", "hi @al"), result)
+
+        assertTrue(claimed)
+        assertEquals(listOf("success:hi @alice "), result.calls)
+    }
+
+    @Test
+    fun `selectMentionSuggestion without both strings is rejected`() {
+        listOf(
+            MethodCall(ChatBridge.METHOD_SELECT_MENTION_SUGGESTION, null),
+            MethodCall(ChatBridge.METHOD_SELECT_MENTION_SUGGESTION, mapOf("nickname" to "alice")),
+            MethodCall(ChatBridge.METHOD_SELECT_MENTION_SUGGESTION, mapOf("currentText" to "@al")),
+            MethodCall(ChatBridge.METHOD_SELECT_MENTION_SUGGESTION, mapOf("nickname" to 1, "currentText" to "@al"))
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            bridge.handle(call, result)
+
+            assertEquals(listOf("error:INVALID_ARGUMENT"), result.calls)
+        }
+        verify(viewModel, never()).selectMentionSuggestion(any(), any())
+    }
+
+    @Test
+    fun `clearSuggestions forwards to the view model`() {
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(MethodCall(ChatBridge.METHOD_CLEAR_SUGGESTIONS, null), result)
+
+        assertTrue(claimed)
+        verify(viewModel).clearSuggestions()
+        assertEquals(listOf("success:null"), result.calls)
+    }
+
+    @Test
+    fun `Dart subscribing receives the current suggestions`() {
+        showCommandSuggestions.value = true
+        commandSuggestions.value = listOf(CLEAR)
+        showMentionSuggestions.value = true
+        mentionSuggestions.value = listOf("alice")
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        val event = suggestionEvents().single()
+        assertEquals(
+            listOf(true, true, listOf("alice")),
+            listOf(event["showCommands"], event["showMentions"], event["mentions"])
+        )
+        assertEquals(listOf("/clear"), suggestionCommands().single())
+    }
+
+    @Test
+    fun `requestSnapshot pushes the current suggestions`() {
+        settleAndClear()
+        showMentionSuggestions.value = true
+        mentionSuggestions.value = listOf("alice")
+
+        bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        poster.runAll()
+
+        assertEquals(listOf("alice"), suggestionEvents().single()["mentions"])
+    }
+
+    @Test
+    fun `suggestions are pushed after the short input debounce, well before the snapshot one`() {
+        settleAndClear()
+
+        showMentionSuggestions.value = true
+        mentionSuggestions.value = listOf("alice")
+        dispatcher.scheduler.advanceTimeBy(ChatBridge.SUGGESTIONS_DEBOUNCE_MS - 1)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+        assertEquals("still inside the debounce window", emptyList<Any?>(), suggestionEvents())
+
+        dispatcher.scheduler.advanceTimeBy(1)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+
+        assertEquals(listOf("alice"), suggestionEvents().single()["mentions"])
+        assertTrue(ChatBridge.SUGGESTIONS_DEBOUNCE_MS < ChatBridge.SNAPSHOT_DEBOUNCE_MS)
+    }
+
+    @Test
+    fun `one keystroke's writes to several suggestion flows are pushed as one snapshot`() {
+        settleAndClear()
+
+        // updateCommandSuggestions then updateMentionSuggestions, as one chat_updateInput runs them
+        commandSuggestions.value = listOf(CLEAR)
+        showCommandSuggestions.value = true
+        showMentionSuggestions.value = false
+        mentionSuggestions.value = emptyList()
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        val event = suggestionEvents().single()
+        assertEquals(true, event["showCommands"])
+        assertEquals(listOf("/clear"), suggestionCommands().single())
+    }
+
+    @Test
+    fun `hiding the popups is pushed too`() {
+        showCommandSuggestions.value = true
+        commandSuggestions.value = listOf(CLEAR)
+        settleAndClear()
+
+        showCommandSuggestions.value = false
+        commandSuggestions.value = emptyList()
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(false, suggestionEvents().single()["showCommands"])
+        assertEquals(listOf(emptyList<Any?>()), suggestionCommands())
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
+
+    @Test
+    fun `a timeline upstream cleared is pushed as empty`() {
+        // What `/clear` does to ChatState.messages, the list the native mesh timeline shows too.
+        messages.value = listOf(message("A"), message("B"))
+        settleAndClear()
+
+        messages.value = emptyList()
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(emptyList<Any?>()), publicTimelineIds())
+    }
 
     @Test
     fun `requestSnapshot pushes the current public timeline`() {
@@ -508,6 +741,16 @@ class ChatBridgeTest {
     private fun setNicknameCall(nickname: String) =
         MethodCall(ChatBridge.METHOD_SET_NICKNAME, mapOf("nickname" to nickname))
 
+    private fun updateInputCall(text: String) = MethodCall(ChatBridge.METHOD_UPDATE_INPUT, mapOf("text" to text))
+
+    private fun selectCommandCall(command: String) =
+        MethodCall(ChatBridge.METHOD_SELECT_COMMAND_SUGGESTION, mapOf("command" to command))
+
+    private fun selectMentionCall(nickname: String, currentText: String) = MethodCall(
+        ChatBridge.METHOD_SELECT_MENTION_SUGGESTION,
+        mapOf("nickname" to nickname, "currentText" to currentText)
+    )
+
     private fun acceptSends(accepted: Boolean) {
         doAnswer { invocation ->
             @Suppress("UNCHECKED_CAST")
@@ -555,6 +798,15 @@ class ChatBridgeTest {
     private fun peerSnapshots(): List<Pair<Any?, List<Any?>>> =
         peerEvents().zip(peerRows()) { event, rows -> event["onlineCount"] to rows.map { it["peerID"] } }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun suggestionEvents(): List<Map<String, Any?>> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_SUGGESTIONS }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun suggestionCommands(): List<List<Any?>> =
+        suggestionEvents().map { event -> (event["commands"] as List<Map<String, Any?>>).map { it["command"] } }
+
     /** Subscribes, lets the initial projections run, and forgets what they pushed. */
     private fun settleAndClear() {
         events.onListen(null, sink)
@@ -578,5 +830,6 @@ class ChatBridgeTest {
         const val MY_PEER_ID = "a1b2c3d4e5f60718"
         const val ALICE = "1111111111111111"
         const val BOB = "2222222222222222"
+        val CLEAR = CommandSuggestion("/clear", emptyList(), null, "clear chat messages")
     }
 }

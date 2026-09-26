@@ -14,6 +14,8 @@ Map<String, Object?> _fullMessage({Object? deliveryStatus}) => {
       'deliveryStatus': deliveryStatus,
       'isFromSelf': false,
       'isSystem': false,
+      'mentionsMe': false,
+      'mentionSpans': <Object?>[],
     };
 
 void main() {
@@ -32,6 +34,8 @@ void main() {
       expect(m.deliveryStatus, isNull);
       expect(m.isFromSelf, isFalse);
       expect(m.isSystem, isFalse);
+      expect(m.mentionsMe, isFalse);
+      expect(m.mentionSpans, isEmpty);
     });
 
     test('accepts the Map<Object?, Object?> shape the codec actually delivers', () {
@@ -57,6 +61,8 @@ void main() {
       expect(m.deliveryStatus, isNull);
       expect(m.isFromSelf, isFalse);
       expect(m.isSystem, isFalse);
+      expect(m.mentionsMe, isFalse);
+      expect(m.mentionSpans, isEmpty);
     });
 
     test('falls back to defaults when fields have the wrong type', () {
@@ -72,6 +78,8 @@ void main() {
         'deliveryStatus': 'read',
         'isFromSelf': 'true',
         'isSystem': 0,
+        'mentionsMe': 'yes',
+        'mentionSpans': {'start': 0},
       })!;
 
       expect(m.id, '');
@@ -85,6 +93,8 @@ void main() {
       expect(m.deliveryStatus, isNull);
       expect(m.isFromSelf, isFalse);
       expect(m.isSystem, isFalse);
+      expect(m.mentionsMe, isFalse);
+      expect(m.mentionSpans, isEmpty);
     });
 
     test('keeps only the string entries of mentions', () {
@@ -97,6 +107,66 @@ void main() {
       expect(ChatMessage.fromMap(null), isNull);
       expect(ChatMessage.fromMap('hello'), isNull);
       expect(ChatMessage.fromMap([1, 2]), isNull);
+    });
+  });
+
+  group('mentions of us (#54)', () {
+    ChatMessage parse({required String content, Object? spans, Object? mentionsMe = false}) =>
+        ChatMessage.fromMap({..._fullMessage(), 'content': content, 'mentionSpans': spans, 'mentionsMe': mentionsMe})!;
+
+    test('mentionsMe is taken from Kotlin as is', () {
+      expect(parse(content: 'hey @me', mentionsMe: true).mentionsMe, isTrue);
+      expect(parse(content: 'hey @me', mentionsMe: false).mentionsMe, isFalse);
+    });
+
+    test('mention spans are parsed in order', () {
+      final m = parse(content: '@bob and @me#1a2b, look', spans: [
+        {'start': 0, 'end': 4, 'isMe': false},
+        {'start': 9, 'end': 17, 'isMe': true},
+      ]);
+
+      expect(m.mentionSpans.map((s) => (s.start, s.end, s.isMe)), [(0, 4, false), (9, 17, true)]);
+      expect(m.mentionSpans.map((s) => m.content.substring(s.start, s.end)), ['@bob', '@me#1a2b']);
+    });
+
+    test('span offsets are UTF-16 indices, the unit Kotlin sends', () {
+      final m = parse(content: '🫂 @小明 hi', spans: [
+        {'start': 3, 'end': 6, 'isMe': true},
+      ]);
+
+      expect(m.content.substring(m.mentionSpans.single.start, m.mentionSpans.single.end), '@小明');
+    });
+
+    test('a span with a missing isMe is not ours', () {
+      final m = parse(content: '@bob', spans: [
+        {'start': 0, 'end': 4},
+      ]);
+
+      expect(m.mentionSpans.single.isMe, isFalse);
+    });
+
+    test('spans that do not fit the content are dropped, never thrown on', () {
+      final m = parse(content: 'hi @bob @me', spans: [
+        {'start': 3, 'end': 7, 'isMe': false},
+        {'start': 5, 'end': 9, 'isMe': false}, // overlaps the one before
+        {'start': 8, 'end': 30, 'isMe': true}, // runs past the end
+        {'start': -1, 'end': 2, 'isMe': true},
+        {'start': 4, 'end': 4, 'isMe': true}, // empty
+        {'start': '8', 'end': 11},
+        'garbage',
+        null,
+        {'start': 8, 'end': 11, 'isMe': true},
+      ]);
+
+      expect(m.mentionSpans.map((s) => (s.start, s.end, s.isMe)), [(3, 7, false), (8, 11, true)]);
+    });
+
+    test('spans are read-only', () {
+      final m = parse(content: '@bob', spans: [
+        {'start': 0, 'end': 4, 'isMe': false},
+      ]);
+
+      expect(() => m.mentionSpans.clear(), throwsUnsupportedError);
     });
   });
 

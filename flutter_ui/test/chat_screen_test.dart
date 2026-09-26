@@ -14,6 +14,9 @@ void main() {
   late Future<bool> Function(String text) send;
   late List<String> nicknamesSet;
   late Future<void> Function(String nickname) setNickname;
+  late List<String> composerCalls;
+  late Future<String?> Function(String command) selectCommand;
+  late Future<String> Function(String nickname, String currentText) selectMention;
   late ChatService service;
 
   setUp(() async {
@@ -25,11 +28,24 @@ void main() {
     };
     nicknamesSet = [];
     setNickname = (nickname) async => nicknamesSet.add(nickname);
+    composerCalls = [];
+    selectCommand = (command) async => '$command ';
+    selectMention = (nickname, currentText) async => '@$nickname ';
     service = ChatService(
       events: () => events.stream,
       requestSnapshot: () async {},
       sendMessage: (text) => send(text),
       setNickname: (nickname) => setNickname(nickname),
+      updateInput: (text) async => composerCalls.add('updateInput:$text'),
+      selectCommandSuggestion: (command) {
+        composerCalls.add('selectCommand:$command');
+        return selectCommand(command);
+      },
+      selectMentionSuggestion: (nickname, currentText) {
+        composerCalls.add('selectMention:$nickname|$currentText');
+        return selectMention(nickname, currentText);
+      },
+      clearSuggestions: () async => composerCalls.add('clearSuggestions'),
     );
     await service.start();
   });
@@ -58,6 +74,8 @@ void main() {
     String content = 'hello',
     bool isFromSelf = false,
     bool isSystem = false,
+    bool mentionsMe = false,
+    List<Map<String, Object?>> mentionSpans = const [],
   }) =>
       {
         'id': id,
@@ -66,6 +84,8 @@ void main() {
         'timestamp': DateTime(2024, 5, 1, 9, 7).millisecondsSinceEpoch,
         'isFromSelf': isFromSelf,
         'isSystem': isSystem,
+        'mentionsMe': mentionsMe,
+        'mentionSpans': mentionSpans,
       };
 
   testWidgets('shows no made-up messages before the mesh has any', (tester) async {
@@ -414,6 +434,272 @@ void main() {
       await tester.tap(inSheet(find.text('alice')));
       await tester.pumpAndSettle();
       expect(sheet(), findsOneWidget);
+    });
+  });
+
+  group('mention and command suggestions (#54)', () {
+    Map<String, Object?> command(String command,
+            {List<String> aliases = const [], String? syntax, String description = ''}) =>
+        {'command': command, 'aliases': aliases, 'syntax': syntax, 'description': description};
+
+    Future<void> pushSuggestions(
+      WidgetTester tester, {
+      bool showCommands = false,
+      List<Map<String, Object?>> commands = const [],
+      bool showMentions = false,
+      List<String> mentions = const [],
+    }) async {
+      events.add({
+        'type': 'chat_suggestions',
+        'showCommands': showCommands,
+        'commands': commands,
+        'showMentions': showMentions,
+        'mentions': mentions,
+      });
+      await tester.pump();
+      await tester.pump();
+    }
+
+    TextEditingController composer(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).controller!;
+
+    testWidgets('opening the chat clears popups left over from an earlier composer', (tester) async {
+      await pumpChat(tester);
+
+      expect(composerCalls, ['clearSuggestions']);
+    });
+
+    testWidgets('every edit is handed to the native core as it is typed', (tester) async {
+      await pumpChat(tester);
+      composerCalls.clear();
+
+      await tester.enterText(find.byType(TextField), '/');
+      await tester.enterText(find.byType(TextField), '/h');
+      await tester.enterText(find.byType(TextField), 'hi @al');
+
+      expect(composerCalls, ['updateInput:/', 'updateInput:/h', 'updateInput:hi @al']);
+    });
+
+    testWidgets('no popup until the native side offers one', (tester) async {
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '/');
+
+      expect(find.text('/hug'), findsNothing);
+      expect(find.text('提及'), findsNothing);
+    });
+
+    testWidgets('the native command list is shown above the composer', (tester) async {
+      await pumpChat(tester);
+
+      await pushSuggestions(tester, showCommands: true, commands: [
+        command('/hug', syntax: '<nickname>', description: 'send someone a warm hug'),
+        command('/j', aliases: ['/join'], syntax: '<channel>', description: 'join or create a channel'),
+        command('/w', description: "see who's online"),
+      ]);
+
+      expect(find.text('/hug'), findsOneWidget);
+      expect(find.text('<nickname>'), findsOneWidget);
+      expect(find.text('send someone a warm hug'), findsOneWidget);
+      expect(find.text('/j, /join'), findsOneWidget);
+      expect(find.text("see who's online"), findsOneWidget);
+      final hug = tester.getTopLeft(find.text('/hug')).dy;
+      final w = tester.getTopLeft(find.text('/w')).dy;
+      expect(hug, lessThan(w), reason: 'in the order the native side sends');
+      expect(w, lessThan(tester.getTopLeft(find.byType(TextField)).dy));
+    });
+
+    testWidgets('a popup the native side hides is not shown, list or not', (tester) async {
+      await pumpChat(tester);
+
+      await pushSuggestions(tester,
+          showCommands: false, commands: [command('/hug')], showMentions: false, mentions: ['alice']);
+
+      expect(find.text('/hug'), findsNothing);
+      expect(find.text('@alice'), findsNothing);
+    });
+
+    testWidgets('the popup goes away when the native side hides it', (tester) async {
+      await pumpChat(tester);
+      await pushSuggestions(tester, showCommands: true, commands: [command('/hug')]);
+
+      await pushSuggestions(tester);
+
+      expect(find.text('/hug'), findsNothing);
+    });
+
+    testWidgets('choosing a command puts the native text in the field, cursor at the end', (tester) async {
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '/h');
+      await pushSuggestions(tester, showCommands: true, commands: [command('/hug', syntax: '<nickname>')]);
+      composerCalls.clear();
+
+      await tester.tap(find.text('/hug'));
+      await tester.pump();
+
+      expect(composerCalls, ['selectCommand:/hug']);
+      expect(composer(tester).text, '/hug ');
+      expect(composer(tester).selection, const TextSelection.collapsed(offset: 5));
+    });
+
+    testWidgets('a command the native side no longer offers leaves the field alone', (tester) async {
+      selectCommand = (command) async => null;
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '/h');
+      await pushSuggestions(tester, showCommands: true, commands: [command('/hug')]);
+
+      await tester.tap(find.text('/hug'));
+      await tester.pump();
+
+      expect(composer(tester).text, '/h');
+    });
+
+    testWidgets('online nicknames are offered as @mentions', (tester) async {
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), 'hi @');
+
+      await pushSuggestions(tester, showMentions: true, mentions: ['alice', '小明']);
+
+      expect(find.text('@alice'), findsOneWidget);
+      expect(find.text('@小明'), findsOneWidget);
+      expect(find.text('提及'), findsNWidgets(2));
+    });
+
+    testWidgets('choosing a mention hands over the typed text and inserts the native result', (tester) async {
+      selectMention = (nickname, currentText) async => 'hi @$nickname ';
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), 'hi @al');
+      await pushSuggestions(tester, showMentions: true, mentions: ['alice']);
+      composerCalls.clear();
+
+      await tester.tap(find.text('@alice'));
+      await tester.pump();
+
+      expect(composerCalls, ['selectMention:alice|hi @al']);
+      expect(composer(tester).text, 'hi @alice ');
+      expect(composer(tester).selection, const TextSelection.collapsed(offset: 10));
+    });
+
+    testWidgets('a mention result that arrives after more typing does not overwrite it', (tester) async {
+      final answer = Completer<String>();
+      selectMention = (nickname, currentText) => answer.future;
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), 'hi @al');
+      await pushSuggestions(tester, showMentions: true, mentions: ['alice']);
+
+      await tester.tap(find.text('@alice'));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'hi @alx');
+      answer.complete('hi @alice ');
+      await tester.pump();
+
+      expect(composer(tester).text, 'hi @alx');
+    });
+
+    testWidgets('a failed selection keeps the field and does not crash', (tester) async {
+      selectMention = (nickname, currentText) async => throw PlatformException(code: 'boom');
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '@al');
+      await pushSuggestions(tester, showMentions: true, mentions: ['alice']);
+
+      await tester.tap(find.text('@alice'));
+      await tester.pump();
+
+      expect(composer(tester).text, '@al');
+    });
+
+    testWidgets('an accepted send clears the popups, as the native composer does', (tester) async {
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '/w');
+      composerCalls.clear();
+
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+
+      expect(sent, ['/w']);
+      expect(composerCalls, ['clearSuggestions']);
+    });
+
+    testWidgets('a refused send keeps the popups', (tester) async {
+      send = (text) async => false;
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '/w');
+      composerCalls.clear();
+
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+
+      expect(composerCalls, isEmpty);
+    });
+  });
+
+  group('mentions of me (#54)', () {
+    List<TextSpan> spansOf(WidgetTester tester, String text) {
+      final spans = <TextSpan>[];
+      tester.widget<Text>(find.text(text)).textSpan?.visitChildren((span) {
+        if (span is TextSpan && span.text != null) spans.add(span);
+        return true;
+      });
+      return spans;
+    }
+
+    testWidgets('a message that mentions me is marked', (tester) async {
+      await pumpChat(tester);
+
+      await pushTimeline(tester, [
+        message('A', sender: 'alice', content: 'hey @me', mentionsMe: true, mentionSpans: [
+          {'start': 4, 'end': 7, 'isMe': true},
+        ]),
+        message('B', sender: 'bob', content: 'hey @carol', mentionSpans: [
+          {'start': 4, 'end': 10, 'isMe': false},
+        ]),
+      ]);
+
+      expect(find.text('提及你'), findsOneWidget);
+      final mark = tester.getTopLeft(find.text('提及你')).dy;
+      expect(mark, lessThan(tester.getTopLeft(find.text('hey @me')).dy));
+      expect(mark, lessThan(tester.getTopLeft(find.text('bob')).dy));
+    });
+
+    testWidgets('the mark follows mentionsMe only, not the spans', (tester) async {
+      await pumpChat(tester);
+
+      // Our own note to ourselves: Kotlin flags the token as ours but not the message.
+      await pushTimeline(tester, [
+        message('A', sender: 'me', content: 'note to @me', isFromSelf: true, mentionSpans: [
+          {'start': 8, 'end': 11, 'isMe': true},
+        ]),
+      ]);
+
+      expect(find.text('提及你'), findsNothing);
+    });
+
+    testWidgets('mention tokens are emphasised in the text, mine the most', (tester) async {
+      await pumpChat(tester);
+
+      await pushTimeline(tester, [
+        message('A', content: 'hi @bob and @me!', mentionsMe: true, mentionSpans: [
+          {'start': 3, 'end': 7, 'isMe': false},
+          {'start': 12, 'end': 15, 'isMe': true},
+        ]),
+      ]);
+
+      final spans = spansOf(tester, 'hi @bob and @me!');
+      expect(spans.map((s) => s.text), ['hi ', '@bob', ' and ', '@me', '!']);
+      final bob = spans[1].style!;
+      final me = spans[3].style!;
+      expect(bob.fontWeight, FontWeight.w600);
+      expect(me.fontWeight, FontWeight.w700);
+      expect(me.backgroundColor, isNotNull);
+      expect(me.color, isNot(bob.color));
+    });
+
+    testWidgets('a message without mentions is plain text', (tester) async {
+      await pumpChat(tester);
+
+      await pushTimeline(tester, [message('A', content: 'plain words')]);
+
+      expect(spansOf(tester, 'plain words'), isEmpty);
+      expect(tester.widget<Text>(find.text('plain words')).data, 'plain words');
     });
   });
 }

@@ -26,8 +26,9 @@ import kotlinx.coroutines.launch
  * of its own.
  *
  * Projection is snapshot-based: each [Projection] re-pushes its whole `chat_*` event, debounced,
- * whenever the upstream flows behind it change. Dart can always get the current snapshots back —
- * they are pushed when Dart (re)subscribes to the event channel, and on demand through
+ * whenever the upstream flows behind it change (most after [SNAPSHOT_DEBOUNCE_MS]; the composer's
+ * suggestions after the much shorter [SUGGESTIONS_DEBOUNCE_MS]). Dart can always get the current
+ * snapshots back — they are pushed when Dart (re)subscribes to the event channel, and on demand through
  * [METHOD_REQUEST_SNAPSHOT], which a Dart listener that joined the shared broadcast stream late
  * (and so never triggered `onListen`) uses to catch up.
  *
@@ -50,8 +51,15 @@ class ChatBridge(
     private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers
 ) : BridgeMethodHandler {
 
-    /** One `chat_*` snapshot event: re-pushed when [changes] emits, built from current state. */
-    private class Projection(val changes: Flow<*>, val snapshot: () -> Map<String, Any?>)
+    /**
+     * One `chat_*` snapshot event: re-pushed [debounceMs] after [changes] last emitted, built from
+     * current state.
+     */
+    private class Projection(
+        val changes: Flow<*>,
+        val debounceMs: Long = SNAPSHOT_DEBOUNCE_MS,
+        val snapshot: () -> Map<String, Any?>
+    )
 
     private val projections = listOf(
         Projection(
@@ -79,6 +87,25 @@ class ChatBridge(
                 wifiAwarePeers
             ),
             snapshot = { ChatSerialization.peersEvent(currentPeerInputs(), ::isDirectOnMesh) }
+        ),
+        // The `/` and `@` popups follow every keystroke (chat_updateInput), so they get their own
+        // short debounce; see SUGGESTIONS_DEBOUNCE_MS.
+        Projection(
+            changes = merge(
+                chatViewModel.showCommandSuggestions,
+                chatViewModel.commandSuggestions,
+                chatViewModel.showMentionSuggestions,
+                chatViewModel.mentionSuggestions
+            ),
+            debounceMs = SUGGESTIONS_DEBOUNCE_MS,
+            snapshot = {
+                ChatSerialization.suggestionsEvent(
+                    showCommands = chatViewModel.showCommandSuggestions.value,
+                    commands = chatViewModel.commandSuggestions.value,
+                    showMentions = chatViewModel.showMentionSuggestions.value,
+                    mentions = chatViewModel.mentionSuggestions.value
+                )
+            }
         )
     )
 
@@ -86,7 +113,7 @@ class ChatBridge(
         projections.forEach { projection ->
             scope.launch {
                 projection.changes
-                    .debounce(SNAPSHOT_DEBOUNCE_MS)
+                    .debounce(projection.debounceMs)
                     .collect { events.emit(projection.snapshot()) }
             }
         }
@@ -98,6 +125,13 @@ class ChatBridge(
             METHOD_SEND_MESSAGE -> sendMessage(call, result)
             METHOD_SET_NICKNAME -> setNickname(call, result)
             METHOD_GET_NICKNAME -> result.success(chatViewModel.nickname.value)
+            METHOD_UPDATE_INPUT -> updateInput(call, result)
+            METHOD_SELECT_COMMAND_SUGGESTION -> selectCommandSuggestion(call, result)
+            METHOD_SELECT_MENTION_SUGGESTION -> selectMentionSuggestion(call, result)
+            METHOD_CLEAR_SUGGESTIONS -> {
+                chatViewModel.clearSuggestions()
+                result.success(null)
+            }
             METHOD_REQUEST_SNAPSHOT -> {
                 pushSnapshots()
                 result.success(null)
@@ -142,6 +176,61 @@ class ChatBridge(
         result.success(null)
     }
 
+    /**
+     * `chat_updateInput({text})`: what the native composer does on every text change
+     * (`ChatScreen` `onMessageTextChange`) — `updateCommandSuggestions` then
+     * `updateMentionSuggestions`, with the text untouched. The resulting popups reach Dart through
+     * the `chat_suggestions` snapshot. (Upstream also saves a draft there, but only for a private
+     * conversation; the public chat has none.)
+     */
+    private fun updateInput(call: MethodCall, result: MethodChannel.Result) {
+        val text = (call.arguments as? Map<*, *>)?.get("text") as? String
+        if (text == null) {
+            result.error("INVALID_ARGUMENT", "$METHOD_UPDATE_INPUT expects {text: String}", null)
+            return
+        }
+        chatViewModel.updateCommandSuggestions(text)
+        chatViewModel.updateMentionSuggestions(text)
+        result.success(null)
+    }
+
+    /**
+     * `chat_selectCommandSuggestion({command})` → the composer's new text from
+     * `ChatViewModel.selectCommandSuggestion`, which also hides the popup. Dart names the
+     * suggestion by its `command`; the upstream [com.bitchat.android.ui.CommandSuggestion] is
+     * looked up in the list upstream is offering, never rebuilt from Dart's copy. A command no
+     * longer offered (the list moved on) answers null and selects nothing.
+     */
+    private fun selectCommandSuggestion(call: MethodCall, result: MethodChannel.Result) {
+        val command = (call.arguments as? Map<*, *>)?.get("command") as? String
+        if (command == null) {
+            result.error("INVALID_ARGUMENT", "$METHOD_SELECT_COMMAND_SUGGESTION expects {command: String}", null)
+            return
+        }
+        val suggestion = chatViewModel.commandSuggestions.value.firstOrNull { it.command == command }
+        result.success(suggestion?.let(chatViewModel::selectCommandSuggestion))
+    }
+
+    /**
+     * `chat_selectMentionSuggestion({nickname, currentText})` → the composer's new text from
+     * `ChatViewModel.selectMentionSuggestion`, which replaces the `@` fragment being typed and
+     * hides the popup.
+     */
+    private fun selectMentionSuggestion(call: MethodCall, result: MethodChannel.Result) {
+        val arguments = call.arguments as? Map<*, *>
+        val nickname = arguments?.get("nickname") as? String
+        val currentText = arguments?.get("currentText") as? String
+        if (nickname == null || currentText == null) {
+            result.error(
+                "INVALID_ARGUMENT",
+                "$METHOD_SELECT_MENTION_SUGGESTION expects {nickname: String, currentText: String}",
+                null
+            )
+            return
+        }
+        result.success(chatViewModel.selectMentionSuggestion(nickname, currentText))
+    }
+
     private fun pushSnapshots() {
         if (!scope.isActive) return
         projections.forEach { events.emit(it.snapshot()) }
@@ -182,7 +271,23 @@ class ChatBridge(
         const val METHOD_GET_NICKNAME = "chat_getNickname"
         const val METHOD_REQUEST_SNAPSHOT = "chat_requestSnapshot"
 
+        /** The composer's text changed: refresh the `/` and `@` popups. */
+        const val METHOD_UPDATE_INPUT = "chat_updateInput"
+        const val METHOD_SELECT_COMMAND_SUGGESTION = "chat_selectCommandSuggestion"
+        const val METHOD_SELECT_MENTION_SUGGESTION = "chat_selectMentionSuggestion"
+
+        /** Hide both popups; the native composer does this after a send clears the field. */
+        const val METHOD_CLEAR_SUGGESTIONS = "chat_clearSuggestions"
+
         /** Coalesces bursts (history sync, relayed floods) into one snapshot push. */
         const val SNAPSHOT_DEBOUNCE_MS = 100L
+
+        /**
+         * The popups answer typing, so 100 ms would be felt: with keys less than 100 ms apart the
+         * list would not move until typing paused. One chat_updateInput writes up to four flows in
+         * a row on the main thread; any positive debounce folds those into one snapshot, and one
+         * frame (16 ms) does so without a visible delay.
+         */
+        const val SUGGESTIONS_DEBOUNCE_MS = 16L
     }
 }

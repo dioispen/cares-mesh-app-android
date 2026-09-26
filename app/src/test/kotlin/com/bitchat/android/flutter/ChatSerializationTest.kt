@@ -2,6 +2,7 @@ package com.bitchat.android.flutter
 
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.DeliveryStatus
+import com.bitchat.android.ui.CommandSuggestion
 import io.flutter.plugin.common.StandardMessageCodec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,7 +54,9 @@ class ChatSerializationTest {
                 "isRelay" to true,
                 "deliveryStatus" to null,
                 "isFromSelf" to false,
-                "isSystem" to false
+                "isSystem" to false,
+                "mentionsMe" to false,
+                "mentionSpans" to emptyList<Any?>()
             ),
             map
         )
@@ -174,6 +177,49 @@ class ChatSerializationTest {
         assertEquals(false, map["isFromSelf"])
     }
 
+    // --- mentions (#54) ------------------------------------------------------------------------
+
+    @Test
+    fun `a message mentioning us is flagged and its mention tokens are carried as spans`() {
+        val map = ChatSerialization.message(message(content = "@bob and @me#1a2b, look"), me)
+
+        assertEquals(true, map["mentionsMe"])
+        assertEquals(
+            listOf(
+                mapOf("start" to 0, "end" to 4, "isMe" to false),
+                mapOf("start" to 9, "end" to 17, "isMe" to true)
+            ),
+            map["mentionSpans"]
+        )
+    }
+
+    @Test
+    fun `our own message keeps its spans but does not mention us`() {
+        val map = ChatSerialization.message(message(sender = "me", content = "reminder for @me"), me)
+
+        assertEquals(false, map["mentionsMe"])
+        assertEquals(listOf(mapOf("start" to 13, "end" to 16, "isMe" to true)), map["mentionSpans"])
+    }
+
+    @Test
+    fun `a system line carries no mention spans, as upstream renders it as plain text`() {
+        val map = ChatSerialization.message(
+            message(sender = "system", senderPeerID = null, content = "online users: @me, @bob"),
+            me
+        )
+
+        assertEquals(false, map["mentionsMe"])
+        assertEquals(emptyList<Any?>(), map["mentionSpans"])
+    }
+
+    @Test
+    fun `a nickname change re-evaluates who is mentioned`() {
+        val msg = message(content = "hi @bob")
+
+        assertEquals(false, ChatSerialization.message(msg, me)["mentionsMe"])
+        assertEquals(true, ChatSerialization.message(msg, me.copy(nickname = "bob"))["mentionsMe"])
+    }
+
     @Test
     fun `every value survives a StandardMessageCodec round trip`() {
         val statuses = listOf(
@@ -187,7 +233,7 @@ class ChatSerializationTest {
         )
         val event = ChatSerialization.publicMessagesEvent(
             statuses.mapIndexed { i, status ->
-                message(id = "M$i", mentions = listOf("me"), deliveryStatus = status)
+                message(id = "M$i", content = "hi @me and @bob", mentions = listOf("me"), deliveryStatus = status)
             },
             me
         )
@@ -367,6 +413,82 @@ class ChatSerializationTest {
 
         assertEquals(event, codec.decodeMessage(encoded))
     }
+
+    // --- suggestions (#54) ---------------------------------------------------------------------
+
+    @Test
+    fun `command suggestion maps every upstream field`() {
+        assertEquals(
+            mapOf(
+                "command" to "/m",
+                "aliases" to listOf("/msg"),
+                "syntax" to "<nickname> [message]",
+                "description" to "send private message"
+            ),
+            ChatSerialization.commandSuggestion(
+                CommandSuggestion("/m", listOf("/msg"), "<nickname> [message]", "send private message")
+            )
+        )
+    }
+
+    @Test
+    fun `command suggestion without syntax or aliases keeps a null and an empty list`() {
+        val map = ChatSerialization.commandSuggestion(CommandSuggestion("/w", emptyList(), null, "see who's online"))
+
+        assertEquals(emptyList<String>(), map["aliases"])
+        assertTrue(map.containsKey("syntax"))
+        assertNull(map["syntax"])
+    }
+
+    @Test
+    fun `suggestions event carries both popups in upstream order`() {
+        val event = ChatSerialization.suggestionsEvent(
+            showCommands = true,
+            commands = listOf(
+                CommandSuggestion("/hug", emptyList(), "<nickname>", "send someone a warm hug"),
+                CommandSuggestion("/w", emptyList(), null, "see who's online")
+            ),
+            showMentions = true,
+            mentions = listOf("bob", "alice")
+        )
+
+        assertEquals("chat_suggestions", event["type"])
+        assertEquals(true, event["showCommands"])
+        assertEquals(listOf("/hug", "/w"), commandMaps(event).map { it["command"] })
+        assertEquals(true, event["showMentions"])
+        assertEquals(listOf("bob", "alice"), event["mentions"])
+    }
+
+    @Test
+    fun `no suggestions is two hidden, empty popups, not missing keys`() {
+        assertEquals(
+            mapOf(
+                "type" to "chat_suggestions",
+                "showCommands" to false,
+                "commands" to emptyList<Any?>(),
+                "showMentions" to false,
+                "mentions" to emptyList<String>()
+            ),
+            ChatSerialization.suggestionsEvent(false, emptyList(), false, emptyList())
+        )
+    }
+
+    @Test
+    fun `suggestions event survives a StandardMessageCodec round trip`() {
+        val event = ChatSerialization.suggestionsEvent(
+            showCommands = true,
+            commands = listOf(CommandSuggestion("/j", listOf("/join"), "<channel>", "join or create a channel")),
+            showMentions = true,
+            mentions = listOf("小明", "anon1234")
+        )
+        val codec = StandardMessageCodec.INSTANCE
+        val encoded = codec.encodeMessage(event)!!.also { it.rewind() }
+
+        assertEquals(event, codec.decodeMessage(encoded))
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun commandMaps(event: Map<String, Any?>) = event["commands"] as List<Map<String, Any?>>
 
     @Suppress("UNCHECKED_CAST")
     private fun peerMaps(event: Map<String, Any?>) = event["peers"] as List<Map<String, Any?>>

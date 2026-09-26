@@ -2,6 +2,7 @@ package com.bitchat.android.flutter
 
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.DeliveryStatus
+import com.bitchat.android.ui.CommandSuggestion
 import com.bitchat.android.ui.isFromSelf
 
 /**
@@ -15,7 +16,7 @@ data class ChatSelf(val peerID: String, val nickname: String)
  *
  * Every value is a `StandardMessageCodec` type: String, Boolean, Int, Long (epoch millis), null,
  * List and String-keyed Map. The Dart side (`flutter_ui/lib/models/chat_message.dart`,
- * `chat_peer.dart`) mirrors these keys; change both together.
+ * `chat_peer.dart`, `chat_suggestions.dart`) mirrors these keys; change both together.
  */
 object ChatSerialization {
 
@@ -27,6 +28,9 @@ object ChatSerialization {
 
     /** Snapshot of the mesh peer list and online count (see [ChatPeerList]). */
     const val EVENT_PEERS = "chat_peers"
+
+    /** Snapshot of the composer's `/` command and `@` mention popups (`ChatViewModel` suggestions). */
+    const val EVENT_SUGGESTIONS = "chat_suggestions"
 
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
@@ -40,8 +44,10 @@ object ChatSerialization {
 
     /**
      * One message. `deliveryStatus` is null when upstream has none (every received public
-     * message); `mentions` is always a list, empty when there are none. `isFromSelf` and
-     * `isSystem` apply the upstream UI's rules so Dart does not re-derive them.
+     * message); `mentions` is always a list, empty when there are none. `isFromSelf`, `isSystem`,
+     * `mentionsMe` and `mentionSpans` apply the upstream UI's rules (see [ChatMentions]) so Dart
+     * does not re-derive them. `mentionSpans` are `{start, end, isMe}` UTF-16 ranges of the
+     * `@name` tokens in `content`, in order; `mentions` stays the raw upstream field.
      */
     fun message(message: BitchatMessage, self: ChatSelf): Map<String, Any?> = mapOf(
         "id" to message.id,
@@ -54,7 +60,15 @@ object ChatSerialization {
         "isRelay" to message.isRelay,
         "deliveryStatus" to deliveryStatus(message.deliveryStatus),
         "isFromSelf" to message.isFromSelf(self.nickname, self.peerID),
-        "isSystem" to (message.sender == SYSTEM_SENDER)
+        "isSystem" to isSystemLine(message),
+        "mentionsMe" to ChatMentions.mentionsMe(message, self),
+        "mentionSpans" to ChatMentions.spans(message, self).map(::mentionSpan)
+    )
+
+    fun mentionSpan(span: ChatMentions.Span): Map<String, Any?> = mapOf(
+        "start" to span.start,
+        "end" to span.end,
+        "isMe" to span.isMe
     )
 
     /** Flattens the sealed [DeliveryStatus] into `kind` plus that subtype's fields; null stays null. */
@@ -120,6 +134,40 @@ object ChatSerialization {
         "onlineCount" to ChatPeerList.onlineCount(inputs),
         "peers" to ChatPeerList.rows(inputs, isDirectFallback).map(::peer)
     )
+
+    /**
+     * One `/` command suggestion, field for field as upstream's [CommandSuggestion]. Dart hands
+     * back only `command` to select it (`chat_selectCommandSuggestion`); the bridge looks the
+     * upstream object up again rather than rebuilding it.
+     */
+    fun commandSuggestion(suggestion: CommandSuggestion): Map<String, Any?> = mapOf(
+        "command" to suggestion.command,
+        "aliases" to suggestion.aliases,
+        "syntax" to suggestion.syntax,
+        "description" to suggestion.description
+    )
+
+    /**
+     * `{type: "chat_suggestions", showCommands, commands: [commandSuggestion, ...], showMentions,
+     * mentions: [nickname, ...]}` — `ChatViewModel`'s four suggestion flows as they are. Lists are
+     * in upstream order (commands sorted, nicknames filtered and sorted by `CommandProcessor`); the
+     * native composer shows a popup when its flag is set and its list is not empty.
+     */
+    fun suggestionsEvent(
+        showCommands: Boolean,
+        commands: List<CommandSuggestion>,
+        showMentions: Boolean,
+        mentions: List<String>
+    ): Map<String, Any?> = mapOf(
+        "type" to EVENT_SUGGESTIONS,
+        "showCommands" to showCommands,
+        "commands" to commands.map(::commandSuggestion),
+        "showMentions" to showMentions,
+        "mentions" to mentions
+    )
+
+    /** True for upstream's own notices (command output, debug lines), drawn as system lines. */
+    fun isSystemLine(message: BitchatMessage): Boolean = message.sender == SYSTEM_SENDER
 
     /** True for the chat line MessageHandler.handleHealthReport() makes out of a Health Report. */
     fun isHealthReportLine(message: BitchatMessage): Boolean =

@@ -2,8 +2,8 @@
 ///
 /// 欄位與 Kotlin `ChatSerialization.message`
 /// （`app/src/main/java/com/bitchat/android/flutter/ChatSerialization.kt`）一一對應，兩邊要一起改。
-/// 聊天規則（誰是自己、哪些是系統訊息、送達狀態怎麼變）都由原生 `ChatViewModel` 決定，
-/// 這裡只負責把 bridge 推來的 map 轉成型別，不重新推導。
+/// 聊天規則（誰是自己、哪些是系統訊息、送達狀態怎麼變、誰被 @ 到）都由原生 `ChatViewModel`
+/// 與 Kotlin 投影層決定，這裡只負責把 bridge 推來的 map 轉成型別，不重新推導。
 ///
 /// 解析一律容錯：缺欄位或型別不符時用預設值，未知的送達狀態 `kind` 變成 [DeliveryUnknown]，
 /// 永遠不丟例外——bridge 的資料不該讓聊天室崩潰。
@@ -37,6 +37,8 @@ class ChatMessage {
     this.deliveryStatus,
     this.isFromSelf = false,
     this.isSystem = false,
+    this.mentionsMe = false,
+    this.mentionSpans = const [],
   });
 
   final String id;
@@ -61,6 +63,14 @@ class ChatMessage {
   /// 上游自己產生的通知（例如指令結果），以系統訊息樣式顯示。
   final bool isSystem;
 
+  /// 別人傳來、內容 @ 到我目前暱稱的訊息，要醒目標示。規則在 Kotlin `ChatMentions`
+  /// （照原生聊天室的提及 chip：`@暱稱` 或 `@暱稱#abcd`，大小寫須相同；自己的訊息不算）。
+  final bool mentionsMe;
+
+  /// [content] 中每個 `@暱稱` token 的位置（UTF-16 索引，與 Dart 字串相同），依序、不重疊、
+  /// 都在 [content] 範圍內；系統訊息沒有。不可修改。
+  final List<MentionSpan> mentionSpans;
+
   /// 不是 Map 時回傳 null；其餘情況一定回傳訊息。
   static ChatMessage? fromMap(Object? raw) {
     if (raw is! Map) return null;
@@ -76,6 +86,8 @@ class ChatMessage {
       deliveryStatus: DeliveryStatus.fromMap(raw['deliveryStatus']),
       isFromSelf: _bool(raw['isFromSelf']),
       isSystem: _bool(raw['isSystem']),
+      mentionsMe: _bool(raw['mentionsMe']),
+      mentionSpans: MentionSpan.listFrom(raw['mentionSpans'], _string(raw['content'])),
     );
   }
 
@@ -86,6 +98,34 @@ class ChatMessage {
     return [
       for (final entry in raw) ?ChatMessage.fromMap(entry),
     ];
+  }
+}
+
+/// 訊息內容中的一個 `@暱稱` token：`content.substring(start, end)`。
+class MentionSpan {
+  const MentionSpan({required this.start, required this.end, this.isMe = false});
+
+  final int start;
+  final int end;
+
+  /// 這個 token 指的是我目前的暱稱（原生以最醒目的樣式顯示）。
+  final bool isMe;
+
+  /// 只保留能套在 [content] 上的 span：`0 <= start < end <= content.length`，且不與前一個重疊；
+  /// 其餘略過。不是 List 時回傳空清單。
+  static List<MentionSpan> listFrom(Object? raw, String content) {
+    if (raw is! List) return const [];
+    final spans = <MentionSpan>[];
+    for (final entry in raw) {
+      if (entry is! Map) continue;
+      final start = entry['start'];
+      final end = entry['end'];
+      if (start is! int || end is! int) continue;
+      final previousEnd = spans.isEmpty ? 0 : spans.last.end;
+      if (start < previousEnd || end <= start || end > content.length) continue;
+      spans.add(MentionSpan(start: start, end: end, isMe: _bool(entry['isMe'])));
+    }
+    return List.unmodifiable(spans);
   }
 }
 

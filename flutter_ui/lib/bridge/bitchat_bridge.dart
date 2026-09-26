@@ -7,6 +7,10 @@ abstract final class ChatMethods {
   static const setNickname = 'chat_setNickname';
   static const getNickname = 'chat_getNickname';
   static const requestSnapshot = 'chat_requestSnapshot';
+  static const updateInput = 'chat_updateInput';
+  static const selectCommandSuggestion = 'chat_selectCommandSuggestion';
+  static const selectMentionSuggestion = 'chat_selectMentionSuggestion';
+  static const clearSuggestions = 'chat_clearSuggestions';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -20,6 +24,11 @@ abstract final class ChatEvents {
   /// `{type, onlineCount: int, peers: List<Map>}`：線上人數與 mesh peer 列表的完整快照，
   /// 依原生列表的顯示順序（見 `models/chat_peer.dart`）。
   static const peers = 'chat_peers';
+
+  /// `{type, showCommands: bool, commands: List<Map>, showMentions: bool, mentions: List<String>}`：
+  /// 輸入框 `/` 指令與 `@` 提及補完的完整快照（原生 `ChatViewModel` 的補完狀態，見
+  /// `models/chat_suggestions.dart`）。
+  static const suggestions = 'chat_suggestions';
 }
 
 class BitchatBridge {
@@ -134,6 +143,39 @@ class BitchatBridge {
   /// 較晚訂閱的 `ChatService` 用這個補拿目前狀態。
   static Future<void> requestChatSnapshot() async {
     await _method.invokeMethod<void>(ChatMethods.requestSnapshot);
+  }
+
+  /// 輸入框文字改變時呼叫（原生輸入框在每次文字變化時做的事）：原生核心依 [text] 更新
+  /// `/` 指令與 `@` 提及補完，結果經 [ChatEvents.suggestions] 快照回推。文字原樣傳過去。
+  /// bridge 錯誤會往上拋。
+  static Future<void> updateChatInput(String text) async {
+    await _method.invokeMethod<void>(ChatMethods.updateInput, <String, dynamic>{'text': text});
+  }
+
+  /// 選取一個 `/` 指令補完，回傳輸入框的新文字（原生 `selectCommandSuggestion`，同時關閉清單）。
+  ///
+  /// 只傳指令名稱，原生端從它目前提供的清單找回上游物件；該指令已不在清單上時回傳 null，
+  /// 輸入框不要變。bridge 錯誤會往上拋。
+  static Future<String?> selectCommandSuggestion(String command) =>
+      _method.invokeMethod<String>(ChatMethods.selectCommandSuggestion, <String, dynamic>{'command': command});
+
+  /// 選取一個 `@` 提及補完，回傳輸入框的新文字（原生 `selectMentionSuggestion`：把正在輸入的
+  /// `@片段` 換成 `@暱稱 `，同時關閉清單）。[currentText] 是選取當下輸入框的文字。
+  /// bridge 錯誤會往上拋。
+  static Future<String> selectMentionSuggestion(String nickname, String currentText) async {
+    final String? text = await _method.invokeMethod<String>(
+      ChatMethods.selectMentionSuggestion,
+      <String, dynamic>{'nickname': nickname, 'currentText': currentText},
+    );
+    if (text == null) {
+      throw PlatformException(code: 'NO_TEXT', message: '${ChatMethods.selectMentionSuggestion} answered null');
+    }
+    return text;
+  }
+
+  /// 關閉兩個補完清單（原生輸入框在送出、清空文字後這樣做）。bridge 錯誤會往上拋。
+  static Future<void> clearChatSuggestions() async {
+    await _method.invokeMethod<void>(ChatMethods.clearSuggestions);
   }
 
   /// 發送 Health Report 的 Broadcast Tier（BLE 廣播 + 網路回報）。
