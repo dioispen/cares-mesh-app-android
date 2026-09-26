@@ -11,6 +11,8 @@ void main() {
   late StreamController<Map<String, dynamic>> events;
   late List<String> sent;
   late Future<bool> Function(String text) send;
+  late List<String> nicknamesSet;
+  late Future<void> Function(String nickname) setNickname;
   late ChatService service;
 
   setUp(() async {
@@ -20,10 +22,13 @@ void main() {
       sent.add(text);
       return true;
     };
+    nicknamesSet = [];
+    setNickname = (nickname) async => nicknamesSet.add(nickname);
     service = ChatService(
       events: () => events.stream,
       requestSnapshot: () async {},
       sendMessage: (text) => send(text),
+      setNickname: (nickname) => setNickname(nickname),
     );
     await service.start();
   });
@@ -152,5 +157,118 @@ void main() {
     await tester.pump();
 
     expect(sent, isEmpty);
+  });
+
+  group('mesh nickname', () {
+    Future<void> pushNickname(WidgetTester tester, String nickname) async {
+      events.add({'type': 'chat_nickname', 'nickname': nickname});
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Finder editButton() => find.byTooltip('修改 mesh 暱稱');
+    Finder dialogField() =>
+        find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField));
+
+    Future<void> openEditor(WidgetTester tester) async {
+      await tester.tap(editButton());
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the app bar shows the mesh nickname', (tester) async {
+      await pumpChat(tester);
+
+      await pushNickname(tester, 'anon4821');
+
+      expect(find.text('@anon4821'), findsOneWidget);
+    });
+
+    testWidgets('there is nothing to edit until the native side reports a nickname',
+        (tester) async {
+      await pumpChat(tester);
+
+      expect(editButton(), findsNothing);
+    });
+
+    testWidgets('the app bar follows a nickname changed anywhere upstream', (tester) async {
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+
+      await pushNickname(tester, 'anon1234');
+
+      expect(find.text('@anon1234'), findsOneWidget);
+      expect(find.text('@anon4821'), findsNothing);
+    });
+
+    testWidgets('the editor starts from the mesh nickname', (tester) async {
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+
+      await openEditor(tester);
+
+      expect(tester.widget<TextField>(dialogField()).controller!.text, 'anon4821');
+    });
+
+    testWidgets('saving hands exactly what was typed to ChatService and closes', (tester) async {
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+      await openEditor(tester);
+
+      await tester.enterText(dialogField(), ' bob ');
+      await tester.tap(find.text('儲存'));
+      await tester.pumpAndSettle();
+
+      expect(nicknamesSet, [' bob ']);
+      expect(find.byType(AlertDialog), findsNothing);
+    });
+
+    testWidgets('a blank nickname is left for upstream to handle', (tester) async {
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+      await openEditor(tester);
+
+      await tester.enterText(dialogField(), '');
+      await tester.tap(find.text('儲存'));
+      await tester.pumpAndSettle();
+
+      expect(nicknamesSet, ['']);
+    });
+
+    testWidgets('cancelling leaves the nickname alone', (tester) async {
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+      await openEditor(tester);
+
+      await tester.enterText(dialogField(), 'bob');
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      expect(nicknamesSet, isEmpty);
+      expect(find.byType(AlertDialog), findsNothing);
+    });
+
+    testWidgets('a failed save keeps the editor open and says so', (tester) async {
+      setNickname = (nickname) async => throw MissingPluginException('no native side');
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+      await openEditor(tester);
+
+      await tester.enterText(dialogField(), 'bob');
+      await tester.tap(find.text('儲存'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('暱稱更新失敗，請稍後再試'), findsOneWidget);
+      expect(tester.widget<TextField>(dialogField()).controller!.text, 'bob');
+    });
+
+    testWidgets('the editor warns that the nickname is broadcast in the clear', (tester) async {
+      await pumpChat(tester);
+      await pushNickname(tester, 'anon4821');
+
+      await openEditor(tester);
+
+      expect(find.textContaining('請勿使用真實姓名'), findsOneWidget);
+    });
   });
 }

@@ -55,6 +55,11 @@ class ChatBridge(
             snapshot = {
                 ChatSerialization.publicMessagesEvent(chatViewModel.messages.value, currentSelf())
             }
+        ),
+        // Covers every writer, not just chat_setNickname (e.g. the panic reset to a new anonXXXX).
+        Projection(
+            changes = chatViewModel.nickname,
+            snapshot = { ChatSerialization.nicknameEvent(chatViewModel.nickname.value) }
         )
     )
 
@@ -72,6 +77,8 @@ class ChatBridge(
     override fun handle(call: MethodCall, result: MethodChannel.Result): Boolean {
         when (call.method) {
             METHOD_SEND_MESSAGE -> sendMessage(call, result)
+            METHOD_SET_NICKNAME -> setNickname(call, result)
+            METHOD_GET_NICKNAME -> result.success(chatViewModel.nickname.value)
             METHOD_REQUEST_SNAPSHOT -> {
                 pushSnapshots()
                 result.success(null)
@@ -100,6 +107,22 @@ class ChatBridge(
         chatViewModel.sendMessage(trimmed) { accepted -> result.success(accepted) }
     }
 
+    /**
+     * `chat_setNickname({nickname})` → `ChatViewModel.setNickname`, which stores it and
+     * re-announces on every transport. The nickname is passed exactly as given: upstream itself
+     * neither trims nor rejects blank or long nicknames (its header editor saves every keystroke),
+     * so the bridge adds no rule. The new value reaches Dart through the `chat_nickname` snapshot.
+     */
+    private fun setNickname(call: MethodCall, result: MethodChannel.Result) {
+        val nickname = (call.arguments as? Map<*, *>)?.get("nickname") as? String
+        if (nickname == null) {
+            result.error("INVALID_ARGUMENT", "$METHOD_SET_NICKNAME expects {nickname: String}", null)
+            return
+        }
+        chatViewModel.setNickname(nickname)
+        result.success(null)
+    }
+
     private fun pushSnapshots() {
         if (!scope.isActive) return
         projections.forEach { events.emit(it.snapshot()) }
@@ -116,6 +139,10 @@ class ChatBridge(
 
     companion object {
         const val METHOD_SEND_MESSAGE = "chat_sendMessage"
+        const val METHOD_SET_NICKNAME = "chat_setNickname"
+
+        /** One-shot read of `ChatViewModel.nickname`; UIs follow the `chat_nickname` snapshot. */
+        const val METHOD_GET_NICKNAME = "chat_getNickname"
         const val METHOD_REQUEST_SNAPSHOT = "chat_requestSnapshot"
 
         /** Coalesces bursts (history sync, relayed floods) into one snapshot push. */

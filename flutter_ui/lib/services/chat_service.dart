@@ -19,23 +19,33 @@ class ChatService {
     Stream<Map<String, dynamic>> Function()? events,
     Future<void> Function()? requestSnapshot,
     Future<bool> Function(String text)? sendMessage,
+    Future<void> Function(String nickname)? setNickname,
   })  : _events = events ?? BitchatBridge.events,
         _requestSnapshot = requestSnapshot ?? BitchatBridge.requestChatSnapshot,
-        _send = sendMessage ?? BitchatBridge.sendMessage;
+        _send = sendMessage ?? BitchatBridge.sendMessage,
+        _setNickname = setNickname ?? BitchatBridge.setNickname;
 
   static final ChatService instance = ChatService();
 
   final Stream<Map<String, dynamic>> Function() _events;
   final Future<void> Function() _requestSnapshot;
   final Future<bool> Function(String text) _send;
+  final Future<void> Function(String nickname) _setNickname;
 
   final ValueNotifier<List<ChatMessage>> _publicMessages =
       ValueNotifier<List<ChatMessage>>(const []);
+  final ValueNotifier<String?> _nickname = ValueNotifier<String?>(null);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
   /// 公開 mesh 時間線（含本機送出的訊息），依時間線順序；清單不可修改。
   ValueListenable<List<ChatMessage>> get publicMessages => _publicMessages;
+
+  /// 自己的 mesh 暱稱，也就是附近裝置在 announce 裡看到的名稱；原生端還沒回報前是 null。
+  ///
+  /// 原樣反映原生 `ChatViewModel.nickname`（可能是空字串），任何來源的變更都會經快照更新。
+  /// 與帳號的真實姓名（`AppUser.name`）無關，兩者不互相帶入（ADR-0003）。
+  ValueListenable<String?> get nickname => _nickname;
 
   /// 開始接收聊天快照。可重複呼叫，只有第一次有效。
   ///
@@ -59,6 +69,12 @@ class ChatService {
   /// bridge 錯誤會往上拋，由畫面告知使用者。
   Future<bool> sendMessage(String text) => _send(text);
 
+  /// 把使用者為 mesh 輸入的暱稱原樣交給原生聊天核心（它會儲存並重新 announce）。
+  ///
+  /// 空白與長度沿用上游規則，這裡不 trim、不擋。[nickname] 不在這裡更新，
+  /// 等原生端的快照回推，才會與原生實際持有的值一致。bridge 錯誤會往上拋。
+  Future<void> setNickname(String nickname) => _setNickname(nickname);
+
   void _handleEvent(Map<String, dynamic> event) {
     switch (event['type']) {
       case ChatEvents.publicMessages:
@@ -68,6 +84,13 @@ class ChatService {
           return;
         }
         _publicMessages.value = List.unmodifiable(messages);
+      case ChatEvents.nickname:
+        final nickname = event['nickname'];
+        if (nickname is! String) {
+          debugPrint('ChatService: ignoring malformed ${ChatEvents.nickname} event');
+          return;
+        }
+        _nickname.value = nickname;
     }
   }
 
@@ -76,5 +99,6 @@ class ChatService {
     await _subscription?.cancel();
     _subscription = null;
     _publicMessages.dispose();
+    _nickname.dispose();
   }
 }

@@ -20,6 +20,7 @@ void main() {
   ChatService buildService({
     Future<void> Function()? requestSnapshot,
     Future<bool> Function(String text)? sendMessage,
+    Future<void> Function(String nickname)? setNickname,
   }) =>
       ChatService(
         events: () => events.stream,
@@ -31,6 +32,10 @@ void main() {
             (text) async {
               calls.add('send:$text');
               return true;
+            },
+        setNickname: setNickname ??
+            (nickname) async {
+              calls.add('setNickname:$nickname');
             },
       );
 
@@ -158,5 +163,101 @@ void main() {
 
     expect(accepted, isFalse);
     expect(calls, ['send:  hello  ']);
+  });
+
+  group('mesh nickname', () {
+    test('is unknown until Kotlin reports it', () {
+      expect(service.nickname.value, isNull);
+    });
+
+    test('a nickname snapshot sets it', () async {
+      await service.start();
+
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      await pumpEventQueue();
+
+      expect(service.nickname.value, 'anon4821');
+    });
+
+    test('a later snapshot replaces it, whoever changed it upstream', () async {
+      await service.start();
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_nickname', 'nickname': 'anon1234'});
+      await pumpEventQueue();
+
+      expect(service.nickname.value, 'anon1234');
+    });
+
+    test('is kept exactly as upstream holds it, blank included', () async {
+      await service.start();
+
+      for (final nickname in ['', ' bob ', '小明']) {
+        events.add({'type': 'chat_nickname', 'nickname': nickname});
+        await pumpEventQueue();
+        expect(service.nickname.value, nickname);
+      }
+    });
+
+    test('a malformed nickname snapshot keeps the current nickname', () async {
+      await service.start();
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_nickname'});
+      events.add({'type': 'chat_nickname', 'nickname': 42});
+      events.add({'type': 'chat_nickname', 'nickname': null});
+      await pumpEventQueue();
+
+      expect(service.nickname.value, 'anon4821');
+    });
+
+    test('nickname and timeline snapshots do not disturb each other', () async {
+      await service.start();
+
+      events.add(_publicMessages(['A']));
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      await pumpEventQueue();
+
+      expect(service.publicMessages.value.map((m) => m.id), ['A']);
+      expect(service.nickname.value, 'anon4821');
+    });
+
+    test('setNickname hands the nickname to the bridge untouched', () async {
+      await service.setNickname('  bob  ');
+      await service.setNickname('');
+
+      expect(calls, ['setNickname:  bob  ', 'setNickname:']);
+    });
+
+    test('setNickname waits for Kotlin to report the new nickname', () async {
+      await service.start();
+      events.add({'type': 'chat_nickname', 'nickname': 'anon4821'});
+      await pumpEventQueue();
+
+      await service.setNickname('bob');
+      expect(service.nickname.value, 'anon4821');
+
+      events.add({'type': 'chat_nickname', 'nickname': 'bob'});
+      await pumpEventQueue();
+      expect(service.nickname.value, 'bob');
+    });
+
+    test('a missing native side is surfaced, not turned into a quiet failure', () async {
+      service = buildService(setNickname: (nickname) async {
+        throw MissingPluginException('no native side');
+      });
+
+      await expectLater(service.setNickname('bob'), throwsA(isA<MissingPluginException>()));
+    });
+
+    test('a bridge error from setNickname is surfaced', () async {
+      service = buildService(setNickname: (nickname) async {
+        throw PlatformException(code: 'INVALID_ARGUMENT');
+      });
+
+      await expectLater(service.setNickname('bob'), throwsA(isA<PlatformException>()));
+    });
   });
 }

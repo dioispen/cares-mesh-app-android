@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 /// 聊天 method 名稱，對應 Kotlin `ChatBridge` 的 companion 常數（命名規則 `chat_<動詞><受詞>`）。
 abstract final class ChatMethods {
   static const sendMessage = 'chat_sendMessage';
+  static const setNickname = 'chat_setNickname';
+  static const getNickname = 'chat_getNickname';
   static const requestSnapshot = 'chat_requestSnapshot';
 }
 
@@ -11,6 +13,9 @@ abstract final class ChatMethods {
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
   static const publicMessages = 'chat_public_messages';
+
+  /// `{type, nickname: String}`：自己的 mesh 暱稱（原生 `ChatViewModel.nickname`），原樣、可能是空字串。
+  static const nickname = 'chat_nickname';
 }
 
 class BitchatBridge {
@@ -73,28 +78,6 @@ class BitchatBridge {
     }
   }
 
-  /// 執行註冊（產生原生密鑰並儲存暱稱）
-  static Future<bool> register({required String nickname}) async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('register', {
-        'nickname': nickname,
-      });
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// 獲取個人資料
-  static Future<Map<String, dynamic>?> getProfile() async {
-    try {
-      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getProfile');
-      return result?.map((k, v) => MapEntry(k.toString(), v));
-    } catch (e) {
-      return null;
-    }
-  }
-
   /// 啟動 Mesh 服務
   static Future<bool> startMesh() async {
     try {
@@ -116,6 +99,29 @@ class BitchatBridge {
       <String, dynamic>{'text': text},
     );
     return accepted ?? false;
+  }
+
+  /// 設定 mesh 暱稱（原生 `ChatViewModel.setNickname`：儲存後立即重新 announce）。
+  ///
+  /// 暱稱會隨 announce 明文廣播給範圍內所有裝置，只能傳使用者親自為 mesh 輸入的名稱，
+  /// 絕不能傳帳號的真實姓名（`AppUser.name`，ADR-0003）。文字原樣傳過去：空白與長度的
+  /// 處理沿用上游，這裡不另訂規則。新值經 [ChatEvents.nickname] 快照回推；
+  /// bridge 錯誤（例如 [MissingPluginException]、[PlatformException]）會往上拋。
+  static Future<void> setNickname(String nickname) async {
+    await _method.invokeMethod<void>(
+      ChatMethods.setNickname,
+      <String, dynamic>{'nickname': nickname},
+    );
+  }
+
+  /// 一次性讀取目前的 mesh 暱稱。畫面請改看 `ChatService.nickname`（[ChatEvents.nickname] 快照），
+  /// 它會跟著任何來源的變更更新。bridge 錯誤會往上拋。
+  static Future<String> getNickname() async {
+    final String? nickname = await _method.invokeMethod<String>(ChatMethods.getNickname);
+    if (nickname == null) {
+      throw PlatformException(code: 'NO_NICKNAME', message: '${ChatMethods.getNickname} answered null');
+    }
+    return nickname;
   }
 
   /// 請原生端立刻重推所有 `chat_*` 快照事件（經事件串流送達，不是回傳值）。

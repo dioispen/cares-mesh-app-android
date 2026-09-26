@@ -22,6 +22,9 @@ object ChatSerialization {
     /** Snapshot of the public mesh timeline (`ChatViewModel.messages`). */
     const val EVENT_PUBLIC_MESSAGES = "chat_public_messages"
 
+    /** Snapshot of our own mesh nickname (`ChatViewModel.nickname`). */
+    const val EVENT_NICKNAME = "chat_nickname"
+
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
     // markers are mirrored here; HealthReportChatTimelineTest breaks if the producer drifts.
@@ -76,6 +79,16 @@ object ChatSerialization {
     fun publicMessagesEvent(messages: List<BitchatMessage>, self: ChatSelf): Map<String, Any?> = mapOf(
         "type" to EVENT_PUBLIC_MESSAGES,
         "messages" to messages.filterNot(::isHealthReportLine).map { message(it, self) }
+    )
+
+    /**
+     * `{type: "chat_nickname", nickname}`: the mesh nickname exactly as upstream holds it — not
+     * trimmed, possibly blank (upstream allows that; announces then fall back to the peer ID).
+     * This is the name every device in range sees in our ANNOUNCE, never the account's real name.
+     */
+    fun nicknameEvent(nickname: String): Map<String, Any?> = mapOf(
+        "type" to EVENT_NICKNAME,
+        "nickname" to nickname
     )
 
     /** True for the chat line MessageHandler.handleHealthReport() makes out of a Health Report. */

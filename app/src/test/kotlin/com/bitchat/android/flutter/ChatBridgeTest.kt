@@ -37,7 +37,11 @@ class ChatBridgeTest {
     private val nickname = MutableStateFlow("me")
     private val viewModel = mock<ChatViewModel>().also { vm ->
         whenever(vm.messages).thenReturn(messages)
-        whenever(vm.nickname).thenReturn(nickname)
+        // Not thenReturn: in bytecode ChatViewModel has two getNickname() methods that differ
+        // only in return type (this StateFlow property and BluetoothMeshDelegate's String?).
+        // Mockito looks the method up by name and parameters, gets either one depending on the
+        // JVM, and thenReturn's return-type check then fails at random. thenAnswer is not checked.
+        whenever(vm.nickname).thenAnswer { nickname }
         whenever(vm.myPeerID).thenReturn(MY_PEER_ID)
     }
     private val bridge = ChatBridge(viewModel, events, scope)
@@ -139,6 +143,150 @@ class ChatBridgeTest {
         verify(viewModel, never()).sendMessage(any(), any())
     }
 
+    // --- mesh nickname -----------------------------------------------------------------------
+
+    @Test
+    fun `setNickname forwards the nickname untouched to the view model`() {
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(setNicknameCall("  bob  "), result)
+
+        assertTrue(claimed)
+        verify(viewModel).setNickname("  bob  ")
+        assertEquals(listOf("success:null"), result.calls)
+    }
+
+    @Test
+    fun `blank nickname is left for the view model to handle`() {
+        // Upstream accepts a blank nickname (announce then falls back to the peer ID in
+        // NicknameProvider); the bridge must not add a rule of its own.
+        listOf("", "   ").forEach { nickname ->
+            val result = RecordingResult()
+
+            bridge.handle(setNicknameCall(nickname), result)
+
+            verify(viewModel).setNickname(nickname)
+            assertEquals("'$nickname'", listOf("success:null"), result.calls)
+        }
+    }
+
+    @Test
+    fun `long nickname is left for the view model to handle`() {
+        val long = "n".repeat(300)
+
+        bridge.handle(setNicknameCall(long), RecordingResult())
+
+        verify(viewModel).setNickname(long)
+    }
+
+    @Test
+    fun `setNickname without a nickname string is rejected`() {
+        listOf(
+            MethodCall(ChatBridge.METHOD_SET_NICKNAME, null),
+            MethodCall(ChatBridge.METHOD_SET_NICKNAME, mapOf("nickname" to 42)),
+            MethodCall(ChatBridge.METHOD_SET_NICKNAME, mapOf("name" to "bob")),
+            MethodCall(ChatBridge.METHOD_SET_NICKNAME, "bob")
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            val claimed = bridge.handle(call, result)
+
+            assertTrue(claimed)
+            assertEquals(listOf("error:INVALID_ARGUMENT"), result.calls)
+        }
+        verify(viewModel, never()).setNickname(any())
+    }
+
+    @Test
+    fun `getNickname answers the view model's current nickname`() {
+        nickname.value = "anon4821"
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(MethodCall(ChatBridge.METHOD_GET_NICKNAME, null), result)
+
+        assertTrue(claimed)
+        assertEquals(listOf("success:anon4821"), result.calls)
+    }
+
+    @Test
+    fun `legacy register and getProfile are not answered`() {
+        val systemBridge = BridgeMethodHandler { _, _ -> false }
+        val dispatcher = BridgeMethodDispatcher(listOf(systemBridge, bridge))
+
+        listOf(
+            MethodCall("register", mapOf("nickname" to "Real Name")),
+            MethodCall("getProfile", null)
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            dispatcher.onMethodCall(call, result)
+
+            assertEquals(call.method, listOf("notImplemented"), result.calls)
+        }
+        verify(viewModel, never()).setNickname(any())
+    }
+
+    @Test
+    fun `Dart subscribing receives the current nickname`() {
+        nickname.value = "anon4821"
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf("anon4821"), nicknames())
+    }
+
+    @Test
+    fun `requestSnapshot pushes the current nickname`() {
+        events.onListen(null, sink)
+        poster.runAll()
+        sink.events.clear()
+        nickname.value = "anon4821"
+
+        bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        poster.runAll()
+
+        assertEquals(listOf("anon4821"), nicknames())
+    }
+
+    @Test
+    fun `nickname set through the bridge is pushed back as a snapshot`() {
+        doAnswer { invocation ->
+            nickname.value = invocation.arguments[0] as String
+            null
+        }.whenever(viewModel).setNickname(any())
+        events.onListen(null, sink)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        sink.events.clear()
+
+        bridge.handle(setNicknameCall("bob"), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf("bob"), nicknames())
+    }
+
+    @Test
+    fun `nickname changed elsewhere in upstream is pushed after the debounce`() {
+        events.onListen(null, sink)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        sink.events.clear()
+
+        // e.g. the panic reset back to a fresh anonXXXX
+        nickname.value = "anon1234"
+        dispatcher.scheduler.advanceTimeBy(ChatBridge.SNAPSHOT_DEBOUNCE_MS / 2)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+        assertEquals("still inside the debounce window", emptyList<String>(), nicknames())
+
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf("anon1234"), nicknames())
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
 
     @Test
@@ -230,6 +378,9 @@ class ChatBridgeTest {
 
     private fun sendCall(text: String) = MethodCall(ChatBridge.METHOD_SEND_MESSAGE, mapOf("text" to text))
 
+    private fun setNicknameCall(nickname: String) =
+        MethodCall(ChatBridge.METHOD_SET_NICKNAME, mapOf("nickname" to nickname))
+
     private fun acceptSends(accepted: Boolean) {
         doAnswer { invocation ->
             @Suppress("UNCHECKED_CAST")
@@ -257,6 +408,12 @@ class ChatBridgeTest {
         .map { it["messages"] as List<Map<String, Any?>> }
 
     private fun publicTimelineIds() = publicTimeline().map { list -> list.map { it["id"] } }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun nicknames(): List<Any?> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_NICKNAME }
+        .map { it["nickname"] }
 
     private companion object {
         const val MY_PEER_ID = "a1b2c3d4e5f60718"

@@ -241,6 +241,34 @@ class ChatSerializationTest {
         assertFalse(ChatSerialization.isHealthReportLine(quoted))
     }
 
+    // --- mesh nickname -----------------------------------------------------------------------
+
+    @Test
+    fun `nickname event carries the nickname`() {
+        assertEquals(
+            mapOf("type" to "chat_nickname", "nickname" to "anon4821"),
+            ChatSerialization.nicknameEvent("anon4821")
+        )
+    }
+
+    @Test
+    fun `nickname event carries the nickname exactly as upstream holds it`() {
+        // Upstream neither trims nor rejects a blank nickname (ChatViewModel.setNickname), so
+        // the projection must not either.
+        listOf("", "  ", " bob ", "小明").forEach { nickname ->
+            assertEquals("'$nickname'", nickname, ChatSerialization.nicknameEvent(nickname)["nickname"])
+        }
+    }
+
+    @Test
+    fun `nickname event survives a StandardMessageCodec round trip`() {
+        val event = ChatSerialization.nicknameEvent("小明 anon")
+        val codec = StandardMessageCodec.INSTANCE
+        val encoded = codec.encodeMessage(event)!!.also { it.rewind() }
+
+        assertEquals(event, codec.decodeMessage(encoded))
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun messageMaps(event: Map<String, Any?>) = event["messages"] as List<Map<String, Any?>>
 }

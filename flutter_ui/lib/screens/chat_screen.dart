@@ -128,6 +128,45 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
   String _initialOf(String sender) =>
       sender.characters.isEmpty ? '?' : sender.characters.first;
 
+  /// 開啟 mesh 暱稱編輯器；它從目前的 mesh 暱稱開始，只送出使用者親手輸入的文字。
+  Future<void> _editNickname() => showDialog<void>(
+        context: context,
+        builder: (_) => _MeshNicknameDialog(chat: _chat),
+      );
+
+  /// AppBar 右側的暱稱按鈕：附近裝置看到的名稱。原生端回報暱稱前不顯示。
+  Widget _nicknameAction() => ValueListenableBuilder<String?>(
+        valueListenable: _chat.nickname,
+        builder: (context, nickname, _) {
+          if (nickname == null) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 160),
+              child: Tooltip(
+                message: '修改 mesh 暱稱',
+                child: TextButton.icon(
+                  onPressed: _editNickname,
+                  style: TextButton.styleFrom(
+                    foregroundColor: _textPrimary,
+                    backgroundColor: _bg,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    shape: const StadiumBorder(),
+                  ),
+                  icon: const Icon(Icons.edit_outlined, size: 16, color: _accent),
+                  label: Text(
+                    nickname.isEmpty ? '設定暱稱' : '@$nickname',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -142,6 +181,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
           ],
         ),
         iconTheme: const IconThemeData(color: _textPrimary),
+        actions: [_nicknameAction()],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Divider(height: 1, color: const Color(0xFFE8E0D5)),
@@ -302,6 +342,105 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 修改 mesh 暱稱的對話框。
+///
+/// 只處理「附近裝置看到的名稱」，與帳號的真實姓名（`AppUser.name`）完全無關：
+/// 初始值取自原生目前的 mesh 暱稱，送出的是使用者在這裡輸入的文字（ADR-0003）。
+///
+/// 文字原樣交給 `ChatViewModel.setNickname`，空白與長度沿用上游：上游的暱稱輸入
+/// （`ChatHeader.kt` 的 `NicknameEditor`）不 trim、不限長度、允許空白，所以這裡也沒有
+/// `maxLength` 或空白檢查。空白暱稱在 announce 時由 `NicknameProvider` 改用 peer ID；
+/// 超過 255 UTF-8 bytes 時上游 `IdentityAnnouncement.encode()` 會放棄該次 announce（上游既有行為）。
+class _MeshNicknameDialog extends StatefulWidget {
+  const _MeshNicknameDialog({required this.chat});
+
+  final ChatService chat;
+
+  @override
+  State<_MeshNicknameDialog> createState() => _MeshNicknameDialogState();
+}
+
+class _MeshNicknameDialogState extends State<_MeshNicknameDialog> {
+  late final TextEditingController _controller;
+  bool _saving = false;
+  bool _failed = false;
+
+  static const _textPrimary = _ChatScreenState._textPrimary;
+  static const _textSecondary = _ChatScreenState._textSecondary;
+  static const _accent = _ChatScreenState._accent;
+
+  @override
+  void initState() {
+    super.initState();
+    final current = widget.chat.nickname.value ?? '';
+    _controller = TextEditingController(text: current)
+      ..selection = TextSelection(baseOffset: 0, extentOffset: current.length);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _failed = false;
+    });
+    try {
+      await widget.chat.setNickname(_controller.text);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      // 包括 MissingPluginException：沒有原生端就是改不了，要讓使用者知道，而不是當作成功。
+      debugPrint('ChatScreen: setNickname failed: $e');
+      if (mounted) setState(() => _failed = true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('mesh 暱稱', style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            enabled: !_saving,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _save(),
+            decoration: InputDecoration(
+              prefixText: '@',
+              errorText: _failed ? '暱稱更新失敗，請稍後再試' : null,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '附近的裝置（包括原生 bitchat）會看到這個名稱。暱稱會以明文廣播，請勿使用真實姓名。',
+            style: TextStyle(fontSize: 12, color: _textSecondary, height: 1.4),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消', style: TextStyle(color: _textSecondary)),
+        ),
+        TextButton(
+          onPressed: _saving ? null : _save,
+          child: const Text('儲存', style: TextStyle(color: _accent, fontWeight: FontWeight.w700)),
+        ),
+      ],
     );
   }
 }
