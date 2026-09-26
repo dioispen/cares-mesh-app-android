@@ -208,12 +208,8 @@ class BitchatFlutterChannels(
                 result.success(peers)
             }
 
-            "sendMessage" -> {
-                val text = call.argument<String>("text") ?: ""
-                val service = MeshServiceHolder.meshService
-                service?.sendMessage(text)
-                result.success(null)
-            }
+            // 聊天的送出改由 ChatBridge 的 chat_sendMessage 轉呼叫 ChatViewModel（#9、#51）。
+            // 這裡不能再認領任何聊天 method：本類別先被詢問，會遮蔽 ChatBridge。
 
             else -> return false
         }
