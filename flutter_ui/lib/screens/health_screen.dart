@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
@@ -250,14 +251,19 @@ class _HealthScreenState extends State<HealthScreen>
     final user = userJson == null
         ? null
         : AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
-    if (user != null && mounted) setState(() => _currentUserId = user.id);
+
+    // 登入時如果讀不到 users 文件（離線、逾時），本機不會有 app_user。
+    // 但「看自己的狀態」只需要 uid，而 uid 在 Auth 的登入狀態裡就有 ——
+    // 少了個人資料不該連自己回報過什麼都看不到。
+    final uid = user?.id ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && mounted) setState(() => _currentUserId = uid);
 
     final handle = await _getOrCreateBroadcastHandle(prefs);
     if (mounted) setState(() => _myBroadcastHandle = handle);
 
-    if (user != null) {
-      final savedStatus = prefs.getString(_statusKey(user.id));
-      final savedSub = prefs.getString(_subInjuryKey(user.id));
+    if (uid != null) {
+      final savedStatus = prefs.getString(_statusKey(uid));
+      final savedSub = prefs.getString(_subInjuryKey(uid));
       if (mounted) {
         setState(() {
           if (savedStatus != null) _selectedStatus = savedStatus;
@@ -266,7 +272,7 @@ class _HealthScreenState extends State<HealthScreen>
       }
       // 監聽只是掛上去、不等網路，所以搶在定位之前接好：位置權限對話框停在
       // 那裡的時候，「我的狀態」不該跟著卡住。
-      _subscribeToOwnReport(user.id);
+      _subscribeToOwnReport(uid);
     }
 
     try {
