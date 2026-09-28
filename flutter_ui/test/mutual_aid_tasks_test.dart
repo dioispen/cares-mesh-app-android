@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/services/mutual_aid_tasks.dart';
 
@@ -177,6 +178,26 @@ void main() {
       expect(blank.note, '無補充說明');
     });
 
+    test('帶回對方的座標，沒有位置的回報是 null（導航按鈕據此決定能不能按）', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(id: 'located', lat: _about1km.lat, lng: _about1km.lng),
+          _report(id: 'nowhere'),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: _taipeiMainStation.lat,
+        myLng: _taipeiMainStation.lng,
+      );
+
+      final located = tasks.firstWhere((t) => t.userId == 'located');
+      expect(located.lat, _about1km.lat);
+      expect(located.lng, _about1km.lng);
+      final nowhere = tasks.firstWhere((t) => t.userId == 'nowhere');
+      expect(nowhere.lat, isNull);
+      expect(nowhere.lng, isNull);
+    });
+
     test('BLE 任務：安全狀態不列入，並套用本機的接任務進度', () {
       final tasks = buildMutualAidTasks(
         reports: const [],
@@ -220,6 +241,59 @@ void main() {
       );
 
       expect(ble.status, TaskStatus.waiting);
+    });
+  });
+
+  group('navigationUris', () {
+    test('iOS 先開原生地圖，再退到 Google Maps 網頁', () {
+      final uris = navigationUris(
+        lat: 25.0478,
+        lng: 121.5170,
+        platform: TargetPlatform.iOS,
+        label: '小明',
+      );
+
+      expect(uris, hasLength(2));
+      expect(uris.first.scheme, 'maps');
+      expect(uris.first.toString(), contains('daddr=25.0478,121.517'));
+      expect(uris.last.host, 'www.google.com');
+      expect(uris.last.toString(), contains('destination=25.0478,121.517'));
+    });
+
+    test('Android 用 geo: scheme，名稱有跳脫', () {
+      final uris = navigationUris(
+        lat: 25.0478,
+        lng: 121.5170,
+        platform: TargetPlatform.android,
+        label: '小 明',
+      );
+
+      expect(uris.first.scheme, 'geo');
+      expect(uris.first.toString(), startsWith('geo:25.0478,121.517'));
+      expect(uris.first.toString(), contains('%E5%B0%8F%20%E6%98%8E'));
+      expect(uris.last.host, 'www.google.com');
+    });
+
+    test('其他平台只有網頁版', () {
+      final uris = navigationUris(
+        lat: 25.0478,
+        lng: 121.5170,
+        platform: TargetPlatform.macOS,
+      );
+
+      expect(uris, hasLength(1));
+      expect(uris.single.host, 'www.google.com');
+    });
+
+    test('沒有名稱時不會產生空的括號', () {
+      final uris = navigationUris(
+        lat: 25.0,
+        lng: 121.5,
+        platform: TargetPlatform.android,
+        label: '   ',
+      );
+
+      expect(uris.first.toString(), isNot(contains('()')));
     });
   });
 
