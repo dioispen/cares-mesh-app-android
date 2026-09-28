@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
 import '../bridge/bitchat_bridge.dart';
@@ -177,6 +178,8 @@ class _HealthScreenState extends State<HealthScreen>
         location: hasLocation
             ? '概略位置 ${report.approxLat!.toStringAsFixed(2)}, ${report.approxLng!.toStringAsFixed(2)}'
             : '位置未提供',
+        lat: report.approxLat,
+        lng: report.approxLng,
         distanceKm: distanceKmBetween(
           position?.latitude,
           position?.longitude,
@@ -661,6 +664,30 @@ class _HealthScreenState extends State<HealthScreen>
     return Icons.check_circle_rounded;
   }
 
+  /// 用手機原生的地圖 App 導航到對方的座標。
+  ///
+  /// 一串經緯度對要趕過去的人沒有用，真正需要的是「怎麼走過去」。
+  /// 原生 App 開不起來（沒安裝、模擬機）才退到 Google Maps 網頁。
+  Future<void> _openNavigation(MutualAidTask task) async {
+    final lat = task.lat;
+    final lng = task.lng;
+    if (lat == null || lng == null) return;
+
+    for (final uri in navigationUris(
+      lat: lat,
+      lng: lng,
+      platform: defaultTargetPlatform,
+      label: task.name,
+    )) {
+      try {
+        if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+      } catch (e) {
+        debugPrint('launch $uri failed: $e');
+      }
+    }
+    _showTaskSnackBar('這台裝置打不開地圖 App，座標為 $lat, $lng', _red);
+  }
+
   void _showTaskDetail(MutualAidTask task) {
     showModalBottomSheet(
       context: context,
@@ -673,6 +700,10 @@ class _HealthScreenState extends State<HealthScreen>
         // 沒有被別人先接走的問題。
         canComplete: task.isBle ||
             (_currentUserId != null && task.helperId == _currentUserId),
+        // 沒有座標就沒得導航，按鈕不該出現在那裡讓人白按。
+        onNavigate: task.lat != null && task.lng != null
+            ? () => _openNavigation(task)
+            : null,
         onAccept: () {
           Navigator.pop(context);
           _updateTaskStatus(
@@ -1162,6 +1193,9 @@ class _TaskDetailSheet extends StatelessWidget {
   final VoidCallback onDone;
   final VoidCallback onRelease;
 
+  /// 開啟地圖導航；對方沒有回報座標時為 null。
+  final VoidCallback? onNavigate;
+
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -1176,6 +1210,7 @@ class _TaskDetailSheet extends StatelessWidget {
     required this.onAccept,
     required this.onDone,
     required this.onRelease,
+    required this.onNavigate,
   });
 
   @override
@@ -1268,6 +1303,35 @@ class _TaskDetailSheet extends StatelessWidget {
               ],
             ),
           ),
+
+          if (onNavigate != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onNavigate,
+                icon: const Icon(Icons.directions_rounded, size: 18),
+                label: Text(
+                  task.isBle ? '導航到概略位置' : '開啟地圖導航',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _textPrimary,
+                  side: const BorderSide(color: Color(0xFFD6CCC2)),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+            if (task.isBle)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  'BLE 廣播只帶概略位置，到現場後仍需搜尋',
+                  style: TextStyle(fontSize: 12, color: _textSecondary),
+                ),
+              ),
+          ],
 
           const SizedBox(height: 20),
 

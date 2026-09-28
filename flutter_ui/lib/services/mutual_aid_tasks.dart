@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:geolocator/geolocator.dart';
 
 /// 互救任務的進度。Firestore 上以 [TaskStatus.name] 存放（waiting / accepted / done）。
@@ -17,6 +18,11 @@ class MutualAidTask {
   final String injury;
   final String location;
 
+  /// 對方的座標。沒有回報位置時為 null —— 導航按鈕要據此決定能不能按。
+  /// BLE 任務放的是 geohash 還原的概略中心，不是精確位置（ADR-0003）。
+  final double? lat;
+  final double? lng;
+
   /// 與自己的距離（公里）。自己或對方缺座標時為 null——這與「0 公里」是兩件事。
   final double? distanceKm;
   final String note;
@@ -32,6 +38,8 @@ class MutualAidTask {
     required this.userId,
     required this.injury,
     required this.location,
+    this.lat,
+    this.lng,
     required this.distanceKm,
     required this.note,
     this.status = TaskStatus.waiting,
@@ -46,6 +54,8 @@ class MutualAidTask {
         userId: userId,
         injury: injury,
         location: location,
+        lat: lat,
+        lng: lng,
         distanceKm: distanceKm ?? this.distanceKm,
         note: note,
         status: status ?? this.status,
@@ -115,6 +125,8 @@ List<MutualAidTask> buildMutualAidTasks({
         location: hasLocation
             ? '緯度 ${lat.toStringAsFixed(4)}, 經度 ${lng.toStringAsFixed(4)}'
             : '位置未提供',
+        lat: lat,
+        lng: lng,
         distanceKm: distanceKmBetween(myLat, myLng, lat, lng),
         note: (data['description'] as String?)?.trim().isNotEmpty == true
             ? data['description'] as String
@@ -155,4 +167,29 @@ double? distanceKmBetween(
     return null;
   }
   return Geolocator.distanceBetween(fromLat, fromLng, toLat, toLng) / 1000;
+}
+
+/// 導航到某個座標時，要依序嘗試的 URI。
+///
+/// 先試該平台原生的地圖 App（救援者手上多半沒有網路，原生 App 至少能開、
+/// 也可能有離線圖資），開不起來才退到 Google Maps 的網頁網址。
+///
+/// 回傳的是「候選清單」而不是單一 URI：launchUrl 對沒安裝的 App 會失敗，
+/// 呼叫端要能往下一個試。
+List<Uri> navigationUris({
+  required double lat,
+  required double lng,
+  required TargetPlatform platform,
+  String? label,
+}) {
+  final coords = '$lat,$lng';
+  final name = (label == null || label.trim().isEmpty) ? null : label.trim();
+  return [
+    if (platform == TargetPlatform.iOS)
+      Uri.parse('maps://?daddr=$coords')
+    else if (platform == TargetPlatform.android)
+      Uri.parse('geo:$coords?q=${Uri.encodeComponent(coords)}'
+          '${name == null ? '' : '(${Uri.encodeComponent(name)})'}'),
+    Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$coords'),
+  ];
 }
