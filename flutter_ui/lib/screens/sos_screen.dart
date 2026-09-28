@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -25,6 +26,9 @@ class _SOSScreenState extends State<SOSScreen> {
   Position? _position;
   bool _sosSent = false;
   bool _isSending = false;
+
+  /// 送出時連不上 Firestore：資料在本機佇列裡，還沒真的到後端。
+  bool _queuedOffline = false;
   bool _isLoadingLocation = true;
   DateTime? _sentAt;
 
@@ -73,39 +77,93 @@ class _SOSScreenState extends State<SOSScreen> {
   }
 
   Future<void> _sendSOS() async {
-    if (_currentUser == null || _isSending) return;
+    if (_isSending) return;
+
+    // 先前這裡是 `if (_currentUser == null) return;`：本機沒有個人資料時，
+    // 按下 SOS 完全沒有反應 —— 不送出、不報錯、也沒有任何提示。求救的人
+    // 會以為已經送出去了。
+    final user = _currentUser;
+    if (user == null) {
+      _showMessage('找不到你的個人資料，無法送出求救。請重新登入後再試。', _sosRed);
+      return;
+    }
+
     setState(() => _isSending = true);
     try {
-      final lat = _position?.latitude ?? 0.0;
-      final lng = _position?.longitude ?? 0.0;
-      await _sosService.sendSOS(
-        userId: _currentUser!.id,
-        userName: _currentUser!.name,
-        phone: _currentUser!.phone,
-        lat: lat,
-        lng: lng,
-        bloodType: _currentUser!.bloodType,
-        medicalInfo: _currentUser!.medicalInfo,
+      // 拿不到定位就送 null。座標是救援端唯一能用來找人的欄位，寧可明確地
+      // 「沒有位置」，也不要送一個看起來合理、實際上錯得離譜的 0, 0。
+      final send = _sosService.sendSOS(
+        userId: user.id,
+        userName: user.name,
+        phone: user.phone,
+        lat: _position?.latitude,
+        lng: _position?.longitude,
+        bloodType: user.bloodType,
+        medicalInfo: user.medicalInfo,
       );
-      if (mounted) {
-        setState(() {
-          _sosSent = true;
-          _sentAt = DateTime.now();
-        });
+
+      // Firestore 的寫入要等伺服器確認才完成，離線時永遠不會完成（資料已進
+      // 本機佇列，恢復連線會自動送出）。求救的人不能對著一顆轉不停的按鈕等，
+      // 所以逾時就照實說明狀況。
+      var queuedOffline = false;
+      try {
+        await send.timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        queuedOffline = true;
+        unawaited(send.catchError((Object e) {
+          debugPrint('queued SOS failed: $e');
+          return '';
+        }));
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _sosSent = true;
+        _sentAt = DateTime.now();
+        _queuedOffline = queuedOffline;
+      });
+
+      if (queuedOffline) {
+        _showMessage('目前離線，求救已暫存，恢復連線後會自動送出。', const Color(0xFFBF7A5A));
+      } else if (_position == null) {
+        _showMessage('求救已送出，但沒有附上位置。請盡量用其他方式告知所在地。', const Color(0xFFBF7A5A));
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('發送失敗：$e'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: _sosRed,
-          ),
-        );
-      }
+      debugPrint('sendSOS failed: $e');
+      if (mounted) _showMessage('發送失敗，請再試一次。', _sosRed);
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
+  }
+
+  void _showMessage(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: color,
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  /// 上方橫幅的顏色。送出但「有但書」（離線暫存、沒有位置）時不給全綠 ——
+  /// 綠色會讓人以為救援端已經完整收到，包含位置。
+  Color get _statusColor {
+    if (!_sosSent) return _sosRed;
+    if (_queuedOffline || _position == null) return const Color(0xFFBF7A5A);
+    return const Color(0xFF7AA67A);
+  }
+
+  /// 上方橫幅的文字。送出之後要照實說明狀況：離線暫存、以及有沒有附上位置，
+  /// 都直接影響求救的人接下來該怎麼做。
+  String get _statusMessage {
+    if (!_sosSent) return '點擊下方按鈕發出求救訊號';
+    if (_queuedOffline) return '目前離線，求救已暫存，恢復連線後會自動送出。';
+    if (_position == null) return 'SOS 已發送，但沒有附上位置，請設法告知所在地。';
+    return 'SOS 已發送，請保持冷靜等待救援。';
   }
 
   String get _locationText {
@@ -142,33 +200,30 @@ class _SOSScreenState extends State<SOSScreen> {
                   vertical: 14,
                 ),
                 decoration: BoxDecoration(
-                  color: _sosSent
-                      ? const Color(0xFF7AA67A).withValues(alpha: 0.1)
-                      : _sosRed.withValues(alpha: 0.08),
+                  color: _statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _sosSent
-                        ? const Color(0xFF7AA67A).withValues(alpha: 0.5)
-                        : _sosRed.withValues(alpha: 0.3),
-                  ),
+                  border:
+                      Border.all(color: _statusColor.withValues(alpha: 0.45)),
                 ),
                 child: Row(
                   children: [
                     Icon(
-                      _sosSent
-                          ? Icons.check_circle_rounded
-                          : Icons.info_outline_rounded,
-                      color: _sosSent ? const Color(0xFF7AA67A) : _sosRed,
+                      !_sosSent
+                          ? Icons.info_outline_rounded
+                          : (_queuedOffline || _position == null
+                              ? Icons.warning_amber_rounded
+                              : Icons.check_circle_rounded),
+                      color: _statusColor,
                       size: 20,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        _sosSent ? 'SOS 已發送，請保持冷靜等待救援。' : '點擊下方按鈕發出求救訊號',
+                        _statusMessage,
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
-                          color: _sosSent ? const Color(0xFF4A7A4A) : _sosRed,
+                          color: _statusColor,
                         ),
                       ),
                     ),
