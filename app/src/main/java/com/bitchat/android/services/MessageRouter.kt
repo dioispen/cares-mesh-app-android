@@ -341,6 +341,10 @@ class MessageRouter private constructor(
     }
 
     private fun canSendViaNostr(peerID: String): Boolean {
+        // CARES runs mesh-only: no Nostr relay is ever connected, so a message handed to
+        // NostrTransport would be reported sent and never delivered. Keep it in the mesh outbox,
+        // which retries once the peer is back with a Noise session.
+        if (!AppConstants.Nostr.ENABLED) return false
         return try {
             val resolution = ContactDirectory.resolve(peerID)
             if (resolution.isMutualFavorite && resolution.nostrPubkey != null) return true

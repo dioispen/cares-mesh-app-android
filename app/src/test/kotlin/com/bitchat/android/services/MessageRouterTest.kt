@@ -2,9 +2,12 @@ package com.bitchat.android.services
 
 import android.content.Context
 import android.os.Build
+import com.bitchat.android.favorites.FavoritesPersistenceService
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.mesh.PeerInfo
+import com.bitchat.android.testing.FakeAndroidKeyStore
+import com.bitchat.android.util.AppConstants
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -175,6 +178,26 @@ class MessageRouterTest {
     }
 
     @Test
+    fun `a mutual favourite with a Nostr key is still queued for the mesh while Nostr is disabled`() {
+        // CARES ships with Nostr compiled out. Without this gate the router handed such a
+        // favourite's messages to NostrTransport whenever the mesh was not ready, reported them
+        // sent, and nothing ever delivered them: no relay is ever connected.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        peerOffline()
+        withMutualNostrFavorite {
+            val result = router.sendPrivate("hello", peerID, "peer", "msg-n")
+
+            assertEquals(MessageRouter.RouteResult.QUEUED, result)
+            verify(mesh, never()).sendPrivateMessage(any(), any(), any(), anyOrNull())
+
+            // It goes out over the mesh as soon as the peer is back with a session.
+            peerReady()
+            router.onSessionEstablished(peerID)
+            verify(mesh, times(1)).sendPrivateMessage("hello", peerID, "peer", "msg-n")
+        }
+    }
+
+    @Test
     fun `scheduler stops with the mesh service and restarts on rebind`() {
         MessageRouter.disableSchedulerForTesting = false
         MessageRouter.resetForTesting()
@@ -187,6 +210,33 @@ class MessageRouterTest {
 
         val rebound = MessageRouter.getInstance(context, mesh)
         assertTrue(rebound.isSchedulerRunning)
+    }
+
+    /**
+     * Runs [block] with the peer recorded as a mutual favourite that told us its Nostr key — the
+     * one case where upstream's router prefers Nostr — then puts the process-wide favourites
+     * store back to uninitialised, as every other test here expects.
+     */
+    private fun withMutualNostrFavorite(block: () -> Unit) {
+        FakeAndroidKeyStore.install()
+        try {
+            FavoritesPersistenceService.initialize(RuntimeEnvironment.getApplication())
+            FavoritesPersistenceService.shared.apply {
+                updateFavoriteStatus(noiseKey, "peer", isFavorite = true)
+                updatePeerFavoritedUs(noiseKey, theyFavoritedUs = true)
+                updateNostrPublicKey(noiseKey, "ab".repeat(32))
+            }
+            // The router sees it through the peer's Noise key, which mesh.getPeerInfo supplies.
+            val contact = ContactDirectory.resolve(peerID)
+            assertTrue(contact.isMutualFavorite && contact.nostrPubkey != null)
+            block()
+        } finally {
+            runCatching { FavoritesPersistenceService.shared.clearAllFavorites() }
+            FavoritesPersistenceService::class.java.getDeclaredField("INSTANCE")
+                .apply { isAccessible = true }
+                .set(null, null)
+            FakeAndroidKeyStore.uninstall()
+        }
     }
 
     private fun peerOffline() {
