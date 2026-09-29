@@ -458,14 +458,17 @@ class ChatBridgeTest {
     }
 
     @Test
-    fun `updateInput from the private composer saves its draft first, as the native composer does`() {
-        bridge.handle(updateInputCall("see you", privateChat = ALICE), RecordingResult())
+    fun `updateInput from the private composer only saves its draft, as the native private chat does`() {
+        // PrivateChatSheet shows no popups and leaves the shared suggestion state alone.
+        val result = RecordingResult()
 
-        inOrder(viewModel) {
-            verify(viewModel).setConversationDraft(ALICE, "see you")
-            verify(viewModel).updateCommandSuggestions("see you")
-            verify(viewModel).updateMentionSuggestions("see you")
-        }
+        val claimed = bridge.handle(updateInputCall("/hug al", privateChat = ALICE), result)
+
+        assertTrue(claimed)
+        verify(viewModel).setConversationDraft(ALICE, "/hug al")
+        verify(viewModel, never()).updateCommandSuggestions(any())
+        verify(viewModel, never()).updateMentionSuggestions(any())
+        assertEquals(listOf("success:null"), result.calls)
     }
 
     @Test

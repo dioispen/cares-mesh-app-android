@@ -172,9 +172,9 @@ class BitchatBridge {
     await _method.invokeMethod<void>(ChatMethods.requestSnapshot);
   }
 
-  /// 輸入框文字改變時呼叫（原生輸入框在每次文字變化時做的事）：原生核心把 [text] 存成
-  /// [privateChat] 的草稿（公開聊天室沒有草稿），再依 [text] 更新 `/` 指令與 `@` 提及補完，
-  /// 結果經 [ChatEvents.suggestions] 快照回推。[privateChat] 同 [sendMessage]。文字原樣傳過去。
+  /// 輸入框文字改變時呼叫（原生輸入框在每次文字變化時做的事）。[privateChat] 同 [sendMessage]：
+  /// 公開聊天室（null）的文字用來更新 `/` 指令與 `@` 提及補完，結果經 [ChatEvents.suggestions]
+  /// 快照回推；私訊輸入框的文字只存成該私訊的草稿（原生私訊畫面沒有補完）。文字原樣傳過去。
   /// bridge 錯誤會往上拋。
   static Future<void> updateChatInput(String text, {String? privateChat}) async {
     await _method.invokeMethod<void>(

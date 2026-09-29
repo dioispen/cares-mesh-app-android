@@ -120,11 +120,6 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     }
   }
 
-  /// 不等結果的 bridge 呼叫：失敗只記 log（例如沒有原生端），不打斷使用者。
-  void _fireAndForget(Future<void> call, String what) {
-    call.catchError((Object e) => debugPrint('ChatScreen: $what failed: $e'));
-  }
-
   /// 原生選定了私訊而私訊畫面沒開：開啟它（`/m 暱稱`、Activity 重建後還原）。
   void _onSelectedPrivateChatChanged() {
     final PrivateChatFocus? focus = _chat.selectedPrivateChat.value;
@@ -152,8 +147,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         debugPrint('ChatScreen: endPrivateChat failed: $e');
       }
       _privateChatOpen = false;
-      // 公開輸入框重新看得到：關掉私訊輸入框留下的補完。
-      _fireAndForget(chat.clearSuggestions(), 'clearSuggestions');
+      // 補完不必清：私訊輸入框不動補完狀態（原生私訊畫面也不動），公開輸入框的文字與補完照舊。
     }
   }
 

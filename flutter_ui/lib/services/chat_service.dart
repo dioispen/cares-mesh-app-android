@@ -144,9 +144,9 @@ class ChatService {
   /// 等原生端的快照回推，才會與原生實際持有的值一致。bridge 錯誤會往上拋。
   Future<void> setNickname(String nickname) => _setNickname(nickname);
 
-  /// 輸入框文字改變（使用者輸入）時呼叫，原生核心據此更新補完；私訊輸入框（[privateChat]，
-  /// 同 [sendMessage]）的文字也存成該私訊的草稿。文字原樣傳過去；程式設定文字（選取補完、
-  /// 送出後清空）時不要呼叫，與原生輸入框相同。bridge 錯誤會往上拋。
+  /// 輸入框文字改變（使用者輸入）時呼叫：公開聊天室的文字讓原生核心更新補完；私訊輸入框
+  /// （[privateChat]，同 [sendMessage]）的文字只存成該私訊的草稿。文字原樣傳過去；程式設定文字
+  /// （選取補完、送出後清空）時不要呼叫，與原生輸入框相同。bridge 錯誤會往上拋。
   Future<void> updateInput(String text, {String? privateChat}) => _updateInput(text, privateChat);
 
   /// 選取 [suggestion]，回傳輸入框的新文字；原生端已不再提供它時回傳 null（輸入框不要變）。

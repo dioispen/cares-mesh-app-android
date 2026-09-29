@@ -276,12 +276,18 @@ class ChatBridge(
     }
 
     /**
-     * `chat_updateInput({text, privateChat?})`: what the native composer does on every text change
-     * (`ChatScreen` `onMessageTextChange`) — `setConversationDraft` for the composer's private
-     * chat, then `updateCommandSuggestions` and `updateMentionSuggestions`, with the text untouched.
-     * `privateChat` is as for `chat_sendMessage`; the public composer has none, and upstream keeps
-     * no draft for a null conversation. The resulting popups reach Dart through the
-     * `chat_suggestions` snapshot, the draft through the next `chat_selected_private_peer`.
+     * `chat_updateInput({text, privateChat?})`: what the native composer the text was typed in does
+     * on every text change, with the text untouched. `privateChat` names that composer, as for
+     * `chat_sendMessage`:
+     * - the public composer (none): `ChatScreen`'s `onMessageTextChange` —
+     *   `setConversationDraft(null, …)` (upstream keeps no draft for a null conversation), then
+     *   `updateCommandSuggestions` and `updateMentionSuggestions`. The popups reach Dart through
+     *   the `chat_suggestions` snapshot.
+     * - a private chat's composer: `PrivateChatSheet`'s — only `setConversationDraft` for that
+     *   chat. Upstream's private chat screen offers no `/` or `@` popups and leaves the shared
+     *   suggestion state alone (an update would only leave a stale popup for the public composer);
+     *   a `/` command typed there is still carried out when sent. The draft reaches Dart through
+     *   the next `chat_selected_private_peer`.
      */
     private fun updateInput(call: MethodCall, result: MethodChannel.Result) {
         val arguments = call.arguments as? Map<*, *>
@@ -292,8 +298,10 @@ class ChatBridge(
             return
         }
         chatViewModel.setConversationDraft(privateChat, text)
-        chatViewModel.updateCommandSuggestions(text)
-        chatViewModel.updateMentionSuggestions(text)
+        if (privateChat == null) {
+            chatViewModel.updateCommandSuggestions(text)
+            chatViewModel.updateMentionSuggestions(text)
+        }
         result.success(null)
     }
 
@@ -389,7 +397,7 @@ class ChatBridge(
         const val METHOD_GET_NICKNAME = "chat_getNickname"
         const val METHOD_REQUEST_SNAPSHOT = "chat_requestSnapshot"
 
-        /** The composer's text changed: refresh the `/` and `@` popups. */
+        /** A composer's text changed: save its draft; the public one's also refreshes the popups. */
         const val METHOD_UPDATE_INPUT = "chat_updateInput"
         const val METHOD_SELECT_COMMAND_SUGGESTION = "chat_selectCommandSuggestion"
         const val METHOD_SELECT_MENTION_SUGGESTION = "chat_selectMentionSuggestion"

@@ -202,24 +202,37 @@ void main() {
     expect(composer(tester).controller!.text, 'half a senten');
   });
 
-  testWidgets('it offers the same / and @ completion as the public chat', (tester) async {
+  testWidgets('it offers no / or @ completion, as the native private chat does', (tester) async {
     await openPrivateChat(tester);
     await tester.enterText(find.byType(TextField), '/h');
 
+    // Popups the public composer asked for stay the public composer's.
     await push(tester, {
       'type': 'chat_suggestions',
       'showCommands': true,
       'commands': [
         {'command': '/hug', 'aliases': <String>[], 'syntax': '<nickname>', 'description': 'send someone a warm hug'},
       ],
-      'showMentions': false,
-      'mentions': <String>[],
+      'showMentions': true,
+      'mentions': <String>['bob'],
     });
-    await tester.tap(find.text('/hug'));
+
+    expect(find.text('/hug'), findsNothing);
+    expect(find.text('@bob'), findsNothing);
+    // Typing only keeps this chat's draft; the shared popup state is left alone.
+    expect(calls.where((c) => c.contains('Suggestions') || c.startsWith('selectCommand')), isEmpty);
+    expect(calls, contains('updateInput[$_contact]:/h'));
+  });
+
+  testWidgets('a / command typed here is still handed to the native core', (tester) async {
+    await openPrivateChat(tester);
+    calls.clear();
+
+    await tester.enterText(find.byType(TextField), '/hug bob');
+    await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pump();
 
-    expect(composer(tester).controller!.text, '/hug ');
-    expect(calls, contains('selectCommand:/hug'));
+    expect(calls, contains('send[$_contact]:/hug bob'));
   });
 
   testWidgets('it follows the native side to another conversation', (tester) async {

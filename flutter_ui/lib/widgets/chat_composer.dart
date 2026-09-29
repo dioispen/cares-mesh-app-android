@@ -4,16 +4,20 @@ import '../models/chat_suggestions.dart';
 import '../services/chat_service.dart';
 import 'chat_message_tile.dart';
 
-/// 聊天輸入區：`/` 指令與 `@` 提及補完清單，加上輸入列（公開聊天室與私訊畫面共用）。
+/// 聊天輸入區：輸入列，加上公開聊天室的 `/` 指令與 `@` 提及補完清單（公開聊天室與私訊畫面共用）。
 ///
 /// 照原生輸入框（`ChatScreen.kt` 的 `ChatInputSection`）的呼叫順序接原生核心：
-/// 使用者每次改動文字都交給 [ChatService.updateInput]，補完由原生產生、經
-/// [ChatService.suggestions] 顯示；選取補完時以原生回傳的文字取代輸入框、游標移到結尾；
-/// 送出被接受後清空輸入框並關閉補完。開啟時先關掉別的輸入框留下的補完。
+/// 使用者每次改動文字都交給 [ChatService.updateInput]，送出被接受後清空輸入框。
 ///
 /// [privateChat] 標明這是哪個私訊的輸入框（`PrivateChatFocus.peerID`），公開聊天室為 null。
 /// 它隨送出與每次文字變化交給原生端：原生只在它的選定私訊與此相同時送出（否則回 false，文字留在
 /// 輸入框），私訊輸入框的文字也存成該私訊的草稿、送出後清掉。
+///
+/// [withSuggestions]（公開聊天室）：補完由原生依輸入產生、經 [ChatService.suggestions] 顯示；選取
+/// 補完時以原生回傳的文字取代輸入框、游標移到結尾；送出被接受後關閉補完；開啟時先關掉別的輸入框
+/// 留下的補完。私訊畫面傳 false，照原生私訊畫面（`MeshPeerListSheet.kt` 的 `PrivateChatSheet`）：
+/// 沒有補完清單、不動共用的補完狀態（原生端收到私訊輸入框的文字也只存草稿）；在私訊裡輸入的 `/`
+/// 指令送出後原生照樣執行。
 class ChatComposer extends StatefulWidget {
   const ChatComposer({
     super.key,
@@ -21,6 +25,7 @@ class ChatComposer extends StatefulWidget {
     this.controller,
     this.privateChat,
     this.enabled = true,
+    this.withSuggestions = true,
     this.hintText = '輸入訊息...',
   });
 
@@ -30,6 +35,9 @@ class ChatComposer extends StatefulWidget {
   final TextEditingController? controller;
 
   final String? privateChat;
+
+  /// 是否有 `/`、`@` 補完（公開聊天室）；私訊畫面為 false。建立後不應改變。
+  final bool withSuggestions;
 
   /// false 時不能輸入也不能送出（例如私訊畫面還在等原生開啟對話）。
   final bool enabled;
@@ -55,7 +63,7 @@ class _ChatComposerState extends State<ChatComposer> {
   void initState() {
     super.initState();
     // 輸入框從空白開始；原生可能還留著上一個輸入框（例如 Activity 重建前）的補完。
-    _fireAndForget(_chat.clearSuggestions(), 'clearSuggestions');
+    if (widget.withSuggestions) _fireAndForget(_chat.clearSuggestions(), 'clearSuggestions');
   }
 
   @override
@@ -80,9 +88,9 @@ class _ChatComposerState extends State<ChatComposer> {
       if (accepted) {
         if (mounted) _controller.clear();
         // 程式清空輸入框不會觸發 onChanged，補完要明確關掉（原生輸入框也這樣做）；私訊輸入框
-        // 以「文字變成空白」告訴原生，同時清掉這個私訊的草稿（原生私訊畫面送出後也這樣做）。
+        // 沒有補完，以「文字變成空白」清掉這個私訊的草稿（原生私訊畫面送出後也這樣做）。
         if (privateChat == null) {
-          _fireAndForget(_chat.clearSuggestions(), 'clearSuggestions');
+          if (widget.withSuggestions) _fireAndForget(_chat.clearSuggestions(), 'clearSuggestions');
         } else {
           _fireAndForget(_chat.updateInput('', privateChat: privateChat), 'updateInput');
         }
@@ -175,7 +183,7 @@ class _ChatComposerState extends State<ChatComposer> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _suggestionsPanel(),
+        if (widget.withSuggestions) _suggestionsPanel(),
         Container(
           color: ChatPalette.card,
           padding: const EdgeInsets.fromLTRB(14, 10, 100, 10),

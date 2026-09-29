@@ -194,11 +194,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         child: Column(
           children: [
             Expanded(child: _timeline()),
+            // 原生私訊畫面沒有 `/`、`@` 補完（`/` 指令送出後仍由原生執行）。
             ChatComposer(
               chat: _chat,
               controller: _controller,
               privateChat: focus?.peerID,
               enabled: focus != null,
+              withSuggestions: false,
               hintText: name.isEmpty ? '輸入私訊...' : '傳私訊給 $name...',
             ),
           ],
