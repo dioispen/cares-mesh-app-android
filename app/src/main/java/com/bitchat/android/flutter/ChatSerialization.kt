@@ -32,6 +32,12 @@ object ChatSerialization {
     /** Snapshot of the composer's `/` command and `@` mention popups (`ChatViewModel` suggestions). */
     const val EVENT_SUGGESTIONS = "chat_suggestions"
 
+    /** Snapshot of the private chat the native core has in focus (`ChatViewModel.selectedPrivateChatPeer`). */
+    const val EVENT_SELECTED_PRIVATE_PEER = "chat_selected_private_peer"
+
+    /** Snapshot of every private conversation upstream holds (`ChatViewModel.privateChats`). */
+    const val EVENT_PRIVATE_CHATS = "chat_private_chats"
+
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
     // markers are mirrored here; HealthReportChatTimelineTest breaks if the producer drifts.
@@ -164,6 +170,32 @@ object ChatSerialization {
         "commands" to commands.map(::commandSuggestion),
         "showMentions" to showMentions,
         "mentions" to mentions
+    )
+
+    /**
+     * `{type: "chat_selected_private_peer", peerID, conversationID, displayName, draft}` — the
+     * private chat upstream routes the composer's text to (see [ChatPrivateChat.Focus]). With no
+     * private chat in focus every field but `type` is null: the composer then posts to the public
+     * timeline. Dart shows its private chat screen exactly while `peerID` is set. The same map
+     * answers `chat_startPrivateChat` and `chat_endPrivateChat`.
+     */
+    fun selectedPrivatePeerEvent(focus: ChatPrivateChat.Focus?): Map<String, Any?> = mapOf(
+        "type" to EVENT_SELECTED_PRIVATE_PEER,
+        "peerID" to focus?.peerID,
+        "conversationID" to focus?.conversationID,
+        "displayName" to focus?.displayName,
+        "draft" to focus?.draft
+    )
+
+    /**
+     * `{type: "chat_private_chats", chats: {conversationID: [message, ...]}}` — upstream's private
+     * conversations under upstream's keys, each in upstream's order. A conversation not open holds
+     * only its latest message (upstream keeps just a summary row in memory); opening it with
+     * `chat_startPrivateChat` loads its stored history, which then arrives in a later snapshot.
+     */
+    fun privateChatsEvent(chats: Map<String, List<BitchatMessage>>, self: ChatSelf): Map<String, Any?> = mapOf(
+        "type" to EVENT_PRIVATE_CHATS,
+        "chats" to chats.mapValues { (_, messages) -> messages.map { message(it, self) } }
     )
 
     /** True for upstream's own notices (command output, debug lines), drawn as system lines. */

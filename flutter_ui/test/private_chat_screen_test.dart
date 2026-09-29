@@ -1,0 +1,282 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/screens/private_chat_screen.dart';
+import 'package:flutter_ui/services/chat_service.dart';
+
+const _alice = '1111111111111111';
+const _contact = 'contact_aaaa';
+const _bob = '2222222222222222';
+
+/// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
+Map<String, dynamic> _focus(String? peerID, {String? name, String? conversationID, String draft = ''}) => {
+      'type': 'chat_selected_private_peer',
+      'peerID': peerID,
+      'conversationID': peerID == null ? null : (conversationID ?? peerID),
+      'displayName': peerID == null ? null : (name ?? peerID),
+      'draft': peerID == null ? null : draft,
+    };
+
+Map<String, Object?> _message(String id, {String sender = 'alice', bool isFromSelf = false}) => {
+      'id': id,
+      'sender': sender,
+      'content': 'text of $id',
+      'timestamp': DateTime(2024, 5, 1, 9, 7).millisecondsSinceEpoch,
+      'isPrivate': true,
+      'isFromSelf': isFromSelf,
+    };
+
+void main() {
+  late StreamController<Map<String, dynamic>> events;
+  late List<String> calls;
+  late Completer<Object?>? pendingStart;
+  late Object? startAnswer;
+  late Future<bool> Function(String text, String? privateChat) send;
+  late ChatService service;
+
+  setUp(() async {
+    events = StreamController<Map<String, dynamic>>.broadcast();
+    calls = [];
+    pendingStart = null;
+    startAnswer = _focus(_contact, name: 'alice');
+    send = (text, privateChat) async => true;
+    service = ChatService(
+      events: () => events.stream,
+      requestSnapshot: () async {},
+      sendMessage: (text, privateChat) {
+        calls.add('send[$privateChat]:$text');
+        return send(text, privateChat);
+      },
+      setNickname: (nickname) async {},
+      updateInput: (text, privateChat) async => calls.add('updateInput[$privateChat]:$text'),
+      selectCommandSuggestion: (command) async {
+        calls.add('selectCommand:$command');
+        return '$command ';
+      },
+      selectMentionSuggestion: (nickname, currentText) async => '@$nickname ',
+      clearSuggestions: () async => calls.add('clearSuggestions'),
+      startPrivateChat: (peerID) {
+        calls.add('start:$peerID');
+        return pendingStart?.future ?? Future.value(startAnswer);
+      },
+      endPrivateChat: () async {
+        calls.add('end');
+        return _focus(null);
+      },
+    );
+    await service.start();
+  });
+
+  tearDown(() async {
+    await service.dispose();
+    await events.close();
+  });
+
+  /// Pushes the private chat for [peerID] over a plain page, as ChatScreen does.
+  Future<void> openPrivateChat(WidgetTester tester, {String peerID = _alice, String? title = 'alice'}) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => PrivateChatScreen(peerID: peerID, title: title, chatService: service),
+            )),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    // Not pumpAndSettle: while the start is pending the screen shows a spinner that never settles.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+  }
+
+  Future<void> push(WidgetTester tester, Map<String, dynamic> event) async {
+    events.add(event);
+    await tester.pump();
+    await tester.pump();
+  }
+
+  Map<String, dynamic> chats(Map<String, List<Map<String, Object?>>> byKey) =>
+      {'type': 'chat_private_chats', 'chats': byKey};
+
+  Finder screen() => find.byType(PrivateChatScreen);
+
+  TextField composer(WidgetTester tester) => tester.widget<TextField>(find.byType(TextField));
+
+  testWidgets('opening asks the native core to start the chat, once', (tester) async {
+    await openPrivateChat(tester);
+
+    expect(calls.where((c) => c.startsWith('start:')), ['start:$_alice']);
+  });
+
+  testWidgets('until the native side answers, it shows the tapped name and cannot send', (tester) async {
+    pendingStart = Completer<Object?>();
+    await openPrivateChat(tester, title: 'alice (list)');
+
+    expect(find.text('alice (list)'), findsOneWidget);
+    expect(composer(tester).enabled, isFalse);
+    composer(tester).controller!.text = 'too early';
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+    expect(calls.where((c) => c.startsWith('send')), isEmpty);
+
+    pendingStart!.complete(_focus(_contact, name: 'alice'));
+    await tester.pumpAndSettle();
+    expect(composer(tester).enabled, isTrue);
+  });
+
+  testWidgets('shows the native title and the conversation under its key', (tester) async {
+    await openPrivateChat(tester);
+
+    await push(
+      tester,
+      chats({
+        _contact: [_message('P1'), _message('P2', sender: 'me', isFromSelf: true)],
+        _bob: [_message('B1', sender: 'bob')],
+      }),
+    );
+
+    expect(find.text('alice'), findsWidgets);
+    expect(find.text('text of P1'), findsOneWidget);
+    expect(find.text('text of P2'), findsOneWidget);
+    expect(find.text('text of B1'), findsNothing, reason: 'another conversation');
+    // Own messages carry no sender label, as in the public chat.
+    expect(find.text('me'), findsNothing);
+  });
+
+  testWidgets('an empty conversation says so', (tester) async {
+    await openPrivateChat(tester);
+
+    expect(find.text('還沒有私訊'), findsOneWidget);
+  });
+
+  testWidgets('sending hands the text over as this private chat\'s and clears its draft', (tester) async {
+    await openPrivateChat(tester);
+    calls.clear();
+
+    await tester.enterText(find.byType(TextField), 'see you there');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+
+    expect(calls, [
+      'updateInput[$_contact]:see you there',
+      'send[$_contact]:see you there',
+      'updateInput[$_contact]:',
+    ]);
+    expect(composer(tester).controller!.text, isEmpty);
+  });
+
+  testWidgets('text the native side refuses stays in the composer', (tester) async {
+    // e.g. the native side has just left this chat: sending would have gone public.
+    send = (text, privateChat) async => false;
+    await openPrivateChat(tester);
+
+    await tester.enterText(find.byType(TextField), 'see you there');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+
+    expect(composer(tester).controller!.text, 'see you there');
+  });
+
+  testWidgets('a failed send keeps the text and tells the user', (tester) async {
+    send = (text, privateChat) async => throw PlatformException(code: 'boom');
+    await openPrivateChat(tester);
+
+    await tester.enterText(find.byType(TextField), 'see you there');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+
+    expect(composer(tester).controller!.text, 'see you there');
+    expect(find.byType(SnackBar), findsOneWidget);
+  });
+
+  testWidgets('the composer starts from the draft the native side kept', (tester) async {
+    startAnswer = _focus(_contact, name: 'alice', draft: 'half a senten');
+
+    await openPrivateChat(tester);
+
+    expect(composer(tester).controller!.text, 'half a senten');
+  });
+
+  testWidgets('it offers the same / and @ completion as the public chat', (tester) async {
+    await openPrivateChat(tester);
+    await tester.enterText(find.byType(TextField), '/h');
+
+    await push(tester, {
+      'type': 'chat_suggestions',
+      'showCommands': true,
+      'commands': [
+        {'command': '/hug', 'aliases': <String>[], 'syntax': '<nickname>', 'description': 'send someone a warm hug'},
+      ],
+      'showMentions': false,
+      'mentions': <String>[],
+    });
+    await tester.tap(find.text('/hug'));
+    await tester.pump();
+
+    expect(composer(tester).controller!.text, '/hug ');
+    expect(calls, contains('selectCommand:/hug'));
+  });
+
+  testWidgets('it follows the native side to another conversation', (tester) async {
+    await openPrivateChat(tester);
+    await push(
+      tester,
+      chats({
+        _contact: [_message('P1')],
+        _bob: [_message('B1', sender: 'bob')],
+      }),
+    );
+
+    // e.g. `/m bob` typed here
+    await push(tester, _focus(_bob, name: 'bob', draft: 'for bob'));
+
+    expect(find.text('bob'), findsWidgets);
+    expect(find.text('text of B1'), findsOneWidget);
+    expect(find.text('text of P1'), findsNothing);
+    expect(composer(tester).controller!.text, 'for bob');
+    await tester.enterText(find.byType(TextField), 'hi bob');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+    expect(calls, contains('send[$_bob]:hi bob'));
+  });
+
+  testWidgets('re-keying the chat keeps what is being typed', (tester) async {
+    startAnswer = _focus(_alice, name: 'alice');
+    await openPrivateChat(tester);
+    await tester.enterText(find.byType(TextField), 'half typed');
+
+    // The peer's Noise key arrives: upstream moves the chat to its contact conversation.
+    await push(tester, _focus(_contact, name: 'alice'));
+
+    expect(composer(tester).controller!.text, 'half typed');
+  });
+
+  testWidgets('it closes itself when the native side no longer has a private chat', (tester) async {
+    await openPrivateChat(tester);
+
+    await push(tester, _focus(null));
+    await tester.pumpAndSettle();
+
+    expect(screen(), findsNothing);
+  });
+
+  testWidgets('a stale empty selection from before the start does not close it', (tester) async {
+    pendingStart = Completer<Object?>();
+    await openPrivateChat(tester);
+
+    // A snapshot built before the native side handled the start.
+    await push(tester, _focus(_bob));
+    await push(tester, _focus(null));
+    expect(screen(), findsOneWidget);
+
+    pendingStart!.complete(_focus(_contact, name: 'alice'));
+    await tester.pumpAndSettle();
+    expect(screen(), findsOneWidget);
+    expect(find.text('alice'), findsWidgets);
+  });
+}

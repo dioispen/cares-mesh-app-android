@@ -16,11 +16,13 @@ import com.bitchat.android.ui.truncateNickname
  * - rows: `MeshPeerListSheet.kt` `PeopleSection` (order, display name, `#abcd` suffix) and
  *   `PeerItem` (name truncation, direct / routed / Wi-Fi Aware).
  * - signal bars: `MeshPeerListSheet.kt` `convertRSSIToSignalStrength` and the bar bands in its doc.
+ * - order: `PeopleSection` `sortedPeers` — the most recent private message first (#55), then
+ *   alphabetical.
  *
  * Deliberately not (yet) mirrored:
- * - `PeopleSection` sorts unread private-message senders, then the most recent private chat,
- *   then favourites before its alphabetical key. Those keys arrive with the fields that make them
- *   visible (#55 private chats, #56 unread, #58 favourites); prepend them to [order] then.
+ * - `PeopleSection` sorts unread private-message senders before the most recent private chat, and
+ *   favourites after it. Those keys arrive with the fields that make them visible (#56 unread,
+ *   #58 favourites); add them to [order] then, in that place.
  * - Offline favourites appended after the connected peers (#58); they must also be counted in the
  *   `#abcd` suffix de-duplication, as upstream counts them.
  * - Connected peers upstream moves into its "conversations" section; the Flutter chat has no such
@@ -43,7 +45,7 @@ object ChatPeerList {
         val peerDirect: Map<String, Boolean>,
         /** Keys of `WifiAwareController.connectedPeers`. */
         val wifiAwarePeerIDs: Set<String>,
-        /** `ChatViewModel.privateChats`, for the display-name fallback only. */
+        /** `ChatViewModel.privateChats`, for the recency order and the display-name fallback. */
         val privateChats: Map<String, List<BitchatMessage>>
     )
 
@@ -117,9 +119,16 @@ object ChatPeerList {
         else -> 0
     }
 
-    /** PeopleSection's alphabetical key: nickname, else peer ID, lowercased. Stable for ties. */
+    /**
+     * PeopleSection's keys: the newest private message timestamp first — upstream looks the peer
+     * up in `privateChats` by its mesh peer ID, so a conversation already re-keyed to a `contact_…`
+     * ID does not count, in the native list either — then nickname, else peer ID, lowercased.
+     * Stable for ties.
+     */
     private fun order(inputs: Inputs): Comparator<String> =
-        compareBy { (inputs.peerNicknames[it] ?: it).lowercase() }
+        compareByDescending<String> { peerID ->
+            inputs.privateChats[peerID]?.maxByOrNull { it.timestamp }?.timestamp?.time ?: 0L
+        }.thenBy { (inputs.peerNicknames[it] ?: it).lowercase() }
 
     /** PeopleSection: nickname, else the last private message's sender, else the ID's prefix. */
     private fun displayNameOf(peerID: String, inputs: Inputs): String =

@@ -487,6 +487,110 @@ class ChatSerializationTest {
         assertEquals(event, codec.decodeMessage(encoded))
     }
 
+    // --- private chats (#55) ------------------------------------------------------------------
+
+    private val contact = "contact_" + "c".repeat(64)
+
+    @Test
+    fun `selected private peer event carries the focus`() {
+        val focus = ChatPrivateChat.Focus(
+            peerID = alice,
+            conversationID = contact,
+            displayName = "alice",
+            draft = "half a senten"
+        )
+
+        assertEquals(
+            mapOf(
+                "type" to "chat_selected_private_peer",
+                "peerID" to alice,
+                "conversationID" to contact,
+                "displayName" to "alice",
+                "draft" to "half a senten"
+            ),
+            ChatSerialization.selectedPrivatePeerEvent(focus)
+        )
+    }
+
+    @Test
+    fun `no private chat in focus is all nulls, not missing keys`() {
+        assertEquals(
+            mapOf(
+                "type" to "chat_selected_private_peer",
+                "peerID" to null,
+                "conversationID" to null,
+                "displayName" to null,
+                "draft" to null
+            ),
+            ChatSerialization.selectedPrivatePeerEvent(null)
+        )
+    }
+
+    @Test
+    fun `private chats event carries each conversation under upstream's key, in order`() {
+        val event = ChatSerialization.privateChatsEvent(
+            mapOf(
+                contact to listOf(message(id = "P1", isPrivate = true), message(id = "P2", isPrivate = true)),
+                bob to listOf(message(id = "P3", senderPeerID = bob, isPrivate = true))
+            ),
+            me
+        )
+
+        assertEquals("chat_private_chats", event["type"])
+        assertEquals(
+            mapOf(contact to listOf("P1", "P2"), bob to listOf("P3")),
+            privateChatMaps(event).mapValues { (_, messages) -> messages.map { it["id"] } }
+        )
+    }
+
+    @Test
+    fun `a private message is serialized like any other, our own with its delivery status`() {
+        val sent = message(
+            id = "P1",
+            sender = "me",
+            senderPeerID = me.peerID,
+            isPrivate = true,
+            deliveryStatus = DeliveryStatus.Sent
+        )
+
+        val map = privateChatMaps(ChatSerialization.privateChatsEvent(mapOf(contact to listOf(sent)), me))
+            .getValue(contact).single()
+
+        assertEquals(ChatSerialization.message(sent, me), map)
+        assertEquals(true, map["isPrivate"])
+        assertEquals(true, map["isFromSelf"])
+        assertEquals(mapOf("kind" to "sent"), map["deliveryStatus"])
+    }
+
+    @Test
+    fun `no private chats is an empty map, not a missing key`() {
+        assertEquals(
+            mapOf("type" to "chat_private_chats", "chats" to emptyMap<String, Any?>()),
+            ChatSerialization.privateChatsEvent(emptyMap(), me)
+        )
+    }
+
+    @Test
+    fun `private chat events survive a StandardMessageCodec round trip`() {
+        val codec = StandardMessageCodec.INSTANCE
+        listOf(
+            ChatSerialization.selectedPrivatePeerEvent(ChatPrivateChat.Focus(alice, contact, "小明", "")),
+            ChatSerialization.selectedPrivatePeerEvent(null),
+            ChatSerialization.privateChatsEvent(
+                mapOf(contact to listOf(message(isPrivate = true, deliveryStatus = DeliveryStatus.Read("bob", statusAt)))),
+                me
+            )
+        ).forEach { event ->
+            val encoded = codec.encodeMessage(event)!!.also { it.rewind() }
+
+            assertEquals(event, codec.decodeMessage(encoded))
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun privateChatMaps(event: Map<String, Any?>) =
+        event["chats"] as Map<String, List<Map<String, Any?>>>
+
     @Suppress("UNCHECKED_CAST")
     private fun commandMaps(event: Map<String, Any?>) = event["commands"] as List<Map<String, Any?>>
 

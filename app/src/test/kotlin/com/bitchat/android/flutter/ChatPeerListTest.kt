@@ -97,6 +97,35 @@ class ChatPeerListTest {
         assertEquals(listOf(BOB, ALICE), rows(state).map { it.peerID })
     }
 
+    // --- order (PeopleSection sortedPeers, "most recent DM" key, #55) ------------------------------
+
+    @Test
+    fun `a peer with a more recent private message is listed first`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB, CAROL),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob", CAROL to "cat"),
+            privateChats = mapOf(
+                BOB to listOf(dm("bob", at = 2_000L)),
+                CAROL to listOf(dm("cat", at = 5_000L), dm("me", at = 1_000L))
+            )
+        )
+
+        assertEquals(listOf(CAROL, BOB, ALICE), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `the recency key is upstream's lookup by mesh peer ID`() {
+        // Upstream reads privateChats[peerID]; a conversation already re-keyed to a contact_ ID
+        // no longer lifts its peer, in the native list as here.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob"),
+            privateChats = mapOf("contact_${"b".repeat(64)}" to listOf(dm("bob", at = 9_000L)))
+        )
+
+        assertEquals(listOf(ALICE, BOB), rows(state).map { it.peerID })
+    }
+
     // --- names (PeopleSection displayName, PeerItem splitSuffix / truncateNickname) ---------------
 
     @Test
@@ -247,10 +276,10 @@ class ChatPeerListTest {
         assertNull(ChatPeerList.signalBars(null))
     }
 
-    private fun dm(sender: String) = BitchatMessage(
+    private fun dm(sender: String, at: Long = 1_700_000_000_000L) = BitchatMessage(
         sender = sender,
         content = "hi",
-        timestamp = Date(1_700_000_000_000L),
+        timestamp = Date(at),
         isPrivate = true,
         senderPeerID = ALICE
     )

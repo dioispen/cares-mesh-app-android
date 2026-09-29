@@ -1,12 +1,15 @@
 package com.bitchat.android.flutter
 
+import android.util.Log
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -34,6 +37,12 @@ import kotlinx.coroutines.launch
  *
  * Methods are named `chat_<verb><Object>`; events `chat_<snake_case>`.
  *
+ * Private chats (#55) follow the same rule: which conversation the composer's text goes to is
+ * `ChatViewModel.selectedPrivateChatPeer`, changed only by upstream's own methods; Dart opens and
+ * closes its private chat screen from the `chat_selected_private_peer` projection. The one check
+ * the bridge adds is on sending: text is handed over only when the composer it came from is the one
+ * upstream would route it to (see [sendMessage]), because Dart sees the focus a debounce late.
+ *
  * It owns no channel. [BitchatFlutterChannels] registers the one method handler and the one
  * stream handler, and offers this bridge every method it does not recognise
  * (see [BridgeMethodDispatcher]).
@@ -48,7 +57,9 @@ class ChatBridge(
     private val events: BridgeEventEmitter,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     /** Peers linked over Wi-Fi Aware (peer ID → address), as the native peer list reads them. */
-    private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers
+    private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers,
+    /** Upstream's contact records for a private chat ID (`ContactDirectory`, favourites). */
+    private val privateChatContact: (String) -> ChatPrivateChat.Contact = ChatPrivateChat::upstreamContact
 ) : BridgeMethodHandler {
 
     /**
@@ -60,6 +71,9 @@ class ChatBridge(
         val debounceMs: Long = SNAPSHOT_DEBOUNCE_MS,
         val snapshot: () -> Map<String, Any?>
     )
+
+    /** The latest private chat start or end; each one waits for the one before (see [endPrivateChat]). */
+    private var privateChatAction: Job? = null
 
     private val projections = listOf(
         Projection(
@@ -106,6 +120,24 @@ class ChatBridge(
                     mentions = chatViewModel.mentionSuggestions.value
                 )
             }
+        ),
+        // The private chat in focus, whoever set it (a Flutter start, `/m`, `/block`, deletion...),
+        // plus what its title and conversation key are resolved against: upstream's private chat
+        // screen re-resolves them as peers come, go and announce.
+        Projection(
+            changes = merge(
+                chatViewModel.selectedPrivateChatPeer,
+                chatViewModel.peerNicknames,
+                chatViewModel.connectedPeers
+            ),
+            snapshot = { ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()) }
+        ),
+        // Nickname is part of the key for the same reason as the public timeline's.
+        Projection(
+            changes = combine(chatViewModel.privateChats, chatViewModel.nickname) { _, _ -> },
+            snapshot = {
+                ChatSerialization.privateChatsEvent(chatViewModel.privateChats.value, currentSelf())
+            }
         )
     )
 
@@ -132,6 +164,8 @@ class ChatBridge(
                 chatViewModel.clearSuggestions()
                 result.success(null)
             }
+            METHOD_START_PRIVATE_CHAT -> startPrivateChat(call, result)
+            METHOD_END_PRIVATE_CHAT -> endPrivateChat(result)
             METHOD_REQUEST_SNAPSHOT -> {
                 pushSnapshots()
                 result.success(null)
@@ -142,14 +176,25 @@ class ChatBridge(
     }
 
     /**
-     * `chat_sendMessage({text})` → `ChatViewModel.sendMessage`, which routes it (public, the
-     * selected private chat, or a `/` command). Answers whether upstream accepted it. Like the
-     * upstream chat screen, the text is trimmed and blank text is never sent.
+     * `chat_sendMessage({text, privateChat?})` → `ChatViewModel.sendMessage`, which routes it
+     * (public, the selected private chat, or a `/` command). Answers whether upstream accepted it.
+     * Like the upstream chat screen, the text is trimmed and blank text is never sent.
+     *
+     * `privateChat` names the composer the text was typed in: absent or null for the public chat,
+     * the `chat_selected_private_peer` `peerID` for the private chat screen. It routes nothing —
+     * upstream alone decides where text goes, by its `selectedPrivateChatPeer` at this moment. It
+     * is a guard: text is only handed over when upstream's focus is that composer's, and otherwise
+     * answered `false` (not sent, left in the composer). Dart follows the focus through a debounced
+     * snapshot, so for a moment the two can disagree — right after `/m`, or after upstream ends a
+     * private chat by itself — and without this check public text could leave as a private message,
+     * or worse, private text be broadcast to the public timeline.
      */
     private fun sendMessage(call: MethodCall, result: MethodChannel.Result) {
-        val text = (call.arguments as? Map<*, *>)?.get("text") as? String
-        if (text == null) {
-            result.error("INVALID_ARGUMENT", "$METHOD_SEND_MESSAGE expects {text: String}", null)
+        val arguments = call.arguments as? Map<*, *>
+        val text = arguments?.get("text") as? String
+        val privateChat = arguments?.get("privateChat")
+        if (text == null || (privateChat != null && privateChat !is String)) {
+            result.error("INVALID_ARGUMENT", "$METHOD_SEND_MESSAGE expects {text: String, privateChat: String?}", null)
             return
         }
         val trimmed = text.trim()
@@ -157,7 +202,61 @@ class ChatBridge(
             result.success(false)
             return
         }
+        val focus = chatViewModel.selectedPrivateChatPeer.value
+        if (focus != privateChat) {
+            Log.w(TAG, "Not sending: composer is for ${privateChat ?: "the public chat"}, upstream focus is ${focus ?: "the public chat"}")
+            result.success(false)
+            return
+        }
         chatViewModel.sendMessage(trimmed) { accepted -> result.success(accepted) }
+    }
+
+    /**
+     * `chat_startPrivateChat({peerID})` → `ChatViewModel.startPrivateChat`, what upstream's private
+     * chat screen runs when it opens (`PrivateChatSheet`'s `LaunchedEffect(peerID)`): it loads the
+     * conversation's stored history, focuses it, clears its unread state, sends read receipts,
+     * starts a Noise handshake if needed and tells the notifications which chat is open. Upstream
+     * may pick a different ID (a peer with a known Noise key becomes its `contact_…` conversation)
+     * or refuse (a blocked peer). Answers, once it is done, with the `chat_selected_private_peer`
+     * map as it then stands, so Dart learns the outcome without waiting for the snapshot.
+     */
+    private fun startPrivateChat(call: MethodCall, result: MethodChannel.Result) {
+        val peerID = (call.arguments as? Map<*, *>)?.get("peerID") as? String
+        if (peerID.isNullOrBlank()) {
+            result.error("INVALID_ARGUMENT", "$METHOD_START_PRIVATE_CHAT expects {peerID: String}", null)
+            return
+        }
+        val previous = privateChatAction
+        privateChatAction = scope.launch {
+            previous?.join()
+            try {
+                chatViewModel.startPrivateChat(peerID)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                result.error("PRIVATE_CHAT_FAILED", e.message, null)
+                return@launch
+            }
+            result.success(ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()))
+        }
+    }
+
+    /**
+     * `chat_endPrivateChat` → `ChatViewModel.endPrivateChat` (what closing upstream's private chat
+     * screen runs), answered with the `chat_selected_private_peer` map as it then stands.
+     *
+     * Applied only after a `chat_startPrivateChat` still running: upstream's start selects the
+     * peer at the end of its history load, so a user who leaves the screen right after opening it
+     * would otherwise be left with that late selection — and the public composer's next text
+     * routed privately. Private chat actions thus take effect in the order Flutter sent them.
+     */
+    private fun endPrivateChat(result: MethodChannel.Result) {
+        val previous = privateChatAction
+        privateChatAction = scope.launch {
+            previous?.join()
+            chatViewModel.endPrivateChat()
+            result.success(ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()))
+        }
     }
 
     /**
@@ -177,18 +276,22 @@ class ChatBridge(
     }
 
     /**
-     * `chat_updateInput({text})`: what the native composer does on every text change
-     * (`ChatScreen` `onMessageTextChange`) — `updateCommandSuggestions` then
-     * `updateMentionSuggestions`, with the text untouched. The resulting popups reach Dart through
-     * the `chat_suggestions` snapshot. (Upstream also saves a draft there, but only for a private
-     * conversation; the public chat has none.)
+     * `chat_updateInput({text, privateChat?})`: what the native composer does on every text change
+     * (`ChatScreen` `onMessageTextChange`) — `setConversationDraft` for the composer's private
+     * chat, then `updateCommandSuggestions` and `updateMentionSuggestions`, with the text untouched.
+     * `privateChat` is as for `chat_sendMessage`; the public composer has none, and upstream keeps
+     * no draft for a null conversation. The resulting popups reach Dart through the
+     * `chat_suggestions` snapshot, the draft through the next `chat_selected_private_peer`.
      */
     private fun updateInput(call: MethodCall, result: MethodChannel.Result) {
-        val text = (call.arguments as? Map<*, *>)?.get("text") as? String
-        if (text == null) {
-            result.error("INVALID_ARGUMENT", "$METHOD_UPDATE_INPUT expects {text: String}", null)
+        val arguments = call.arguments as? Map<*, *>
+        val text = arguments?.get("text") as? String
+        val privateChat = arguments?.get("privateChat")
+        if (text == null || (privateChat != null && privateChat !is String)) {
+            result.error("INVALID_ARGUMENT", "$METHOD_UPDATE_INPUT expects {text: String, privateChat: String?}", null)
             return
         }
+        chatViewModel.setConversationDraft(privateChat, text)
         chatViewModel.updateCommandSuggestions(text)
         chatViewModel.updateMentionSuggestions(text)
         result.success(null)
@@ -251,6 +354,21 @@ class ChatBridge(
         privateChats = chatViewModel.privateChats.value
     )
 
+    /** The private chat upstream has in focus, resolved as its private chat screen does; null if none. */
+    private fun currentPrivateChatFocus(): ChatPrivateChat.Focus? {
+        val peerID = chatViewModel.selectedPrivateChatPeer.value ?: return null
+        val contact = privateChatContact(peerID)
+        return ChatPrivateChat.Focus(
+            peerID = peerID,
+            conversationID = contact.conversationID,
+            displayName = ChatPrivateChat.displayName(peerID, contact, chatViewModel.peerNicknames.value) {
+                runCatching { chatViewModel.resolvePeerDisplayNameForFingerprint(peerID) }.getOrNull()
+                    ?: peerID.take(8)
+            },
+            draft = runCatching { chatViewModel.conversationDraft(peerID) }.getOrNull().orEmpty()
+        )
+    }
+
     /** `PeopleSection`'s fallback while `peerDirect` has not caught up with a new peer. */
     private fun isDirectOnMesh(peerID: String): Boolean =
         try {
@@ -278,6 +396,14 @@ class ChatBridge(
 
         /** Hide both popups; the native composer does this after a send clears the field. */
         const val METHOD_CLEAR_SUGGESTIONS = "chat_clearSuggestions"
+
+        /** Open a private chat: `ChatViewModel.startPrivateChat`, answered with the resulting focus. */
+        const val METHOD_START_PRIVATE_CHAT = "chat_startPrivateChat"
+
+        /** Leave the private chat: `ChatViewModel.endPrivateChat`, answered with the (empty) focus. */
+        const val METHOD_END_PRIVATE_CHAT = "chat_endPrivateChat"
+
+        private const val TAG = "ChatBridge"
 
         /** Coalesces bursts (history sync, relayed floods) into one snapshot push. */
         const val SNAPSHOT_DEBOUNCE_MS = 100L

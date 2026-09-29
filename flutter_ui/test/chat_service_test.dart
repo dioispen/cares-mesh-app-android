@@ -5,6 +5,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/models/chat_suggestions.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 
+/// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
+Map<String, dynamic> _focusEvent(String? peerID, {String? name, String draft = ''}) => {
+      'type': 'chat_selected_private_peer',
+      'peerID': peerID,
+      'conversationID': peerID,
+      'displayName': peerID == null ? null : (name ?? peerID),
+      'draft': peerID == null ? null : draft,
+    };
+
 Map<String, dynamic> _publicMessages(List<String> ids) => {
       'type': 'chat_public_messages',
       'messages': [
@@ -20,10 +29,12 @@ void main() {
 
   ChatService buildService({
     Future<void> Function()? requestSnapshot,
-    Future<bool> Function(String text)? sendMessage,
+    Future<bool> Function(String text, String? privateChat)? sendMessage,
     Future<void> Function(String nickname)? setNickname,
     Future<String?> Function(String command)? selectCommandSuggestion,
     Future<String> Function(String nickname, String currentText)? selectMentionSuggestion,
+    Future<Object?> Function(String peerID)? startPrivateChat,
+    Future<Object?> Function()? endPrivateChat,
   }) =>
       ChatService(
         events: () => events.stream,
@@ -32,17 +43,27 @@ void main() {
               calls.add('requestSnapshot(listening: ${events.hasListener})');
             },
         sendMessage: sendMessage ??
-            (text) async {
-              calls.add('send:$text');
+            (text, privateChat) async {
+              calls.add(privateChat == null ? 'send:$text' : 'send[$privateChat]:$text');
               return true;
             },
         setNickname: setNickname ??
             (nickname) async {
               calls.add('setNickname:$nickname');
             },
-        updateInput: (text) async {
-          calls.add('updateInput:$text');
+        updateInput: (text, privateChat) async {
+          calls.add(privateChat == null ? 'updateInput:$text' : 'updateInput[$privateChat]:$text');
         },
+        startPrivateChat: startPrivateChat ??
+            (peerID) async {
+              calls.add('start:$peerID');
+              return _focusEvent(peerID);
+            },
+        endPrivateChat: endPrivateChat ??
+            () async {
+              calls.add('end');
+              return _focusEvent(null);
+            },
         selectCommandSuggestion: selectCommandSuggestion ??
             (command) async {
               calls.add('selectCommand:$command');
@@ -173,7 +194,7 @@ void main() {
   });
 
   test('sendMessage hands the text to the bridge and returns its answer', () async {
-    service = buildService(sendMessage: (text) async {
+    service = buildService(sendMessage: (text, privateChat) async {
       calls.add('send:$text');
       return false;
     });
@@ -182,6 +203,124 @@ void main() {
 
     expect(accepted, isFalse);
     expect(calls, ['send:  hello  ']);
+  });
+
+  group('private chats (#55)', () {
+    const contact = 'contact_aaaa';
+
+    Map<String, dynamic> privateChats(Map<String, List<String>> ids) => {
+          'type': 'chat_private_chats',
+          'chats': {
+            for (final entry in ids.entries)
+              entry.key: [
+                for (final id in entry.value)
+                  {'id': id, 'sender': 'alice', 'content': 'content of $id', 'timestamp': 1700000000000},
+              ],
+          },
+        };
+
+    test('no private chat is selected until Kotlin reports one', () {
+      expect(service.selectedPrivateChat.value, isNull);
+      expect(service.privateChats.value, isEmpty);
+    });
+
+    test('a selection snapshot sets the private chat, and a null one clears it', () async {
+      await service.start();
+
+      events.add(_focusEvent(contact, name: 'alice', draft: 'hel'));
+      await pumpEventQueue();
+      final focus = service.selectedPrivateChat.value!;
+      expect([focus.peerID, focus.displayName, focus.draft], [contact, 'alice', 'hel']);
+
+      events.add(_focusEvent(null));
+      await pumpEventQueue();
+      expect(service.selectedPrivateChat.value, isNull);
+    });
+
+    test('a malformed selection snapshot keeps the current private chat', () async {
+      await service.start();
+      events.add(_focusEvent(contact));
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_selected_private_peer', 'peerID': 42});
+      events.add({'type': 'chat_selected_private_peer', 'peerID': ''});
+      await pumpEventQueue();
+
+      expect(service.selectedPrivateChat.value?.peerID, contact);
+    });
+
+    test('startPrivateChat asks Kotlin and takes the private chat it answers with', () async {
+      // Kotlin re-keys the tapped mesh peer to its contact conversation.
+      service = buildService(startPrivateChat: (peerID) async {
+        calls.add('start:$peerID');
+        return _focusEvent(contact, name: 'alice');
+      });
+
+      await service.startPrivateChat('1111111111111111');
+
+      expect(calls, ['start:1111111111111111']);
+      expect(service.selectedPrivateChat.value?.peerID, contact);
+    });
+
+    test('a start Kotlin refuses leaves no private chat selected', () async {
+      service = buildService(startPrivateChat: (peerID) async => _focusEvent(null));
+
+      await service.startPrivateChat('1111111111111111');
+
+      expect(service.selectedPrivateChat.value, isNull);
+    });
+
+    test('endPrivateChat takes Kotlin\'s answer at once, without waiting for the snapshot', () async {
+      await service.start();
+      events.add(_focusEvent(contact));
+      await pumpEventQueue();
+
+      await service.endPrivateChat();
+
+      expect(calls.last, 'end');
+      expect(service.selectedPrivateChat.value, isNull);
+    });
+
+    test('bridge errors from starting or ending a private chat are surfaced', () async {
+      service = buildService(
+        startPrivateChat: (peerID) async => throw PlatformException(code: 'PRIVATE_CHAT_FAILED'),
+        endPrivateChat: () async => throw MissingPluginException('no native side'),
+      );
+
+      await expectLater(service.startPrivateChat('1111111111111111'), throwsA(isA<PlatformException>()));
+      await expectLater(service.endPrivateChat(), throwsA(isA<MissingPluginException>()));
+    });
+
+    test('a private chats snapshot replaces every conversation', () async {
+      await service.start();
+
+      events.add(privateChats({contact: ['P1', 'P2']}));
+      await pumpEventQueue();
+      expect(service.privateChats.value[contact]!.map((m) => m.id), ['P1', 'P2']);
+
+      events.add(privateChats({'2222222222222222': ['P3']}));
+      await pumpEventQueue();
+      expect(service.privateChats.value.keys, ['2222222222222222']);
+    });
+
+    test('a malformed private chats snapshot keeps the current conversations', () async {
+      await service.start();
+      events.add(privateChats({contact: ['P1']}));
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_private_chats'});
+      events.add({'type': 'chat_private_chats', 'chats': 'nope'});
+      await pumpEventQueue();
+
+      expect(service.privateChats.value[contact]!.single.id, 'P1');
+    });
+
+    test('text and edits from a private chat composer name that private chat', () async {
+      await service.sendMessage('see you', privateChat: contact);
+      await service.updateInput('see y', privateChat: contact);
+
+      expect(calls, ['send[$contact]:see you', 'updateInput[$contact]:see y']);
+    });
   });
 
   group('mesh nickname', () {

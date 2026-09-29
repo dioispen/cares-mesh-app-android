@@ -6,7 +6,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/screens/chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
+import 'package:flutter_ui/screens/private_chat_screen.dart';
 import 'package:flutter_ui/widgets/peer_list_sheet.dart';
+
+/// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
+Map<String, dynamic> focusEvent(String? peerID, {String? name, String? conversationID, String draft = ''}) => {
+      'type': 'chat_selected_private_peer',
+      'peerID': peerID,
+      'conversationID': peerID == null ? null : (conversationID ?? peerID),
+      'displayName': peerID == null ? null : (name ?? peerID),
+      'draft': peerID == null ? null : draft,
+    };
 
 void main() {
   late StreamController<Map<String, dynamic>> events;
@@ -17,6 +27,12 @@ void main() {
   late List<String> composerCalls;
   late Future<String?> Function(String command) selectCommand;
   late Future<String> Function(String nickname, String currentText) selectMention;
+
+  /// Every bridge call that decides where text goes, in order: `start:<id>`, `end`, and
+  /// `send[<privateChat>]:<text>` (`send[public]:` for the public composer).
+  late List<String> routing;
+  late Future<Object?> Function(String peerID) startPrivateChat;
+  late Future<Object?> Function() endPrivateChat;
   late ChatService service;
 
   setUp(() async {
@@ -31,12 +47,27 @@ void main() {
     composerCalls = [];
     selectCommand = (command) async => '$command ';
     selectMention = (nickname, currentText) async => '@$nickname ';
+    routing = [];
+    startPrivateChat = (peerID) async => focusEvent(peerID, name: 'nick-$peerID');
+    endPrivateChat = () async => focusEvent(null);
     service = ChatService(
       events: () => events.stream,
       requestSnapshot: () async {},
-      sendMessage: (text) => send(text),
+      sendMessage: (text, privateChat) {
+        routing.add('send[${privateChat ?? 'public'}]:$text');
+        return send(text);
+      },
       setNickname: (nickname) => setNickname(nickname),
-      updateInput: (text) async => composerCalls.add('updateInput:$text'),
+      updateInput: (text, privateChat) async =>
+          composerCalls.add(privateChat == null ? 'updateInput:$text' : 'updateInput[$privateChat]:$text'),
+      startPrivateChat: (peerID) {
+        routing.add('start:$peerID');
+        return startPrivateChat(peerID);
+      },
+      endPrivateChat: () {
+        routing.add('end');
+        return endPrivateChat();
+      },
       selectCommandSuggestion: (command) {
         composerCalls.add('selectCommand:$command');
         return selectCommand(command);
@@ -423,17 +454,193 @@ void main() {
       expect(inSheet(find.text('目前沒有人連線')), findsOneWidget);
     });
 
-    testWidgets('rows are not tappable yet', (tester) async {
+    testWidgets('tapping a peer closes the list and opens a private chat with them (#55)', (tester) async {
       await pumpChat(tester);
       await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
       await openPeerList(tester);
 
-      final tile = tester.widget<PeerListTile>(find.byType(PeerListTile));
-      expect(tile.onTap, isNull, reason: '#55 adds opening a private chat');
-
       await tester.tap(inSheet(find.text('alice')));
       await tester.pumpAndSettle();
-      expect(sheet(), findsOneWidget);
+
+      expect(sheet(), findsNothing);
+      expect(find.byType(PrivateChatScreen), findsOneWidget);
+      expect(routing, ['start:1111111111111111']);
+    });
+  });
+
+  group('private chats (#55)', () {
+    const alice = '1111111111111111';
+    const contact = 'contact_aaaa';
+
+    Finder privateChat() => find.byType(PrivateChatScreen);
+
+    Future<void> pushFocus(WidgetTester tester, String? peerID, {String? name}) async {
+      events.add(focusEvent(peerID, name: name));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Future<void> openFromPeerList(WidgetTester tester) async {
+      events.add({
+        'type': 'chat_peers',
+        'onlineCount': 1,
+        'peers': [
+          {'peerID': alice, 'nickname': 'alice', 'displayName': 'alice', 'displaySuffix': '', 'connection': 'bluetooth'},
+        ],
+      });
+      await tester.pump();
+      await tester.tap(find.byTooltip('附近的人'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.descendant(of: find.byType(PeerListSheet), matching: find.text('alice')));
+      await tester.pumpAndSettle();
+      expect(privateChat(), findsOneWidget);
+    }
+
+    Future<void> sendPublic(WidgetTester tester, String text) async {
+      await tester.enterText(find.byType(TextField), text);
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+    }
+
+    testWidgets('/m opens the private chat the native side selected', (tester) async {
+      startPrivateChat = (peerID) async => focusEvent(peerID, name: 'alice');
+      await pumpChat(tester);
+
+      await sendPublic(tester, '/m alice');
+      // Upstream's /m selects the peer (CommandProcessor); Flutter only follows the snapshot.
+      await pushFocus(tester, contact, name: 'alice');
+      await tester.pumpAndSettle();
+
+      expect(sent, ['/m alice']);
+      expect(privateChat(), findsOneWidget);
+      expect(find.text('alice'), findsWidgets);
+      // The screen runs upstream's full open (stored history, notifications) for that chat.
+      expect(routing, ['send[public]:/m alice', 'start:$contact']);
+    });
+
+    testWidgets('leaving with the app bar back button ends the private chat before anything else is sent',
+        (tester) async {
+      await pumpChat(tester);
+      await openFromPeerList(tester);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await sendPublic(tester, 'anyone at the gym?');
+
+      expect(privateChat(), findsNothing);
+      expect(routing, ['start:$alice', 'end', 'send[public]:anyone at the gym?']);
+      expect(service.selectedPrivateChat.value, isNull);
+    });
+
+    testWidgets('leaving with the system back button or gesture ends the private chat too', (tester) async {
+      await pumpChat(tester);
+      await openFromPeerList(tester);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await sendPublic(tester, 'anyone at the gym?');
+
+      expect(privateChat(), findsNothing);
+      expect(routing, ['start:$alice', 'end', 'send[public]:anyone at the gym?']);
+    });
+
+    testWidgets('a private chat the native side ends by itself closes, and is ended here too', (tester) async {
+      await pumpChat(tester);
+      await openFromPeerList(tester);
+
+      // e.g. `/block` of this peer, the conversation deleted, a panic reset
+      await pushFocus(tester, null);
+      await tester.pumpAndSettle();
+
+      expect(privateChat(), findsNothing);
+      expect(routing.last, 'end');
+    });
+
+    testWidgets('a start the native side refuses closes the private chat again', (tester) async {
+      // e.g. a blocked peer: upstream posts a system line to the public chat and selects nothing.
+      startPrivateChat = (peerID) async => focusEvent(null);
+      await pumpChat(tester);
+      events.add({
+        'type': 'chat_peers',
+        'onlineCount': 1,
+        'peers': [
+          {'peerID': alice, 'nickname': 'alice', 'displayName': 'alice', 'displaySuffix': '', 'connection': 'bluetooth'},
+        ],
+      });
+      await tester.pump();
+      await tester.tap(find.byTooltip('附近的人'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.descendant(of: find.byType(PeerListSheet), matching: find.text('alice')));
+      await tester.pumpAndSettle();
+
+      expect(privateChat(), findsNothing);
+      expect(routing, ['start:$alice', 'end']);
+    });
+
+    testWidgets('a failing start closes the private chat and says so', (tester) async {
+      startPrivateChat = (peerID) async => throw PlatformException(code: 'PRIVATE_CHAT_FAILED');
+      await pumpChat(tester);
+      events.add({
+        'type': 'chat_peers',
+        'onlineCount': 1,
+        'peers': [
+          {'peerID': alice, 'nickname': 'alice', 'displayName': 'alice', 'displaySuffix': '', 'connection': 'bluetooth'},
+        ],
+      });
+      await tester.pump();
+      await tester.tap(find.byTooltip('附近的人'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.descendant(of: find.byType(PeerListSheet), matching: find.text('alice')));
+      await tester.pumpAndSettle();
+
+      expect(privateChat(), findsNothing);
+      expect(find.text('無法開啟私訊，請稍後再試'), findsOneWidget);
+    });
+
+    testWidgets('a private chat the native side still has when the chat opens is shown again', (tester) async {
+      // Activity recreation: Dart starts over, the ChatViewModel still has the private chat.
+      events.add(focusEvent(contact, name: 'alice'));
+      await tester.pump();
+
+      await pumpChat(tester);
+      await tester.pumpAndSettle();
+
+      expect(privateChat(), findsOneWidget);
+      expect(routing, ['start:$contact']);
+    });
+
+    testWidgets('a stale selection that arrives while the chat is being ended does not reopen it',
+        (tester) async {
+      final ended = Completer<Object?>();
+      endPrivateChat = () => ended.future;
+      await pumpChat(tester);
+      await openFromPeerList(tester);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      // Sent by Kotlin before it handled the end (e.g. the peer ID re-keyed to its contact ID).
+      await pushFocus(tester, contact, name: 'alice');
+      await tester.pumpAndSettle();
+      expect(privateChat(), findsNothing);
+
+      ended.complete(focusEvent(null));
+      await tester.pumpAndSettle();
+
+      expect(privateChat(), findsNothing);
+      expect(service.selectedPrivateChat.value, isNull);
+    });
+
+    testWidgets('while the private chat is open, sends only ever come from its own composer', (tester) async {
+      await pumpChat(tester);
+      await openFromPeerList(tester);
+
+      await tester.enterText(find.byType(TextField), 'see you there');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pump();
+
+      expect(routing, ['start:$alice', 'send[$alice]:see you there']);
     });
   });
 

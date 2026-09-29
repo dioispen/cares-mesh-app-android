@@ -13,7 +13,7 @@ class PeerListSheet extends StatelessWidget {
 
   final ValueListenable<ChatPeerList?> peerList;
 
-  /// 點選某一列時呼叫；null 時列表項目不可點。#55 在這裡接上「開私訊」。
+  /// 點選某一列時呼叫（聊天室用來開啟與該 peer 的私訊，#55）；null 時列表項目不可點。
   final ValueChanged<ChatPeer>? onPeerTap;
 
   static const _bg = Color(0xFFF7F3EC);
@@ -99,7 +99,7 @@ class PeerListSheet extends StatelessWidget {
 
 /// peer 列表的一列：暱稱（同名時接淡色 `#abcd`）、連線方式、訊號強度。
 ///
-/// 之後的欄位（#56 未讀數、#58 我的最愛）加在名稱列或尾端，[onTap] 由 #55 接上「開私訊」。
+/// 之後的欄位（#56 未讀數、#58 我的最愛）加在名稱列或尾端。
 class PeerListTile extends StatelessWidget {
   const PeerListTile({super.key, required this.peer, this.onTap});
 

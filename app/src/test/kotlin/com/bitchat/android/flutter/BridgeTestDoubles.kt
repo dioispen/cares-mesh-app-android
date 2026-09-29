@@ -7,8 +7,12 @@ import io.flutter.plugin.common.MethodChannel
 internal class RecordingResult : MethodChannel.Result {
     val calls = mutableListOf<String>()
 
+    /** The values passed to [success], unformatted. */
+    val values = mutableListOf<Any?>()
+
     override fun success(result: Any?) {
         calls += "success:$result"
+        values += result
     }
 
     override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {

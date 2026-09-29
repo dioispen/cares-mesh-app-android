@@ -11,6 +11,8 @@ abstract final class ChatMethods {
   static const selectCommandSuggestion = 'chat_selectCommandSuggestion';
   static const selectMentionSuggestion = 'chat_selectMentionSuggestion';
   static const clearSuggestions = 'chat_clearSuggestions';
+  static const startPrivateChat = 'chat_startPrivateChat';
+  static const endPrivateChat = 'chat_endPrivateChat';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -29,6 +31,15 @@ abstract final class ChatEvents {
   /// 輸入框 `/` 指令與 `@` 提及補完的完整快照（原生 `ChatViewModel` 的補完狀態，見
   /// `models/chat_suggestions.dart`）。
   static const suggestions = 'chat_suggestions';
+
+  /// `{type, peerID: String?, conversationID: String?, displayName: String?, draft: String?}`：
+  /// 原生「目前選定的私訊對象」（`ChatViewModel.selectedPrivateChatPeer`）；沒有時除 `type` 外都是
+  /// null。私訊畫面依它開關（見 `models/private_chat.dart`）。
+  static const selectedPrivatePeer = 'chat_selected_private_peer';
+
+  /// `{type, chats: {conversationID: List<Map>}}`：原生持有的所有私訊對話，訊息 map 與
+  /// [publicMessages] 相同（見 `models/chat_message.dart`）。
+  static const privateChats = 'chat_private_chats';
 }
 
 class BitchatBridge {
@@ -103,16 +114,32 @@ class BitchatBridge {
 
   /// 把使用者輸入的文字交給原生聊天核心（`ChatViewModel.sendMessage`）。
   ///
-  /// 只收文字：送往哪裡（公開 mesh、目前開啟的私訊、`/` 指令）由原生核心依它自己的狀態決定，
-  /// Dart 端沒有也不該有 peerId／isPublic 之類的參數（#9）。空白文字不會送出。
+  /// 送往哪裡（公開 mesh、目前開啟的私訊、`/` 指令）由原生核心依它自己的「目前選定的私訊對象」
+  /// 決定，Dart 端沒有 peerId／isPublic 之類指定收件者的參數（#9）。
+  ///
+  /// [privateChat] 只標明文字是在哪個輸入框打的：公開聊天室為 null，私訊畫面為
+  /// [ChatEvents.selectedPrivatePeer] 的 `peerID`。原生端只在它的選定對象與此相同時才送出，
+  /// 否則回傳 false（沒送出），避免公開訊息被送成私訊、或私訊被公開廣播。空白文字不會送出。
   /// 回傳原生核心是否接受；bridge 錯誤（例如 [PlatformException]）會往上拋。
-  static Future<bool> sendMessage(String text) async {
+  static Future<bool> sendMessage(String text, {String? privateChat}) async {
     final bool? accepted = await _method.invokeMethod<bool>(
       ChatMethods.sendMessage,
-      <String, dynamic>{'text': text},
+      <String, dynamic>{'text': text, 'privateChat': privateChat},
     );
     return accepted ?? false;
   }
+
+  /// 開啟私訊（原生 `ChatViewModel.startPrivateChat`：載入儲存的紀錄、設為選定對象、清未讀、
+  /// 送已讀回條、必要時開始 Noise 交握）。[peerID] 是 peer 列表的 peer ID 或對話 ID；原生可能改用
+  /// 正規化後的對話 ID，也可能拒絕（例如已封鎖）。完成後回傳當下的 [ChatEvents.selectedPrivatePeer]
+  /// map。bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> startPrivateChat(String peerID) =>
+      _method.invokeMethod<Map>(ChatMethods.startPrivateChat, <String, dynamic>{'peerID': peerID});
+
+  /// 結束私訊焦點（原生 `ChatViewModel.endPrivateChat`），之後輸入的文字回到公開聊天室。
+  /// 回傳當下的 [ChatEvents.selectedPrivatePeer] map（`peerID` 為 null）。bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> endPrivateChat() =>
+      _method.invokeMethod<Map>(ChatMethods.endPrivateChat);
 
   /// 設定 mesh 暱稱（原生 `ChatViewModel.setNickname`：儲存後立即重新 announce）。
   ///
@@ -145,11 +172,15 @@ class BitchatBridge {
     await _method.invokeMethod<void>(ChatMethods.requestSnapshot);
   }
 
-  /// 輸入框文字改變時呼叫（原生輸入框在每次文字變化時做的事）：原生核心依 [text] 更新
-  /// `/` 指令與 `@` 提及補完，結果經 [ChatEvents.suggestions] 快照回推。文字原樣傳過去。
+  /// 輸入框文字改變時呼叫（原生輸入框在每次文字變化時做的事）：原生核心把 [text] 存成
+  /// [privateChat] 的草稿（公開聊天室沒有草稿），再依 [text] 更新 `/` 指令與 `@` 提及補完，
+  /// 結果經 [ChatEvents.suggestions] 快照回推。[privateChat] 同 [sendMessage]。文字原樣傳過去。
   /// bridge 錯誤會往上拋。
-  static Future<void> updateChatInput(String text) async {
-    await _method.invokeMethod<void>(ChatMethods.updateInput, <String, dynamic>{'text': text});
+  static Future<void> updateChatInput(String text, {String? privateChat}) async {
+    await _method.invokeMethod<void>(
+      ChatMethods.updateInput,
+      <String, dynamic>{'text': text, 'privateChat': privateChat},
+    );
   }
 
   /// 選取一個 `/` 指令補完，回傳輸入框的新文字（原生 `selectCommandSuggestion`，同時關閉清單）。
