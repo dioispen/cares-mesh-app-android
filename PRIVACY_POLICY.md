@@ -1,156 +1,130 @@
-# bitchat Privacy Policy
+# CARES Mesh 隱私政策
 
-*Last updated: January 2025*
+*最後更新：2026 年 9 月 30 日*
 
-## Our Commitment
+CARES Mesh 是以開源通訊軟體 [bitchat](https://github.com/permissionlesstech/bitchat-android) 為基礎開發的災害應變 App，目前是專題研究原型。本政策說明 App 會收集哪些資料、傳給誰、保存多久。
 
-bitchat is designed with privacy as its foundation. We believe private communication is a fundamental human right. This policy explains how bitchat protects your privacy.
-
-## Summary
-
-**WE DO NOT COLLECT ANY INFORMATION.**
-
-- **No personal data collection** - We don't collect names, emails, or phone numbers
-- **No location data collection** - Location is accessed only for local processing (BLE/Geohash) and is never collected or sent to us
-- **Hybrid Functionality** - bitchat offers two modes of communication:
-  - **Bluetooth Mesh Chat**: This mode is completely offline, using peer-to-peer Bluetooth connections. It does not use any servers or internet connection.
-  - **Geohash Chat**: This mode uses an internet connection to communicate with others in a specific geographic area. It relies on Nostr relays for message transport.
-- **No tracking** - We have no analytics, telemetry, or user tracking
-- **Open source** - You can verify these claims by reading our code
-
-## What Information bitchat Stores
-
-### On Your Device Only
-
-1. **Identity Key** 
-   - A cryptographic key generated on first launch
-   - Stored locally in your device's secure storage
-   - Allows you to maintain "favorite" relationships across app restarts
-   - Never leaves your device
-
-2. **Nickname**
-   - The display name you choose (or auto-generated)
-   - Stored only on your device
-   - Shared with peers you communicate with
-
-3. **Message History** (if enabled)
-   - When room owners enable retention, messages are saved locally
-   - Stored encrypted on your device
-   - You can delete this at any time
-
-4. **Favorite Peers**
-   - Public keys of peers you mark as favorites
-   - Stored only on your device
-   - Allows you to recognize these peers in future sessions
-
-### Temporary Session Data
-
-During each session, bitchat temporarily maintains:
-- Active peer connections (forgotten when app closes)
-- Routing information for message delivery
-- Cached messages for offline peers (12 hours max)
-
-## What Information is Shared
-
-### With Other bitchat Users
-
-When you use bitchat, nearby peers can see:
-- Your chosen nickname
-- Your ephemeral public key (changes each session)
-- Messages you send to public rooms or directly to them
-- Your approximate Bluetooth signal strength (for connection quality)
-
-### With Room Members
-
-When you join a password-protected room:
-- Your messages are visible to others with the password
-- Your nickname appears in the member list
-- Room owners can see you've joined
-
-## What We DON'T Do
-
-bitchat **never**:
-- Collects personal information
-- Collects location history
-- Transmits any data to us (the developers)
-- Stores data on servers
-- Shares data with third parties
-- Uses analytics or telemetry
-- Creates user profiles
-- Requires registration
-
-## Encryption
-
-All private messages use end-to-end encryption:
-- **X25519** for key exchange
-- **AES-256-GCM** for message encryption
-- **Ed25519** for digital signatures
-- **Argon2id** for password-protected rooms
-
-## Your Rights
-
-You have complete control:
-- **Delete Everything**: Triple-tap the logo to instantly wipe all data
-- **Leave Anytime**: Close the app and your presence disappears
-- **No Account**: Nothing to delete from servers because there are none
-- **Portability**: Your data never leaves your device unless you export it
-
-## Location Data & Permissions
-
-To provide the core functionality of bitchat, we access your device's location data. This access is necessary for the following specific purposes:
-
-### 1. Bluetooth Low Energy (BLE) Scanning
-- **Why we need it:** The Android operating system requires Location permission to scan for nearby Bluetooth LE devices (especially on Android 11 and lower). This is a system-level requirement because Bluetooth scans can theoretically be used to derive location.
-- **How we use it:** We use this permission strictly to discover other bitchat peers nearby for the "Bluetooth Mesh Chat" mode.
-- **Privacy protection:** We do not record or store your location during this process. The data is processed instantaneously by the Android system to facilitate the connection.
-
-### 2. Geohash Chat Functionality
-- **Why we need it:** The "Geohash Chat" mode allows you to communicate with others in your approximate geographic area.
-- **How we use it:** If you enable this mode, we access your location to calculate a "geohash" (a short alphanumeric string representing a geographic region). This geohash is used to find and subscribe to relevant channels on decentralized Nostr relays.
-- **Privacy protection:** 
-  - Your precise GPS coordinates are **never** sent to any server or peer.
-  - Only the coarse geohash (representing an area, not a pinpoint) is shared with the Nostr network.
-  - You can use the "Bluetooth Mesh Chat" mode without this feature if you prefer.
-
-**We do not collect, store, or share your location history.** Location data is processed locally on your device to enable these specific features.
-
-## Children's Privacy
-
-bitchat does not knowingly collect information from children. The app has no age verification because it collects no personal information from anyone.
-
-## Data Retention
-
-- **Messages**: Deleted from memory when app closes (unless room retention is enabled)
-- **Identity Key**: Persists until you delete the app
-- **Favorites**: Persist until you remove them or delete the app
-- **Everything Else**: Exists only during active sessions
-
-## Security Measures
-
-- All communication is encrypted
-- No data transmitted to servers (there are none)
-- Open source code for public audit
-- Regular security updates
-- Cryptographic signatures prevent tampering
-
-## Changes to This Policy
-
-If we update this policy:
-- The "Last updated" date will change
-- The updated policy will be included in the app
-- No retroactive changes can affect data (since we don't collect any)
-
-## Contact
-
-bitchat is an open source project. For privacy questions:
-- Review our code: https://github.com/yourusername/bitchat
-- Open an issue on GitHub
-- Join the discussion in public rooms
-
-## Philosophy
-
-Privacy isn't just a feature—it's the entire point. bitchat proves that modern communication doesn't require surrendering your privacy. No accounts, no servers, no surveillance. Just people talking freely.
+**與上游 bitchat 的差異**：bitchat 宣稱不收集任何資料；CARES Mesh 不同。為了讓救援者找得到你，本 App 會把你主動填寫的個人資料、健康狀態與精確位置上傳到雲端（Google Firebase）。請在使用前讀完本政策。
 
 ---
 
-*This policy is released into the public domain under The Unlicense, just like bitchat itself.*
+## 摘要
+
+| 資料 | 存放位置 | 誰看得到 |
+|---|---|---|
+| 帳號（email、密碼） | Firebase Authentication | 僅用於登入。密碼由 Firebase 保管，本團隊看不到 |
+| 個人檔案（姓名、電話、居住區域、緊急聯絡人、血型、病史） | Firestore＋你的裝置 | 只有你自己 |
+| 健康回報（完整版） | Firestore | 你自己，以及救援者帳號 |
+| 健康回報（廣播版） | 藍牙 mesh | 藍牙範圍內、以及轉傳路徑上的任何裝置 |
+| SOS 求救 | Firestore | **所有已登入的使用者** |
+| 物資申請與認領 | Firestore | 其他已登入的使用者可看到認領紀錄（含你的姓名） |
+| 聊天訊息 | 藍牙 mesh（不經伺服器） | 公開訊息：附近裝置；私訊：只有收件人 |
+
+本 App 不使用分析、廣告或當機回報服務，不出售資料，也不把資料用於救災以外的目的。
+
+另外，本專題團隊的 Firebase 專案管理者可以透過 Firebase 主控台存取雲端上的所有資料。下文「誰看得到」說明的是 App 內的存取範圍，不含管理者。
+
+---
+
+## 1. 帳號與個人檔案
+
+註冊時你會提供 email 與密碼，並填寫個人檔案：姓名、電話、居住區域、緊急聯絡人（姓名、電話、關係）、血型與病史。
+
+- 帳號由 Firebase Authentication 管理，註冊後會寄驗證信到你的 email。
+- 個人檔案存在 Firestore 的 `users` 集合，安全規則只允許你本人讀寫。
+- 個人檔案也會複製一份存在你的裝置上，供離線時使用（見第 7 節）。
+
+## 2. 健康回報
+
+在「健康回報」頁選擇你的狀態（安全、輕傷、重傷）時，App 會取得你目前的位置，並同時送出兩個版本：
+
+**廣播版：經藍牙 mesh 傳給附近裝置**
+
+- 內容：一組隨機產生的代號、你的狀態、約 5 公里見方範圍的粗略位置（geohash），以及回報時間。
+- 不含姓名、電話、血型、傷勢說明或精確座標。代號是隨機產生的，不是由你的帳號、電話或姓名推算出來。
+- 同一台裝置每次回報都使用同一組代號，因此收到的人可以把你的多次回報串在一起，看出狀態與粗略位置的變化。
+- 藍牙範圍內的任何裝置都收得到，並可能轉傳最多 7 次，因此會傳到你看不到的裝置上。
+
+**完整版：上傳到 Firestore**
+
+- 內容：姓名、電話、血型、狀態、傷勢說明、精確座標、回報時間。
+- 存在 `health_reports` 集合，只有你本人與救援者帳號可以讀取。救援者帳號由本團隊在後台個別授予，一般使用者無法自行取得。
+
+## 3. SOS 求救
+
+按下 SOS 時，App 會把你的姓名、電話、血型、病史與精確座標上傳到 Firestore 的 `sos_requests` 集合。
+
+**所有已登入的使用者都能讀取 SOS 紀錄**，不限救援者。如果你不希望其他使用者看到這些資料，請改用健康回報。
+
+## 4. 物資申請與認領
+
+申請或認領物資時，App 會記錄你的帳號 ID、姓名、品項與數量。其他已登入的使用者可以看到認領紀錄，包括你的姓名。
+
+## 5. 藍牙 mesh 聊天
+
+聊天功能只透過手機之間的藍牙連線傳遞，不經過任何伺服器。
+
+- 附近的裝置會看到你的暱稱與裝置公鑰。
+- 公開訊息：藍牙範圍內與轉傳路徑上的裝置都看得到內容。
+- 私訊：以 Noise 協定端對端加密，只有收件人能解讀。轉傳的裝置看不到內容，但看得到封包收發兩端的裝置代號。
+- 語音、圖片與檔案同樣經 mesh 傳送。相機、麥克風與相簿權限只在你主動拍照、錄音、選檔或掃描 QR code 時使用。
+- 對方暫時不在範圍內時，訊息可能暫存在轉傳裝置上，等對方出現再送出。
+
+上游 bitchat 的「位置頻道」（經 Nostr 網路與同區域的人聊天）在本 App 中已停用，聊天內容不會送上網路。
+
+## 6. 位置資料
+
+App 會在以下情況使用你的位置：
+
+1. **藍牙掃描**：Android 規定掃描附近藍牙裝置需要位置權限。這個用途不會讀取或記錄你的座標。
+2. **背景位置**（選用）：讓 App 在背景、或手機重新開機後繼續掃描附近裝置，維持 mesh 運作。
+3. **健康回報與 SOS**：取得一次精確座標。精確座標只會上傳到 Firestore，藍牙廣播只帶粗略位置（見第 2、3 節）。
+4. **避難所地圖**：這一頁內嵌第三方網站 [kiang.github.io/air_raid_shelter](https://kiang.github.io/air_raid_shelter/)，App 會自動允許該網頁取得你的位置，以顯示附近的避難所。該網站如何處理位置，依其本身的政策。
+5. **地名查詢**：若你從通知進入原生聊天畫面並開啟位置頻道，App 會把座標交給裝置的地理編碼服務換成地名。有 Google Play 服務的裝置使用 Google 的服務，沒有的則使用 OpenStreetMap Nominatim。
+
+除了上述第 3 點上傳的回報，本 App 不會持續記錄你的位置軌跡。
+
+## 7. 存在你裝置上的資料
+
+- 個人檔案副本與最近一次的健康狀態：存在 App 的私有儲存空間，其他 App 無法讀取，但沒有另外加密。
+- Mesh 身分金鑰與暱稱：以 Android 加密儲存保存。
+- 聊天紀錄、私訊對話與收藏的聯絡人：存在 App 的私有儲存空間。
+
+解除安裝 App 會刪除以上所有本機資料。
+
+## 8. 第三方服務
+
+| 服務 | 用途 | 會收到的資料 |
+|---|---|---|
+| Google Firebase（Authentication、Cloud Firestore） | 帳號與雲端資料儲存 | 第 1 至 4 節所列的資料 |
+| kiang.github.io（託管於 GitHub Pages） | 避難所地圖 | 你的位置（開啟該頁時）與一般網頁連線資訊 |
+| Google Play 服務地理編碼／OpenStreetMap Nominatim | 位置頻道的地名查詢 | 你的座標（僅在第 6 節第 5 點的情況） |
+
+App 內的外部連結（例如內政部警政署的防空避難設施網站）會以瀏覽器開啟，之後的資料處理依各網站的政策。
+
+## 9. 保存期間與刪除
+
+- 雲端資料（個人檔案、健康回報、SOS、物資紀錄）不會自動刪除，會保存到你要求刪除為止。
+- App 目前**沒有**刪除帳號或刪除已送出回報的功能。如需刪除，請依第 12 節的方式聯絡我們，我們會刪除你的帳號與所有相關雲端資料。
+- 已透過藍牙廣播出去的資料存在其他人的裝置上，我們無法收回。
+
+## 10. 未成年人
+
+本 App 沒有年齡驗證機制。未成年人請在法定代理人同意下註冊與使用。
+
+## 11. 安全措施與限制
+
+- Firestore 的存取範圍由[安全規則](firestore.rules)控制，規則與程式碼一同公開在本 repo。
+- 私訊採端對端加密；藍牙廣播的健康回報不含可識別身分的資料。
+- 本 App 是專題研究原型，**尚未經過第三方安全稽核**。請不要把它當作唯一的求救管道；緊急時請優先撥打 119 或 110。
+
+## 12. 聯絡我們
+
+- 聯絡信箱：【待補：團隊聯絡信箱】
+- 非敏感的問題可以到 GitHub 提出：<https://github.com/dioispen/cares-mesh-app-android/issues>
+
+提出刪除請求時，請使用你註冊時的 email 寄信，方便我們確認身分。請不要在公開的 GitHub issue 中貼出個人資料。
+
+## 13. 政策變更
+
+本政策如有修改，會更新頁首的日期；修改紀錄可以在本 repo 的 git 歷史中查到。修改如果擴大了資料的收集或分享範圍，會在該版本的 release note 中說明。
