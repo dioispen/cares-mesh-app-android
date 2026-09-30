@@ -1,6 +1,6 @@
 # 開發規範
 
-本檔案定義本專題的分支策略與 commit 規範（[PLAN.md](PLAN.md) 的 R9）。
+本檔案定義本專題的分支策略與 commit 規範（[PLAN.md](docs/PLAN.md) 的 R9）。
 架構細節與程式碼風格見 [AGENTS.md](AGENTS.md)；領域用詞見 [CONTEXT.md](CONTEXT.md)。
 
 ---
@@ -129,7 +129,7 @@ tools/reproducible-builds/run-in-container.sh bash -c 'cd flutter_ui && flutter 
 
 主機建置的前置需求（Flutter 版本、PUB_CACHE 修補）見 [README 的建置章節](README.md#建置)。
 
-改到協定或封包格式時，`app/src/test/kotlin/com/bitchat/android/protocol/` 下的測試必須通過。這些測試是三端封包格式的權威（見 PLAN.md 的 R6）。
+改到協定或封包格式時，`app/src/test/kotlin/com/bitchat/android/protocol/` 下的測試必須通過。這些測試是三端封包格式的權威（見 [PLAN.md](docs/PLAN.md) 的 R6）。
 
 ---
 

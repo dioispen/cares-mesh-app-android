@@ -77,7 +77,7 @@ git log 632ee88..main          # 修改的逐筆紀錄與日期
 
 若以 APK 等目的碼形式散布本軟體，散布者必須依 GPLv3 §6 一併提供對應的完整原始碼，或提供取得該原始碼的管道（指向上述網址即可滿足 §6(d)）。
 
-**本組發布 release APK 時（見 [PLAN.md](PLAN.md) 的 R11），必須在 release note 中附上對應的 commit hash 或 tag。** 缺少這一項，該次散布即不符合 GPLv3。
+**本組發布 release APK 時（見 [PLAN.md](docs/PLAN.md) 的 R11），必須在 release note 中附上對應的 commit hash 或 tag。** 缺少這一項，該次散布即不符合 GPLv3。
 
 ---
 
