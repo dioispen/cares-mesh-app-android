@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 class MascotOption {
   final String icon;
@@ -27,12 +28,40 @@ class MascotOptionsNotifier extends ChangeNotifier
 
   set value(List<MascotOption> newValue) {
     _value = newValue;
-    notifyListeners();
+    // 頁面的 didPush 是在 build 期間觸發的，這時直接通知會被 Flutter 擋下
+    // （setState() called during build），小助理就不會更新；改成等這一幀畫完再通知。
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) => notifyListeners());
+    } else {
+      notifyListeners();
+    }
   }
 }
 
 final MascotOptionsNotifier mascotOptionsNotifier =
     MascotOptionsNotifier(const []);
+
+// 每次推入新頁面、對話框或底部選單時先把小助理藏起來，
+// 需要小助理的頁面會在自己的 didPush / didPopNext 再把選項設回來。
+// 這樣沒有設定選項的頁面（登入、註冊、引導動畫…）就不會殘留上一頁的小助理。
+class MascotVisibilityObserver extends NavigatorObserver {
+  void _hide() {
+    if (mascotOptionsNotifier.value.isNotEmpty) {
+      mascotOptionsNotifier.value = const [];
+    }
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _hide();
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      _hide();
+}
+
+final MascotVisibilityObserver mascotVisibilityObserver =
+    MascotVisibilityObserver();
 
 // ─── Per-screen option sets ───────────────────────────────────────────────────
 
