@@ -66,6 +66,18 @@ class _KnowledgeScreenState extends State<KnowledgeScreen>
   List<_BubbleTopic>? _bubbles;
   Size _canvasSize = Size.zero;
 
+  // 各主題詳細頁底下的「實用連結」，沒有列在這裡的主題就不顯示這一區
+  static const _topicLinks = <String, List<LinkItem>>{
+    '急救知識': [
+      LinkItem(
+        title: '全國 AED 地圖',
+        subtitle: '查詢你附近的 AED 位置（衛福部）',
+        url: 'https://tw-aed.mohw.gov.tw/map',
+        icon: Icons.monitor_heart_rounded,
+      ),
+    ],
+  };
+
   static final _topicsData = [
     (
       category: '地震',
@@ -366,6 +378,7 @@ class _KnowledgeScreenState extends State<KnowledgeScreen>
                           tips: bubble.tips,
                           sections: bubble.sections,
                           videos: bubble.videos,
+                          links: _topicLinks[bubble.category] ?? const [],
                         ),
                       ),
                     ),

@@ -18,6 +18,24 @@ class _MascotAssistantState extends State<MascotAssistant> {
   _MascotState _state = _MascotState.idle;
   MascotOption? _selected;
 
+  @override
+  void initState() {
+    super.initState();
+    mascotOptionsNotifier.addListener(_onPageChanged);
+  }
+
+  @override
+  void dispose() {
+    mascotOptionsNotifier.removeListener(_onPageChanged);
+    super.dispose();
+  }
+
+  // 換頁（或開對話框、返回上一頁）時選項會重新設定，順便把泡泡關掉，
+  // 避免上一頁的對話內容留在新頁面上。
+  void _onPageChanged() {
+    if (_state != _MascotState.idle && mounted) _close();
+  }
+
   String get _image {
     switch (_state) {
       case _MascotState.idle:
@@ -67,14 +85,7 @@ class _MascotAssistantState extends State<MascotAssistant> {
       valueListenable: mascotOptionsNotifier,
       builder: (context, options, _) {
         // Hide entirely on screens with no defined options (login, register, etc.)
-        if (options.isEmpty) {
-          if (_state != _MascotState.idle) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() { _state = _MascotState.idle; _selected = null; });
-            });
-          }
-          return const SizedBox.shrink();
-        }
+        if (options.isEmpty) return const SizedBox.shrink();
 
         return Stack(
           children: [

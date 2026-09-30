@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 // ─── Shared data models ───────────────────────────────────────────────────────
@@ -16,6 +17,19 @@ class VideoItem {
   const VideoItem({required this.label, required this.path});
 }
 
+class LinkItem {
+  final String title;
+  final String subtitle;
+  final String url;
+  final IconData icon;
+  const LinkItem({
+    required this.title,
+    required this.subtitle,
+    required this.url,
+    this.icon = Icons.open_in_new_rounded,
+  });
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class KnowledgeDetailScreen extends StatelessWidget {
@@ -25,6 +39,7 @@ class KnowledgeDetailScreen extends StatelessWidget {
   final List<String> tips;
   final List<TipSection> sections;
   final List<VideoItem> videos;
+  final List<LinkItem> links;
 
   const KnowledgeDetailScreen({
     super.key,
@@ -34,6 +49,7 @@ class KnowledgeDetailScreen extends StatelessWidget {
     this.tips = const [],
     this.sections = const [],
     this.videos = const [],
+    this.links = const [],
   });
 
   @override
@@ -138,6 +154,22 @@ class KnowledgeDetailScreen extends StatelessWidget {
               ),
             ),
 
+          // ── Links (below tips) ────────────────────────────────────────────
+          if (links.isNotEmpty) ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
+                child: _SectionHeader(label: '實用連結', color: color),
+              ),
+            ),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _LinkCard(link: links[i], color: color),
+                childCount: links.length,
+              ),
+            ),
+          ],
+
           // ── Videos (below tips) ───────────────────────────────────────────
           if (videos.isNotEmpty) ...[
             SliverToBoxAdapter(
@@ -153,6 +185,83 @@ class KnowledgeDetailScreen extends StatelessWidget {
 
           const SliverToBoxAdapter(child: SizedBox(height: 40)),
         ],
+      ),
+    );
+  }
+}
+
+// ─── External link card ───────────────────────────────────────────────────────
+
+class _LinkCard extends StatelessWidget {
+  final LinkItem link;
+  final Color color;
+
+  const _LinkCard({required this.link, required this.color});
+
+  Future<void> _open(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await launchUrl(Uri.parse(link.url),
+        mode: LaunchMode.externalApplication);
+    if (!ok) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('無法開啟連結，請稍後再試'),
+          behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _open(context),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: color.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(link.icon, color: color, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        link.title,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF3D2C1E),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        link.subtitle,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF8C7B6E)),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.open_in_new_rounded, color: color, size: 20),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
