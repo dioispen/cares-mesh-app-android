@@ -16,6 +16,15 @@ abstract final class ChatPalette {
   static const mention = Color(0xFFC96F1E);
   static const mentionBg = Color(0xFFFFF3E3);
 
+  /// 未讀私訊的標示色（原生的強調橘色：標頭的未讀信封、對話列的數字徽章）。
+  static const unread = mention;
+
+  /// 送達標記的三種顏色，對照原生 `MessageComponents.kt` 的 `deliveryCheckColors`：
+  /// 還沒有回條時灰色（原生 `onSurface` 35%）、送達／已讀用主色綠、失敗用錯誤紅。
+  static const deliveryPending = Color(0x593D2C1E);
+  static const deliveryAcknowledged = Color(0xFF2E7D32);
+  static const deliveryFailed = Color(0xFFC62828);
+
   static const _avatarColors = [
     Color(0xFF6B9EAD),
     Color(0xFF7AA67A),
@@ -31,6 +40,8 @@ abstract final class ChatPalette {
 ///
 /// 誰是自己、哪些是系統訊息、誰被 @ 到都照原生算好的欄位（[ChatMessage.isFromSelf]、
 /// [ChatMessage.isSystem]、[ChatMessage.mentionsMe]、[ChatMessage.mentionSpans]），這裡不重新判斷。
+///
+/// 自己送出的私訊在時間後面接送達標記（[DeliveryStatusMark]），與原生相同；公開訊息沒有。
 class ChatMessageTile extends StatelessWidget {
   const ChatMessageTile({super.key, required this.message});
 
@@ -120,9 +131,18 @@ class ChatMessageTile extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.only(top: 4, left: 4, right: 4),
-                child: Text(
-                  _formatTime(msg.timestamp),
-                  style: const TextStyle(fontSize: 10, color: ChatPalette.textSecondary),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _formatTime(msg.timestamp),
+                      style: const TextStyle(fontSize: 10, color: ChatPalette.textSecondary),
+                    ),
+                    if (_deliveryStatusOf(msg) case final status?) ...[
+                      const SizedBox(width: 4),
+                      DeliveryStatusMark(status: status),
+                    ],
+                  ],
                 ),
               ),
             ],
@@ -130,6 +150,14 @@ class ChatMessageTile extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 要畫送達標記的狀態：原生只為自己送出的私訊畫（`message.isPrivate && sender == 我`），
+  /// 沒有狀態、或是這個版本不認得的狀態時不畫。
+  static DeliveryStatus? _deliveryStatusOf(ChatMessage msg) {
+    final status = msg.deliveryStatus;
+    if (!msg.isPrivate || !msg.isFromSelf || status == null || status is DeliveryUnknown) return null;
+    return status;
   }
 
   /// 訊息文字。`@暱稱` 以 chip 樣式強調、指到我的最醒目，與原生相同；位置由 Kotlin 給
@@ -183,4 +211,55 @@ class _MentionMark extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// 自己送出的私訊的送達標記，對照原生 `MessageComponents.kt` 的 `DeliveryStatusIcon`：永遠是兩個
+/// `✓`（狀態變化只換顏色、不改版面），依原生 `deliveryCheckColors` 上色——
+/// 傳送中／已送出兩個灰、已送達（含部分送達）第一個綠、已讀兩個綠、失敗兩個紅。
+///
+/// 原生只畫符號；這裡另以 tooltip（也是無障礙標籤）說明狀態，文字對照原生
+/// `DeliveryStatus.getDisplayText()`（失敗時附上原生給的原因）。
+class DeliveryStatusMark extends StatelessWidget {
+  const DeliveryStatusMark({super.key, required this.status});
+
+  final DeliveryStatus status;
+
+  /// 狀態說明；[DeliveryUnknown] 沒有（不畫標記）。
+  static String? labelOf(DeliveryStatus status) => switch (status) {
+        DeliverySending() => '傳送中…',
+        DeliverySent() => '已送出',
+        DeliveryDelivered() => '已送達',
+        DeliveryRead() => '已讀',
+        DeliveryFailed(:final reason) => reason.isEmpty ? '傳送失敗' : '傳送失敗：$reason',
+        DeliveryPartiallyDelivered(:final reached, :final total) => '已送達 $reached/$total',
+        DeliveryUnknown() => null,
+      };
+
+  /// 兩個 `✓` 各自的顏色（原生 `deliveryCheckColors`）。
+  static (Color, Color) colorsOf(DeliveryStatus status) => switch (status) {
+        DeliveryRead() => (ChatPalette.deliveryAcknowledged, ChatPalette.deliveryAcknowledged),
+        DeliveryDelivered() || DeliveryPartiallyDelivered() => (
+            ChatPalette.deliveryAcknowledged,
+            ChatPalette.deliveryPending,
+          ),
+        DeliveryFailed() => (ChatPalette.deliveryFailed, ChatPalette.deliveryFailed),
+        _ => (ChatPalette.deliveryPending, ChatPalette.deliveryPending),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final label = labelOf(status);
+    if (label == null) return const SizedBox.shrink();
+    final (first, second) = colorsOf(status);
+    return Tooltip(
+      message: label,
+      child: Text.rich(
+        TextSpan(children: [
+          TextSpan(text: '✓', style: TextStyle(color: first)),
+          TextSpan(text: '✓', style: TextStyle(color: second)),
+        ]),
+        style: const TextStyle(fontSize: 10),
+      ),
+    );
+  }
 }

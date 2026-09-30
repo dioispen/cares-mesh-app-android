@@ -19,13 +19,20 @@ Map<String, dynamic> _focus(String? peerID, {String? name, String? conversationI
       'draft': peerID == null ? null : draft,
     };
 
-Map<String, Object?> _message(String id, {String sender = 'alice', bool isFromSelf = false}) => {
+Map<String, Object?> _message(
+  String id, {
+  String sender = 'alice',
+  bool isFromSelf = false,
+  Map<String, Object?>? deliveryStatus,
+}) =>
+    {
       'id': id,
       'sender': sender,
       'content': 'text of $id',
       'timestamp': DateTime(2024, 5, 1, 9, 7).millisecondsSinceEpoch,
       'isPrivate': true,
       'isFromSelf': isFromSelf,
+      'deliveryStatus': deliveryStatus,
     };
 
 void main() {
@@ -146,6 +153,48 @@ void main() {
     expect(find.text('text of B1'), findsNothing, reason: 'another conversation');
     // Own messages carry no sender label, as in the public chat.
     expect(find.text('me'), findsNothing);
+  });
+
+  testWidgets('a sent message shows sent, delivered and read as the native side reports them (#56)',
+      (tester) async {
+    await openPrivateChat(tester);
+    Future<void> status(Map<String, Object?> deliveryStatus) => push(
+          tester,
+          chats({
+            _contact: [_message('P1', sender: 'me', isFromSelf: true, deliveryStatus: deliveryStatus)],
+          }),
+        );
+
+    await status({'kind': 'sending'});
+    expect(find.byTooltip('傳送中…'), findsOneWidget);
+
+    await status({'kind': 'sent'});
+    expect(find.byTooltip('已送出'), findsOneWidget);
+
+    await status({'kind': 'delivered', 'to': _alice, 'at': 1700000001000});
+    expect(find.byTooltip('已送達'), findsOneWidget);
+
+    await status({'kind': 'read', 'by': _alice, 'at': 1700000002000});
+    expect(find.byTooltip('已讀'), findsOneWidget);
+    expect(find.byTooltip('已送達'), findsNothing);
+  });
+
+  testWidgets('a message that could not be delivered in time is shown as failed (#56)', (tester) async {
+    await openPrivateChat(tester);
+
+    await push(
+      tester,
+      chats({
+        _contact: [
+          _message('P1', sender: 'me', isFromSelf: true, deliveryStatus: {
+            'kind': 'failed',
+            'reason': 'Message expired before delivery',
+          }),
+        ],
+      }),
+    );
+
+    expect(find.byTooltip('傳送失敗：Message expired before delivery'), findsOneWidget);
   });
 
   testWidgets('an empty conversation says so', (tester) async {

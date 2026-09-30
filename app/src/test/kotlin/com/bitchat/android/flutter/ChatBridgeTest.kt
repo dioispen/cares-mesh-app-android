@@ -2,8 +2,12 @@ package com.bitchat.android.flutter
 
 import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.model.BitchatMessage
+import com.bitchat.android.model.BitchatMessageType
+import com.bitchat.android.model.DeliveryStatus
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.CommandSuggestion
+import com.bitchat.android.ui.ConversationSummary
+import com.bitchat.android.ui.DirectMessageTransport
 import io.flutter.plugin.common.MethodCall
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +58,9 @@ class ChatBridgeTest {
     private val showMentionSuggestions = MutableStateFlow(false)
     private val mentionSuggestions = MutableStateFlow<List<String>>(emptyList())
     private val selectedPrivateChatPeer = MutableStateFlow<String?>(null)
+    private val unreadPrivateMessages = MutableStateFlow<Set<String>>(emptySet())
+    private val conversations = MutableStateFlow<List<ConversationSummary>>(emptyList())
+    private val privateChatSheetPeer = MutableStateFlow<String?>(null)
     private val drafts = mutableMapOf<String, String>()
 
     /** Upstream's contact records, as ChatBridge reads them; unknown IDs resolve to themselves. */
@@ -76,6 +83,9 @@ class ChatBridgeTest {
         whenever(vm.showMentionSuggestions).thenAnswer { showMentionSuggestions }
         whenever(vm.mentionSuggestions).thenAnswer { mentionSuggestions }
         whenever(vm.selectedPrivateChatPeer).thenAnswer { selectedPrivateChatPeer }
+        whenever(vm.unreadPrivateMessages).thenAnswer { unreadPrivateMessages }
+        whenever(vm.conversations).thenAnswer { conversations }
+        whenever(vm.privateChatSheetPeer).thenAnswer { privateChatSheetPeer }
         whenever(vm.conversationDraft(anyOrNull())).thenAnswer { drafts[it.arguments[0]] ?: "" }
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
@@ -943,6 +953,157 @@ class ChatBridgeTest {
         verify(viewModel, never()).sendMessage(any(), any())
     }
 
+    // --- delivery status and unread (#56) -------------------------------------------------------
+
+    @Test
+    fun `each delivery status upstream reaches is pushed with the private chats`() {
+        val sent = privateMessage("P1", DeliveryStatus.Sending)
+        privateChats.value = mapOf(ALICE to listOf(sent))
+        settleAndClear()
+
+        // What MessageManager and AppStateStore do on an ack or receipt: a copy with the new status
+        // in a new map. The copy differs from the old message, so the StateFlow emits.
+        listOf(
+            DeliveryStatus.Delivered(ALICE, Date(1_700_000_001_000L)),
+            DeliveryStatus.Read(ALICE, Date(1_700_000_002_000L))
+        ).forEach { status ->
+            privateChats.value = mapOf(ALICE to listOf(sent.copy(deliveryStatus = status)))
+            dispatcher.scheduler.advanceUntilIdle()
+            poster.runAll()
+        }
+
+        assertEquals(listOf("delivered", "read"), privateChatStatusKinds())
+    }
+
+    @Test
+    fun `a queued message the router gives up on is pushed as failed, with upstream's reason`() {
+        val sent = privateMessage("P1", DeliveryStatus.Sending)
+        privateChats.value = mapOf(ALICE to listOf(sent))
+        settleAndClear()
+
+        // ChatViewModel's MessageRouter.onMessageExpired hook.
+        privateChats.value =
+            mapOf(ALICE to listOf(sent.copy(deliveryStatus = DeliveryStatus.Failed("Message expired before delivery"))))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(
+            listOf(mapOf("kind" to "failed", "reason" to "Message expired before delivery")),
+            privateChatStatuses()
+        )
+    }
+
+    @Test
+    fun `Dart subscribing receives the current unread state`() {
+        unreadPrivateMessages.value = setOf(CONTACT)
+        conversations.value = listOf(summary(CONTACT, unreadCount = 2, connectedPeerID = ALICE))
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(
+            listOf(
+                mapOf(
+                    "type" to ChatSerialization.EVENT_UNREAD,
+                    "hasUnread" to true,
+                    "conversations" to mapOf(CONTACT to 2)
+                )
+            ),
+            unreadEvents()
+        )
+    }
+
+    @Test
+    fun `unread changes upstream makes are pushed after the debounce, down to zero on opening`() {
+        settleAndClear()
+
+        // A private message arrives in a chat that is not open.
+        unreadPrivateMessages.value = setOf(CONTACT)
+        conversations.value = listOf(summary(CONTACT, unreadCount = 1, connectedPeerID = ALICE))
+        dispatcher.scheduler.advanceTimeBy(ChatBridge.SNAPSHOT_DEBOUNCE_MS / 2)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+        assertEquals("still inside the debounce window", emptyList<Any?>(), unreadEvents())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        assertEquals(listOf(mapOf(CONTACT to 1)), unreadEvents().map { it["conversations"] })
+        sink.events.clear()
+
+        // Opening it: upstream's startPrivateChat clears the mark and reads its messages.
+        unreadPrivateMessages.value = emptySet()
+        conversations.value = listOf(summary(CONTACT, unreadCount = 0, connectedPeerID = ALICE))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(false to emptyMap<String, Int>()), unreadEvents().map { it["hasUnread"] to it["conversations"] })
+    }
+
+    @Test
+    fun `peer rows carry their online conversation's unread count and follow it`() {
+        connectedPeers.value = listOf(ALICE, BOB)
+        peerNicknames.value = mapOf(ALICE to "alice", BOB to "bob")
+        settleAndClear()
+
+        conversations.value = listOf(summary(CONTACT, unreadCount = 2, connectedPeerID = BOB))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        // Unread first, as upstream sorts them.
+        assertEquals(
+            listOf(listOf(BOB to 2, ALICE to 0)),
+            peerRows().map { rows -> rows.map { it["peerID"] to it["unreadCount"] } }
+        )
+    }
+
+    @Test
+    fun `openLatestUnreadPrivateChat answers the conversation upstream picks and withdraws its sheet request`() {
+        // Upstream picks the latest unread chat and asks its UI to show it (showPrivateChatSheet).
+        doAnswer {
+            privateChatSheetPeer.value = CONTACT
+            null
+        }.whenever(viewModel).openLatestUnreadPrivateChat()
+        doAnswer {
+            privateChatSheetPeer.value = null
+            null
+        }.whenever(viewModel).hidePrivateChatSheet()
+        val result = RecordingResult()
+
+        val claimed = bridge.handle(MethodCall(ChatBridge.METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT, null), result)
+
+        assertTrue(claimed)
+        verify(viewModel).openLatestUnreadPrivateChat()
+        assertEquals(listOf("success:$CONTACT"), result.calls)
+        assertEquals("Flutter has no sheet; the request is handed to Dart once", null, privateChatSheetPeer.value)
+        // Dart opens its private chat screen, which starts the chat like any other.
+        verifyBlocking(viewModel, never()) { startPrivateChat(any()) }
+    }
+
+    @Test
+    fun `with nothing unread openLatestUnreadPrivateChat answers null`() {
+        val result = RecordingResult()
+
+        bridge.handle(MethodCall(ChatBridge.METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT, null), result)
+
+        verify(viewModel).openLatestUnreadPrivateChat()
+        assertEquals(listOf("success:null"), result.calls)
+    }
+
+    @Test
+    fun `a sheet request left by someone else is never taken for the answer`() {
+        // Upstream's other writers of the request (e.g. geohash DMs) answer to no one here.
+        privateChatSheetPeer.value = "nostr_stale"
+        doAnswer {
+            privateChatSheetPeer.value = null
+            null
+        }.whenever(viewModel).hidePrivateChatSheet()
+        val result = RecordingResult()
+
+        // Nothing unread: upstream returns without asking for a sheet.
+        bridge.handle(MethodCall(ChatBridge.METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT, null), result)
+
+        assertEquals(listOf("success:null"), result.calls)
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
 
     @Test
@@ -1043,6 +1204,25 @@ class ChatBridgeTest {
         assertEquals(emptyList<Any?>(), sink.events)
     }
 
+    @Test
+    fun `an engine going away ends the private chat its screen had open`() {
+        // The private chat screen goes with the engine and Dart restarts at its first screen, so
+        // nobody is looking at that chat any more. Left selected, upstream would count it as open:
+        // read receipts for it once the app is back in front, and no notifications (#56).
+        selectedPrivateChatPeer.value = CONTACT
+
+        bridge.destroy()
+
+        verify(viewModel).endPrivateChat()
+    }
+
+    @Test
+    fun `an engine going away with no private chat open leaves upstream alone`() {
+        bridge.destroy()
+
+        verify(viewModel, never()).endPrivateChat()
+    }
+
     // --- helpers -----------------------------------------------------------------------------
 
     /** The public composer sends without `privateChat`; the private one names its chat. */
@@ -1097,6 +1277,47 @@ class ChatBridgeTest {
         timestamp = Date(1_700_000_000_000L),
         senderPeerID = senderPeerID
     )
+
+    /** One of our own private messages, as upstream holds it while it is being delivered. */
+    private fun privateMessage(id: String, status: DeliveryStatus) = BitchatMessage(
+        id = id,
+        sender = "me",
+        content = "content of $id",
+        timestamp = Date(1_700_000_000_000L),
+        isPrivate = true,
+        senderPeerID = MY_PEER_ID,
+        deliveryStatus = status
+    )
+
+    /** A row of upstream's conversation list (`ChatViewModel.conversations`). */
+    private fun summary(conversationID: String, unreadCount: Int, connectedPeerID: String?) = ConversationSummary(
+        conversationID = conversationID,
+        displayName = "alice",
+        unreadCount = unreadCount,
+        latestMessageAt = 1_700_000_000_000L,
+        latestActivityOrder = 1L,
+        latestMessageType = BitchatMessageType.Message,
+        latestMessagePreview = "hi",
+        transport = DirectMessageTransport.MESH,
+        nostrPubkey = null,
+        identityAliases = setOf(conversationID),
+        isConnected = connectedPeerID != null,
+        connectedPeerID = connectedPeerID
+    )
+
+    /** The delivery status of the first message of the first conversation, per private chats snapshot. */
+    @Suppress("UNCHECKED_CAST")
+    private fun privateChatStatuses(): List<Any?> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_PRIVATE_CHATS }
+        .map { event -> (event["chats"] as Map<String, List<Map<String, Any?>>>).values.first().first()["deliveryStatus"] }
+
+    private fun privateChatStatusKinds(): List<Any?> = privateChatStatuses().map { (it as Map<*, *>)["kind"] }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun unreadEvents(): List<Map<String, Any?>> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_UNREAD }
 
     @Suppress("UNCHECKED_CAST")
     private fun publicTimeline(): List<List<Map<String, Any?>>> = sink.events

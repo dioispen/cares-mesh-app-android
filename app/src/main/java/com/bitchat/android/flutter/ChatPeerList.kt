@@ -16,17 +16,22 @@ import com.bitchat.android.ui.truncateNickname
  * - rows: `MeshPeerListSheet.kt` `PeopleSection` (order, display name, `#abcd` suffix) and
  *   `PeerItem` (name truncation, direct / routed / Wi-Fi Aware).
  * - signal bars: `MeshPeerListSheet.kt` `convertRSSIToSignalStrength` and the bar bands in its doc.
- * - order: `PeopleSection` `sortedPeers` — the most recent private message first (#55), then
- *   alphabetical.
+ * - unread badge (#56): the badge of the peer's online conversation (see [ChatUnread]).
+ * - order: `PeopleSection` `sortedPeers` — peers with unread private messages first (#56), then the
+ *   most recent private message (#55), then alphabetical.
  *
  * Deliberately not (yet) mirrored:
- * - `PeopleSection` sorts unread private-message senders before the most recent private chat, and
- *   favourites after it. Those keys arrive with the fields that make them visible (#56 unread,
- *   #58 favourites); add them to [order] then, in that place.
+ * - `PeopleSection` sorts favourites after the most recent private chat. That key arrives with the
+ *   field that makes it visible (#58 favourites); add it to [order] then, in that place.
  * - Offline favourites appended after the connected peers (#58); they must also be counted in the
  *   `#abcd` suffix de-duplication, as upstream counts them.
  * - Connected peers upstream moves into its "conversations" section; the Flutter chat has no such
- *   section yet, so every connected peer is listed.
+ *   section yet, so every connected peer is listed. That is why a row's unread badge and "unread
+ *   first" key come from the peer's conversation (`ChatViewModel.conversations`, as upstream's
+ *   conversation rows show and sort them: `ConversationRow` → `UnreadBadge`) rather than from
+ *   `PeopleSection`'s own lookups: the peers `PeopleSection` still shows are the ones without a
+ *   conversation, so its unread keys (its sort looks the unread set up by mesh peer ID, which
+ *   upstream replaces with a `contact_…` ID once it knows the peer's Noise key) rarely apply.
  * - Upstream's `peerID == nickname` → "You" branch compares a peer ID with our nickname and never
  *   meant to match; we leave ourselves out by peer ID instead, exactly as the online count does.
  */
@@ -46,7 +51,9 @@ object ChatPeerList {
         /** Keys of `WifiAwareController.connectedPeers`. */
         val wifiAwarePeerIDs: Set<String>,
         /** `ChatViewModel.privateChats`, for the recency order and the display-name fallback. */
-        val privateChats: Map<String, List<BitchatMessage>>
+        val privateChats: Map<String, List<BitchatMessage>>,
+        /** Upstream's conversations with unread messages ([ChatUnread.conversations]). */
+        val unreadConversations: List<ChatUnread.Conversation> = emptyList()
     )
 
     /**
@@ -72,7 +79,9 @@ object ChatPeerList {
         val rssi: Int?,
         /** 0–3; null exactly when [rssi] is. */
         val signalBars: Int?,
-        val connection: Connection
+        val connection: Connection,
+        /** Unread private messages from this peer ([ChatUnread.countFor]); 0 when none. */
+        val unreadCount: Int = 0
     )
 
     /** `PeerCounter`'s mesh count: `connectedPeers.filter { it != myPeerID }.size`. */
@@ -83,7 +92,9 @@ object ChatPeerList {
      * cover yet (upstream asks `ChatViewModel.getMeshPeerInfo(id)?.isDirectConnection`).
      */
     fun rows(inputs: Inputs, isDirectFallback: (String) -> Boolean): List<Row> {
-        val peers = inputs.connectedPeers.filter { it != inputs.myPeerID }.sortedWith(order(inputs))
+        val others = inputs.connectedPeers.filter { it != inputs.myPeerID }
+        val unread = others.associateWith { ChatUnread.countFor(it, inputs.unreadConversations) }
+        val peers = others.sortedWith(order(inputs, unread))
         val names = peers.map { displayNameOf(it, inputs) }
         // PeopleSection counts base names across every row it shows before deciding on suffixes.
         val baseNameCounts = names.groupingBy { splitSuffix(it).first }.eachCount()
@@ -101,7 +112,8 @@ object ChatPeerList {
                 connection = connection(
                     isWifiAware = peerID in inputs.wifiAwarePeerIDs,
                     isDirect = inputs.peerDirect[peerID] ?: isDirectFallback(peerID)
-                )
+                ),
+                unreadCount = unread.getValue(peerID)
             )
         }
     }
@@ -120,15 +132,18 @@ object ChatPeerList {
     }
 
     /**
-     * PeopleSection's keys: the newest private message timestamp first — upstream looks the peer
-     * up in `privateChats` by its mesh peer ID, so a conversation already re-keyed to a `contact_…`
-     * ID does not count, in the native list either — then nickname, else peer ID, lowercased.
-     * Stable for ties.
+     * PeopleSection's keys: unread private messages first ([unread], see the class doc for where
+     * they come from; having any is the key, not how many) — then the newest private message
+     * timestamp — upstream looks the peer up in `privateChats` by its mesh peer ID, so a
+     * conversation already re-keyed to a `contact_…` ID does not count, in the native list either —
+     * then nickname, else peer ID, lowercased. Stable for ties.
      */
-    private fun order(inputs: Inputs): Comparator<String> =
-        compareByDescending<String> { peerID ->
-            inputs.privateChats[peerID]?.maxByOrNull { it.timestamp }?.timestamp?.time ?: 0L
-        }.thenBy { (inputs.peerNicknames[it] ?: it).lowercase() }
+    private fun order(inputs: Inputs, unread: Map<String, Int>): Comparator<String> =
+        compareByDescending<String> { peerID -> (unread[peerID] ?: 0) > 0 }
+            .thenByDescending { peerID ->
+                inputs.privateChats[peerID]?.maxByOrNull { it.timestamp }?.timestamp?.time ?: 0L
+            }
+            .thenBy { (inputs.peerNicknames[it] ?: it).lowercase() }
 
     /** PeopleSection: nickname, else the last private message's sender, else the ID's prefix. */
     private fun displayNameOf(peerID: String, inputs: Inputs): String =

@@ -18,7 +18,8 @@ class ChatPeerListTest {
         peerRSSI: Map<String, Int> = emptyMap(),
         peerDirect: Map<String, Boolean> = emptyMap(),
         wifiAwarePeerIDs: Set<String> = emptySet(),
-        privateChats: Map<String, List<BitchatMessage>> = emptyMap()
+        privateChats: Map<String, List<BitchatMessage>> = emptyMap(),
+        unreadConversations: List<ChatUnread.Conversation> = emptyList()
     ) = ChatPeerList.Inputs(
         myPeerID = ME,
         connectedPeers = connectedPeers,
@@ -26,7 +27,8 @@ class ChatPeerListTest {
         peerRSSI = peerRSSI,
         peerDirect = peerDirect,
         wifiAwarePeerIDs = wifiAwarePeerIDs,
-        privateChats = privateChats
+        privateChats = privateChats,
+        unreadConversations = unreadConversations
     )
 
     private fun rows(inputs: ChatPeerList.Inputs, isDirectFallback: (String) -> Boolean = { false }) =
@@ -124,6 +126,53 @@ class ChatPeerListTest {
         )
 
         assertEquals(listOf(ALICE, BOB), rows(state).map { it.peerID })
+    }
+
+    // --- unread (#56: conversation row badge, "unread first" sort key) ----------------------------
+
+    @Test
+    fun `a peer's unread count is the badge of its online conversation`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob"),
+            unreadConversations = listOf(
+                ChatUnread.Conversation(CONTACT, BOB, 4),
+                ChatUnread.Conversation("contact_${"f".repeat(64)}", null, 7)
+            )
+        )
+
+        assertEquals(mapOf(ALICE to 0, BOB to 4), rows(state).associate { it.peerID to it.unreadCount })
+    }
+
+    @Test
+    fun `a peer with unread messages is listed first, even before a more recent private chat`() {
+        // PeopleSection's first key (unread DM senders first); the native conversation rows also
+        // put unread conversations ahead of the more recent ones.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB, CAROL),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob", CAROL to "cat"),
+            privateChats = mapOf(ALICE to listOf(dm("amy", at = 9_000L))),
+            unreadConversations = listOf(ChatUnread.Conversation(CONTACT, CAROL, 1))
+        )
+
+        assertEquals(listOf(CAROL, ALICE, BOB), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `peers with unread messages keep the recency and name order among themselves`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB, CAROL),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob", CAROL to "cat"),
+            privateChats = mapOf(CAROL to listOf(dm("cat", at = 9_000L))),
+            unreadConversations = listOf(
+                ChatUnread.Conversation("contact_${"a".repeat(64)}", ALICE, 1),
+                ChatUnread.Conversation("contact_${"b".repeat(64)}", BOB, 9),
+                ChatUnread.Conversation("contact_${"c".repeat(64)}", CAROL, 2)
+            )
+        )
+
+        // The key is "has unread", not how many: carol by recency, then amy and bob by name.
+        assertEquals(listOf(CAROL, ALICE, BOB), rows(state).map { it.peerID })
     }
 
     // --- names (PeopleSection displayName, PeerItem splitSuffix / truncateNickname) ---------------
@@ -289,5 +338,6 @@ class ChatPeerListTest {
         const val ALICE = "1111111111111111"
         const val BOB = "2222222222222222"
         const val CAROL = "3333333333333333"
+        val CONTACT = "contact_" + "b".repeat(64)
     }
 }

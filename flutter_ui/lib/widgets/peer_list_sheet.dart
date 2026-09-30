@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/chat_peer.dart';
+import 'chat_message_tile.dart' show ChatPalette;
 
 /// 「附近的人」：目前 mesh 上的 peer 列表（#53），由聊天室 AppBar 的線上人數打開。
 ///
@@ -97,9 +98,10 @@ class PeerListSheet extends StatelessWidget {
   }
 }
 
-/// peer 列表的一列：暱稱（同名時接淡色 `#abcd`）、連線方式、訊號強度。
+/// peer 列表的一列：暱稱（同名時接淡色 `#abcd`）、連線方式、未讀私訊數、訊號強度。
 ///
-/// 之後的欄位（#56 未讀數、#58 我的最愛）加在名稱列或尾端。
+/// 未讀數照原生列表放在名稱之後、尾端之前（[UnreadBadge]）。之後的欄位（#58 我的最愛）加在
+/// 名稱列或尾端。
 class PeerListTile extends StatelessWidget {
   const PeerListTile({super.key, required this.peer, this.onTap});
 
@@ -191,6 +193,10 @@ class PeerListTile extends StatelessWidget {
                 ],
               ),
             ),
+            if (peer.unreadCount > 0) ...[
+              const SizedBox(width: 8),
+              UnreadBadge(count: peer.unreadCount),
+            ],
             const SizedBox(width: 8),
             if (rssi == null)
               const Tooltip(
@@ -207,6 +213,35 @@ class PeerListTile extends StatelessWidget {
                 ],
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 未讀私訊數的徽章，對照原生 `MeshPeerListSheet.kt` 的 `UnreadBadge`：強調橘色圓角底、白色粗體
+/// 數字，超過 99 顯示 `99+`。[count] 為 0 時不顯示。
+class UnreadBadge extends StatelessWidget {
+  const UnreadBadge({super.key, required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    if (count <= 0) return const SizedBox.shrink();
+    return Tooltip(
+      message: '$count 則未讀私訊',
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(color: ChatPalette.unread, borderRadius: BorderRadius.circular(10)),
+        child: Center(
+          widthFactor: 1,
+          heightFactor: 1,
+          child: Text(
+            count > 99 ? '99+' : '$count',
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
+          ),
         ),
       ),
     );

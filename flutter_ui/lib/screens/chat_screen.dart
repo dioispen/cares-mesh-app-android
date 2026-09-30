@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../models/chat_peer.dart';
+import '../models/chat_unread.dart';
 import '../models/private_chat.dart';
 import '../services/chat_service.dart';
 import '../services/mascot_service.dart';
@@ -16,10 +17,15 @@ import 'private_chat_screen.dart';
 /// 依 [ChatService.selectedPrivateChat] 開關 [PrivateChatScreen]，不自行判斷：
 /// - 從 peer 列表點一個 peer：關掉列表、立刻開啟私訊畫面，由私訊畫面向原生開啟對話
 ///   （與原生相同：先開畫面，畫面再呼叫 `startPrivateChat`）。
-/// - 原生自己選定了私訊（公開聊天室輸入 `/m 暱稱`、Activity 重建後原生仍有選定對象、日後的通知）
-///   而私訊畫面沒開：開啟它。
+/// - 原生自己選定了私訊（公開聊天室輸入 `/m 暱稱`、日後的通知）而私訊畫面沒開：開啟它。
+///   Activity 重建時私訊畫面隨 engine 消失、Dart 從第一個畫面重來，原生端會一併結束私訊
+///   （Kotlin `ChatBridge.destroy`），不會留下沒人在看、卻仍被當成開著的私訊。
 /// - 私訊畫面不論怎麼關閉（返回鍵、手勢、AppBar 返回、原生清除選定後自行關閉），都呼叫
 ///   [ChatService.endPrivateChat]；原生確認結束前不再依舊快照重開私訊畫面。
+///
+/// 未讀私訊（#56）照原生標頭：有未讀時 AppBar 最左側出現橘色信封，點了由原生挑出最新的未讀
+/// 對話（`openLatestUnreadPrivateChat`）並開啟它；各 peer 的未讀數在 peer 列表上。開啟對話後由原生
+/// 清除未讀，這裡只跟著快照。
 ///
 /// 私訊畫面開著時公開輸入框在它下面、看不到；就算原生的選定私訊與畫面暫時不一致，
 /// 原生端也只在選定私訊與輸入框相符時才送出（見 `BitchatBridge.sendMessage`），
@@ -58,7 +64,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // 打開聊天室時直接停在最新訊息
       _scrollToBottom(animate: false);
-      // 原生已經有選定的私訊（例如 Activity 重建前開著私訊）：回到那個私訊。
+      // 這個畫面打開前原生就已選定私訊：開啟那個私訊。
       _onSelectedPrivateChatChanged();
     });
   }
@@ -120,7 +126,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     }
   }
 
-  /// 原生選定了私訊而私訊畫面沒開：開啟它（`/m 暱稱`、Activity 重建後還原）。
+  /// 原生選定了私訊而私訊畫面沒開：開啟它（`/m 暱稱` 等由原生選定的私訊）。
   void _onSelectedPrivateChatChanged() {
     final PrivateChatFocus? focus = _chat.selectedPrivateChat.value;
     if (focus == null || _privateChatOpen || !mounted) return;
@@ -156,6 +162,34 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     Navigator.of(sheetContext).pop();
     _openPrivateChat(peer.peerID, title: peer.displayName);
   }
+
+  /// 未讀信封：原生挑出最新收到未讀私訊的對話（離線的對話也算），開啟它。
+  Future<void> _openLatestUnread() async {
+    if (_privateChatOpen) return;
+    final String? conversationID;
+    try {
+      conversationID = await _chat.openLatestUnreadPrivateChat();
+    } catch (e) {
+      debugPrint('ChatScreen: openLatestUnreadPrivateChat failed: $e');
+      return;
+    }
+    if (conversationID == null || !mounted) return;
+    _openPrivateChat(conversationID);
+  }
+
+  /// AppBar 最左側的未讀私訊信封（對照原生標頭：未讀私訊信封排在最左、強調橘色、點了開啟最新的
+  /// 未讀對話）。只在原生有未讀私訊時出現。
+  Widget _unreadAction() => ValueListenableBuilder<ChatUnread>(
+        valueListenable: _chat.unread,
+        builder: (context, unread, _) {
+          if (!unread.hasUnread) return const SizedBox.shrink();
+          return IconButton(
+            tooltip: '未讀私訊',
+            onPressed: _openLatestUnread,
+            icon: const Icon(Icons.mail, color: ChatPalette.unread),
+          );
+        },
+      );
 
   /// 開啟 mesh 暱稱編輯器；它從目前的 mesh 暱稱開始，只送出使用者親手輸入的文字。
   Future<void> _editNickname() => showDialog<void>(
@@ -259,7 +293,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
           ],
         ),
         iconTheme: const IconThemeData(color: _textPrimary),
-        actions: [_nicknameAction(), _peerCountAction()],
+        actions: [_unreadAction(), _nicknameAction(), _peerCountAction()],
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(1),
           child: Divider(height: 1, color: ChatPalette.divider),

@@ -325,7 +325,8 @@ class ChatSerializationTest {
         peerNicknames: Map<String, String> = emptyMap(),
         peerRSSI: Map<String, Int> = emptyMap(),
         peerDirect: Map<String, Boolean> = emptyMap(),
-        wifiAwarePeerIDs: Set<String> = emptySet()
+        wifiAwarePeerIDs: Set<String> = emptySet(),
+        unreadConversations: List<ChatUnread.Conversation> = emptyList()
     ) = ChatPeerList.Inputs(
         myPeerID = me.peerID,
         connectedPeers = connectedPeers,
@@ -333,7 +334,8 @@ class ChatSerializationTest {
         peerRSSI = peerRSSI,
         peerDirect = peerDirect,
         wifiAwarePeerIDs = wifiAwarePeerIDs,
-        privateChats = emptyMap()
+        privateChats = emptyMap(),
+        unreadConversations = unreadConversations
     )
 
     @Test
@@ -343,7 +345,8 @@ class ChatSerializationTest {
                 connectedPeers = listOf(alice),
                 peerNicknames = mapOf(alice to "alice"),
                 peerRSSI = mapOf(alice to -67),
-                peerDirect = mapOf(alice to true)
+                peerDirect = mapOf(alice to true),
+                unreadConversations = listOf(ChatUnread.Conversation(contact, alice, 3))
             )
         ) { false }
 
@@ -356,7 +359,8 @@ class ChatSerializationTest {
                     "displaySuffix" to "",
                     "rssi" to -67,
                     "signalBars" to 2,
-                    "connection" to "bluetooth"
+                    "connection" to "bluetooth",
+                    "unreadCount" to 3
                 )
             ),
             peerMaps(event)
@@ -372,6 +376,7 @@ class ChatSerializationTest {
         assertNull(peer["signalBars"])
         assertEquals(alice.take(12), peer["displayName"])
         assertEquals("routed", peer["connection"])
+        assertEquals("nothing unread is a zero count", 0, peer["unreadCount"])
         assertTrue("null values are present, not missing keys", peer.containsKey("rssi"))
     }
 
@@ -405,7 +410,8 @@ class ChatSerializationTest {
                 peerNicknames = mapOf(alice to "小明#beef", bob to "小明#0a1b"),
                 peerRSSI = mapOf(alice to -40),
                 peerDirect = mapOf(alice to true, bob to false),
-                wifiAwarePeerIDs = setOf(bob)
+                wifiAwarePeerIDs = setOf(bob),
+                unreadConversations = listOf(ChatUnread.Conversation(contact, bob, 2))
             )
         ) { false }
         val codec = StandardMessageCodec.INSTANCE
@@ -585,6 +591,54 @@ class ChatSerializationTest {
 
             assertEquals(event, codec.decodeMessage(encoded))
         }
+    }
+
+    // --- unread (#56) ---------------------------------------------------------------------------
+
+    @Test
+    fun `unread event says whether upstream marks anything unread and carries each conversation's badge`() {
+        val event = ChatSerialization.unreadEvent(
+            unreadConversationIDs = setOf(contact, bob),
+            conversations = listOf(
+                ChatUnread.Conversation(contact, alice, 3),
+                ChatUnread.Conversation(bob, null, 1)
+            )
+        )
+
+        assertEquals(
+            mapOf(
+                "type" to "chat_unread",
+                "hasUnread" to true,
+                "conversations" to mapOf(contact to 3, bob to 1)
+            ),
+            event
+        )
+    }
+
+    @Test
+    fun `hasUnread follows upstream's unread set, which the native header's envelope shows`() {
+        // A conversation marked unread whose summary has no badge yet (e.g. nothing loaded).
+        val event = ChatSerialization.unreadEvent(unreadConversationIDs = setOf(contact), conversations = emptyList())
+
+        assertEquals(true, event["hasUnread"])
+        assertEquals(emptyMap<String, Int>(), event["conversations"])
+    }
+
+    @Test
+    fun `nothing unread is false and an empty map, not missing keys`() {
+        assertEquals(
+            mapOf("type" to "chat_unread", "hasUnread" to false, "conversations" to emptyMap<String, Int>()),
+            ChatSerialization.unreadEvent(emptySet(), emptyList())
+        )
+    }
+
+    @Test
+    fun `unread event survives a StandardMessageCodec round trip`() {
+        val event = ChatSerialization.unreadEvent(setOf(contact), listOf(ChatUnread.Conversation(contact, alice, 120)))
+        val codec = StandardMessageCodec.INSTANCE
+        val encoded = codec.encodeMessage(event)!!.also { it.rewind() }
+
+        assertEquals(event, codec.decodeMessage(encoded))
     }
 
     @Suppress("UNCHECKED_CAST")

@@ -33,6 +33,7 @@ void main() {
   late List<String> routing;
   late Future<Object?> Function(String peerID) startPrivateChat;
   late Future<Object?> Function() endPrivateChat;
+  late Future<String?> Function() openLatestUnread;
   late ChatService service;
 
   setUp(() async {
@@ -50,6 +51,7 @@ void main() {
     routing = [];
     startPrivateChat = (peerID) async => focusEvent(peerID, name: 'nick-$peerID');
     endPrivateChat = () async => focusEvent(null);
+    openLatestUnread = () async => null;
     service = ChatService(
       events: () => events.stream,
       requestSnapshot: () async {},
@@ -77,6 +79,10 @@ void main() {
         return selectMention(nickname, currentText);
       },
       clearSuggestions: () async => composerCalls.add('clearSuggestions'),
+      openLatestUnreadPrivateChat: () {
+        routing.add('openLatestUnread');
+        return openLatestUnread();
+      },
     );
     await service.start();
   });
@@ -332,6 +338,7 @@ void main() {
       int? rssi = -67,
       int? signalBars = 2,
       String connection = 'bluetooth',
+      int unreadCount = 0,
     }) =>
         {
           'peerID': peerID,
@@ -341,6 +348,7 @@ void main() {
           'rssi': rssi,
           'signalBars': signalBars,
           'connection': connection,
+          'unreadCount': unreadCount,
         };
 
     Future<void> pushPeers(WidgetTester tester, int onlineCount, List<Map<String, Object?>> peers) async {
@@ -465,6 +473,33 @@ void main() {
       expect(sheet(), findsNothing);
       expect(find.byType(PrivateChatScreen), findsOneWidget);
       expect(routing, ['start:1111111111111111']);
+    });
+
+    testWidgets('a peer with unread private messages shows how many, as the native list does (#56)',
+        (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 3, [
+        peer('1111111111111111', displayName: 'alice', unreadCount: 3),
+        peer('2222222222222222', displayName: 'bob', unreadCount: 120),
+        peer('3333333333333333', displayName: 'carol'),
+      ]);
+      await openPeerList(tester);
+
+      expect(inSheet(find.byTooltip('3 則未讀私訊')), findsOneWidget);
+      expect(inSheet(find.text('3')), findsOneWidget);
+      expect(inSheet(find.text('99+')), findsOneWidget, reason: 'upstream caps the badge at 99+');
+      expect(inSheet(find.byType(UnreadBadge)), findsNWidgets(2), reason: 'no badge without unread messages');
+    });
+
+    testWidgets('the badge goes once the native side reports the chat read (#56)', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice', unreadCount: 2)]);
+      await openPeerList(tester);
+      expect(inSheet(find.byTooltip('2 則未讀私訊')), findsOneWidget);
+
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
+
+      expect(inSheet(find.byType(UnreadBadge)), findsNothing);
     });
   });
 
@@ -600,7 +635,8 @@ void main() {
     });
 
     testWidgets('a private chat the native side still has when the chat opens is shown again', (tester) async {
-      // Activity recreation: Dart starts over, the ChatViewModel still has the private chat.
+      // Selected upstream before this screen opened (e.g. from a notification, #57). Activity
+      // recreation no longer leaves one behind: the old engine's ChatBridge ends it (#56).
       events.add(focusEvent(contact, name: 'alice'));
       await tester.pump();
 
@@ -641,6 +677,76 @@ void main() {
       await tester.pump();
 
       expect(routing, ['start:$alice', 'send[$alice]:see you there']);
+    });
+  });
+
+  group('unread private messages (#56)', () {
+    const contact = 'contact_aaaa';
+
+    Future<void> pushUnread(WidgetTester tester, {bool hasUnread = true}) async {
+      events.add({
+        'type': 'chat_unread',
+        'hasUnread': hasUnread,
+        'conversations': hasUnread ? {contact: 2} : <String, int>{},
+      });
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Finder envelope() => find.byTooltip('未讀私訊');
+
+    testWidgets('there is no envelope while nothing is unread', (tester) async {
+      await pumpChat(tester);
+      expect(envelope(), findsNothing);
+
+      await pushUnread(tester, hasUnread: false);
+      expect(envelope(), findsNothing);
+    });
+
+    testWidgets('the envelope shows while the native side has unread private messages', (tester) async {
+      await pumpChat(tester);
+
+      await pushUnread(tester);
+      expect(envelope(), findsOneWidget);
+
+      // Opening the chat (here or anywhere upstream) reads it; the envelope follows the snapshot.
+      await pushUnread(tester, hasUnread: false);
+      expect(envelope(), findsNothing);
+    });
+
+    testWidgets('the envelope opens the conversation the native side picks', (tester) async {
+      openLatestUnread = () async => contact;
+      await pumpChat(tester);
+      await pushUnread(tester);
+
+      await tester.tap(envelope());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PrivateChatScreen), findsOneWidget);
+      // The private chat screen starts it like any other; upstream's start clears its unread mark.
+      expect(routing, ['openLatestUnread', 'start:$contact']);
+    });
+
+    testWidgets('nothing left to open leaves the chat as it is', (tester) async {
+      await pumpChat(tester);
+      await pushUnread(tester);
+
+      await tester.tap(envelope());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PrivateChatScreen), findsNothing);
+      expect(routing, ['openLatestUnread']);
+    });
+
+    testWidgets('a failing request leaves the chat as it is', (tester) async {
+      openLatestUnread = () async => throw MissingPluginException('no native side');
+      await pumpChat(tester);
+      await pushUnread(tester);
+
+      await tester.tap(envelope());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PrivateChatScreen), findsNothing);
     });
   });
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/chat_message.dart';
 import 'package:flutter_ui/models/chat_suggestions.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 
@@ -35,6 +36,7 @@ void main() {
     Future<String> Function(String nickname, String currentText)? selectMentionSuggestion,
     Future<Object?> Function(String peerID)? startPrivateChat,
     Future<Object?> Function()? endPrivateChat,
+    Future<String?> Function()? openLatestUnreadPrivateChat,
   }) =>
       ChatService(
         events: () => events.stream,
@@ -77,6 +79,11 @@ void main() {
         clearSuggestions: () async {
           calls.add('clearSuggestions');
         },
+        openLatestUnreadPrivateChat: openLatestUnreadPrivateChat ??
+            () async {
+              calls.add('openLatestUnread');
+              return null;
+            },
       );
 
   setUp(() {
@@ -320,6 +327,118 @@ void main() {
       await service.updateInput('see y', privateChat: contact);
 
       expect(calls, ['send[$contact]:see you', 'updateInput[$contact]:see y']);
+    });
+  });
+
+  group('delivery status and unread (#56)', () {
+    const contact = 'contact_aaaa';
+
+    /// A `chat_private_chats` snapshot holding one of our own messages with [status].
+    Map<String, dynamic> ownMessage(Map<String, Object?>? status) => {
+          'type': 'chat_private_chats',
+          'chats': {
+            contact: [
+              {
+                'id': 'P1',
+                'sender': 'me',
+                'content': 'on my way',
+                'timestamp': 1700000000000,
+                'isPrivate': true,
+                'isFromSelf': true,
+                'deliveryStatus': status,
+              },
+            ],
+          },
+        };
+
+    Map<String, dynamic> unread({bool hasUnread = true, Map<String, int> conversations = const {contact: 2}}) => {
+          'type': 'chat_unread',
+          'hasUnread': hasUnread,
+          'conversations': conversations,
+        };
+
+    test('each status upstream reaches replaces the one before', () async {
+      await service.start();
+      final seen = <String>[];
+      service.privateChats.addListener(() {
+        seen.add(switch (service.privateChats.value[contact]!.single.deliveryStatus) {
+          DeliverySending() => 'sending',
+          DeliverySent() => 'sent',
+          DeliveryDelivered() => 'delivered',
+          DeliveryRead() => 'read',
+          DeliveryFailed(:final reason) => 'failed: $reason',
+          _ => 'other',
+        });
+      });
+
+      events.add(ownMessage({'kind': 'sending'}));
+      events.add(ownMessage({'kind': 'sent'}));
+      events.add(ownMessage({'kind': 'delivered', 'to': 'bob', 'at': 1700000001000}));
+      events.add(ownMessage({'kind': 'read', 'by': 'bob', 'at': 1700000002000}));
+      await pumpEventQueue();
+
+      expect(seen, ['sending', 'sent', 'delivered', 'read']);
+    });
+
+    test('a queued message upstream gives up on becomes failed, with its reason', () async {
+      await service.start();
+
+      events.add(ownMessage({'kind': 'failed', 'reason': 'Message expired before delivery'}));
+      await pumpEventQueue();
+
+      final status = service.privateChats.value[contact]!.single.deliveryStatus;
+      expect(status, isA<DeliveryFailed>().having((s) => s.reason, 'reason', 'Message expired before delivery'));
+    });
+
+    test('nothing is unread until Kotlin reports it', () {
+      expect(service.unread.value.hasUnread, isFalse);
+      expect(service.unread.value.conversations, isEmpty);
+    });
+
+    test('an unread snapshot sets the envelope and the counts; opening the chat clears them', () async {
+      await service.start();
+
+      events.add(unread());
+      await pumpEventQueue();
+      expect(service.unread.value.hasUnread, isTrue);
+      expect(service.unread.value.countFor(contact), 2);
+
+      // Upstream's startPrivateChat reads the conversation; the next snapshot says so.
+      events.add(unread(hasUnread: false, conversations: {}));
+      await pumpEventQueue();
+      expect(service.unread.value.hasUnread, isFalse);
+      expect(service.unread.value.countFor(contact), 0);
+    });
+
+    test('a malformed unread snapshot keeps the current state', () async {
+      await service.start();
+      events.add(unread());
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_unread'});
+      events.add({'type': 'chat_unread', 'hasUnread': true, 'conversations': 'nope'});
+      await pumpEventQueue();
+
+      expect(service.unread.value.countFor(contact), 2);
+    });
+
+    test('openLatestUnreadPrivateChat answers the conversation Kotlin picks, or null', () async {
+      service = buildService(openLatestUnreadPrivateChat: () async {
+        calls.add('openLatestUnread');
+        return contact;
+      });
+
+      expect(await service.openLatestUnreadPrivateChat(), contact);
+      expect(calls, ['openLatestUnread']);
+
+      service = buildService();
+      expect(await service.openLatestUnreadPrivateChat(), isNull);
+    });
+
+    test('a bridge error from openLatestUnreadPrivateChat is surfaced', () async {
+      service = buildService(openLatestUnreadPrivateChat: () async => throw MissingPluginException('no native side'));
+
+      await expectLater(service.openLatestUnreadPrivateChat(), throwsA(isA<MissingPluginException>()));
     });
   });
 

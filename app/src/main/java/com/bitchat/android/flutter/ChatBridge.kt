@@ -98,6 +98,7 @@ class ChatBridge(
                 chatViewModel.peerRSSI,
                 chatViewModel.peerDirect,
                 chatViewModel.privateChats,
+                chatViewModel.conversations,
                 wifiAwarePeers
             ),
             snapshot = { ChatSerialization.peersEvent(currentPeerInputs(), ::isDirectOnMesh) }
@@ -132,11 +133,24 @@ class ChatBridge(
             ),
             snapshot = { ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()) }
         ),
-        // Nickname is part of the key for the same reason as the public timeline's.
+        // Nickname is part of the key for the same reason as the public timeline's. Delivery
+        // status changes arrive here too: upstream replaces the message with a copy carrying the
+        // new status (BitchatMessage equality includes it), so the flow emits.
         Projection(
             changes = combine(chatViewModel.privateChats, chatViewModel.nickname) { _, _ -> },
             snapshot = {
                 ChatSerialization.privateChatsEvent(chatViewModel.privateChats.value, currentSelf())
+            }
+        ),
+        // Unread marks and counts (#56). `conversations` is upstream's derived list and settles a
+        // moment after the unread set; the debounce usually folds both into one snapshot.
+        Projection(
+            changes = merge(chatViewModel.unreadPrivateMessages, chatViewModel.conversations),
+            snapshot = {
+                ChatSerialization.unreadEvent(
+                    chatViewModel.unreadPrivateMessages.value,
+                    ChatUnread.conversations(chatViewModel.conversations.value)
+                )
             }
         )
     )
@@ -166,6 +180,7 @@ class ChatBridge(
             }
             METHOD_START_PRIVATE_CHAT -> startPrivateChat(call, result)
             METHOD_END_PRIVATE_CHAT -> endPrivateChat(result)
+            METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT -> openLatestUnreadPrivateChat(result)
             METHOD_REQUEST_SNAPSHOT -> {
                 pushSnapshots()
                 result.success(null)
@@ -257,6 +272,25 @@ class ChatBridge(
             chatViewModel.endPrivateChat()
             result.success(ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()))
         }
+    }
+
+    /**
+     * `chat_openLatestUnreadPrivateChat` → `ChatViewModel.openLatestUnreadPrivateChat`, what the
+     * native header's unread envelope runs: upstream picks the unread conversation with the latest
+     * incoming message, resolves the peer to open and asks its UI to show that private chat
+     * (`showPrivateChatSheet`). The Flutter entry has no such sheet, so the request is handed to Dart
+     * instead — answered with its conversation ID, or null when nothing is unread — and withdrawn
+     * again (`hidePrivateChatSheet`) so it is answered once. It is cleared before the call too, so a
+     * request left by another upstream writer (geohash DMs) is never taken for this call's answer.
+     * Dart opens its private chat screen with the ID, which starts the chat like any other
+     * (`chat_startPrivateChat`); upstream's start clears the unread mark.
+     */
+    private fun openLatestUnreadPrivateChat(result: MethodChannel.Result) {
+        chatViewModel.hidePrivateChatSheet()
+        chatViewModel.openLatestUnreadPrivateChat()
+        val conversationID = chatViewModel.privateChatSheetPeer.value
+        chatViewModel.hidePrivateChatSheet()
+        result.success(conversationID)
     }
 
     /**
@@ -359,7 +393,8 @@ class ChatBridge(
         peerRSSI = chatViewModel.peerRSSI.value,
         peerDirect = chatViewModel.peerDirect.value,
         wifiAwarePeerIDs = wifiAwarePeers.value.keys,
-        privateChats = chatViewModel.privateChats.value
+        privateChats = chatViewModel.privateChats.value,
+        unreadConversations = ChatUnread.conversations(chatViewModel.conversations.value)
     )
 
     /** The private chat upstream has in focus, resolved as its private chat screen does; null if none. */
@@ -385,8 +420,18 @@ class ChatBridge(
             false
         }
 
+    /**
+     * The engine is going away (Activity destroyed or recreated). Stops the projection work and,
+     * if a private chat is still selected, ends it (`ChatViewModel.endPrivateChat`), as closing
+     * its screen would have: the screen goes with the engine and a new engine starts Dart at its
+     * first screen, so nobody is looking at that chat any more. Left selected, upstream would keep
+     * counting it as open — sending read receipts for its new messages once the app is back in
+     * front, and holding back their notifications (#56). The native UI has no such gap: it
+     * restores the open private chat sheet with the Activity.
+     */
     fun destroy() {
         scope.cancel()
+        if (chatViewModel.selectedPrivateChatPeer.value != null) chatViewModel.endPrivateChat()
     }
 
     companion object {
@@ -410,6 +455,9 @@ class ChatBridge(
 
         /** Leave the private chat: `ChatViewModel.endPrivateChat`, answered with the (empty) focus. */
         const val METHOD_END_PRIVATE_CHAT = "chat_endPrivateChat"
+
+        /** The native header's unread envelope: answers the conversation to open, or null. */
+        const val METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT = "chat_openLatestUnreadPrivateChat"
 
         private const val TAG = "ChatBridge"
 

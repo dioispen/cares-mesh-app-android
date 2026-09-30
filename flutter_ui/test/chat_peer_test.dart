@@ -10,6 +10,7 @@ Map<String, Object?> _peer({
   int? rssi = -67,
   int? signalBars = 2,
   String connection = 'bluetooth',
+  int unreadCount = 0,
 }) =>
     {
       'peerID': peerID,
@@ -19,12 +20,13 @@ Map<String, Object?> _peer({
       'rssi': rssi,
       'signalBars': signalBars,
       'connection': connection,
+      'unreadCount': unreadCount,
     };
 
 void main() {
   group('ChatPeer.fromMap', () {
     test('reads every bridge field', () {
-      final peer = ChatPeer.fromMap(_peer(displaySuffix: '#beef'))!;
+      final peer = ChatPeer.fromMap(_peer(displaySuffix: '#beef', unreadCount: 4))!;
 
       expect(peer.peerID, '1111111111111111');
       expect(peer.nickname, 'alice');
@@ -33,6 +35,18 @@ void main() {
       expect(peer.rssi, -67);
       expect(peer.signalBars, 2);
       expect(peer.connection, ChatPeerConnection.bluetooth);
+      expect(peer.unreadCount, 4);
+    });
+
+    test('nothing unread is zero (#56)', () {
+      expect(ChatPeer.fromMap(_peer())!.unreadCount, 0);
+      expect(ChatPeer.fromMap(_peer()..remove('unreadCount'))!.unreadCount, 0);
+    });
+
+    test('an unread count that is not a non-negative int is zero, never thrown on (#56)', () {
+      expect(ChatPeer.fromMap(_peer()..['unreadCount'] = '3')!.unreadCount, 0);
+      expect(ChatPeer.fromMap(_peer()..['unreadCount'] = -1)!.unreadCount, 0);
+      expect(ChatPeer.fromMap(_peer()..['unreadCount'] = null)!.unreadCount, 0);
     });
 
     test('reads each connection kind', () {

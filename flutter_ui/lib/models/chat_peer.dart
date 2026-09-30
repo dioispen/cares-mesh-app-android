@@ -8,7 +8,7 @@
 /// 解析一律容錯、永遠不丟例外：單一欄位型別不符時用預設值；沒有 peer ID 的項目不算 peer；
 /// 整份快照的外框（`onlineCount`、`peers`）不對時整份拒收，讓呼叫端保留現有狀態。
 ///
-/// 之後的票在這裡加欄位：#55 私訊、#56 未讀數、#58 我的最愛／對方最愛我。
+/// 之後的票在這裡加欄位：#58 我的最愛／對方最愛我。
 library;
 
 /// 我們如何連到這個 peer（原生的判斷順序：Wi-Fi Aware → 藍牙直連 → 經其他 peer 轉傳）。
@@ -30,6 +30,7 @@ class ChatPeer {
     this.rssi,
     this.signalBars,
     this.connection = ChatPeerConnection.unknown,
+    this.unreadCount = 0,
   });
 
   final String peerID;
@@ -51,6 +52,10 @@ class ChatPeer {
 
   final ChatPeerConnection connection;
 
+  /// 這個 peer 傳來、還沒讀的私訊數（#56）：原生對話列上的數字徽章（它在線時的那個對話）。
+  /// 沒有時是 0；開啟對話後由原生歸零。
+  final int unreadCount;
+
   /// 不是 Map、或沒有非空字串的 `peerID` 時回傳 null；其餘情況一定回傳 peer。
   static ChatPeer? fromMap(Object? raw) {
     if (raw is! Map) return null;
@@ -59,6 +64,7 @@ class ChatPeer {
     final displayName = raw['displayName'];
     final displaySuffix = raw['displaySuffix'];
     final signalBars = raw['signalBars'];
+    final unreadCount = raw['unreadCount'];
     return ChatPeer(
       peerID: peerID,
       nickname: raw['nickname'] is String ? raw['nickname'] as String : null,
@@ -73,6 +79,7 @@ class ChatPeer {
         'routed' => ChatPeerConnection.routed,
         _ => ChatPeerConnection.unknown,
       },
+      unreadCount: unreadCount is int && unreadCount > 0 ? unreadCount : 0,
     );
   }
 }

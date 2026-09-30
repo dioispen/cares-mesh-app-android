@@ -6,6 +6,7 @@ import '../bridge/bitchat_bridge.dart';
 import '../models/chat_message.dart';
 import '../models/chat_peer.dart';
 import '../models/chat_suggestions.dart';
+import '../models/chat_unread.dart';
 import '../models/private_chat.dart';
 
 /// Flutter 端的聊天狀態持有者（#49），整個 app 生命週期只有一個：[ChatService.instance]。
@@ -29,6 +30,7 @@ class ChatService {
     Future<void> Function()? clearSuggestions,
     Future<Object?> Function(String peerID)? startPrivateChat,
     Future<Object?> Function()? endPrivateChat,
+    Future<String?> Function()? openLatestUnreadPrivateChat,
   })  : _events = events ?? BitchatBridge.events,
         _requestSnapshot = requestSnapshot ?? BitchatBridge.requestChatSnapshot,
         _send = sendMessage ?? ((text, privateChat) => BitchatBridge.sendMessage(text, privateChat: privateChat)),
@@ -39,7 +41,8 @@ class ChatService {
         _selectMention = selectMentionSuggestion ?? BitchatBridge.selectMentionSuggestion,
         _clearSuggestions = clearSuggestions ?? BitchatBridge.clearChatSuggestions,
         _startPrivateChat = startPrivateChat ?? BitchatBridge.startPrivateChat,
-        _endPrivateChat = endPrivateChat ?? BitchatBridge.endPrivateChat;
+        _endPrivateChat = endPrivateChat ?? BitchatBridge.endPrivateChat,
+        _openLatestUnread = openLatestUnreadPrivateChat ?? BitchatBridge.openLatestUnreadPrivateChat;
 
   static final ChatService instance = ChatService();
 
@@ -53,6 +56,7 @@ class ChatService {
   final Future<void> Function() _clearSuggestions;
   final Future<Object?> Function(String peerID) _startPrivateChat;
   final Future<Object?> Function() _endPrivateChat;
+  final Future<String?> Function() _openLatestUnread;
 
   final ValueNotifier<List<ChatMessage>> _publicMessages =
       ValueNotifier<List<ChatMessage>>(const []);
@@ -62,6 +66,7 @@ class ChatService {
   final ValueNotifier<PrivateChatFocus?> _selectedPrivateChat = ValueNotifier<PrivateChatFocus?>(null);
   final ValueNotifier<Map<String, List<ChatMessage>>> _privateChats =
       ValueNotifier<Map<String, List<ChatMessage>>>(const {});
+  final ValueNotifier<ChatUnread> _unread = ValueNotifier<ChatUnread>(ChatUnread.none);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
@@ -94,6 +99,11 @@ class ChatService {
   /// 原生持有的所有私訊對話（對話鍵 → 訊息），整份隨快照更新；不可修改。
   /// 某個對話的訊息用 [PrivateChatFocus.messagesIn] 取。
   ValueListenable<Map<String, List<ChatMessage>>> get privateChats => _privateChats;
+
+  /// 原生的未讀私訊（#56）：有沒有未讀（原生標頭的信封），以及各對話的未讀數；原生端回報前是
+  /// [ChatUnread.none]。只隨快照更新——開啟對話時由原生清除，這裡不自行歸零。
+  /// 在線 peer 的未讀數也在 [peerList] 的列上。
+  ValueListenable<ChatUnread> get unread => _unread;
 
   /// 開始接收聊天快照。可重複呼叫，只有第一次有效。
   ///
@@ -128,6 +138,11 @@ class ChatService {
   /// 結束私訊焦點（原生 `ChatViewModel.endPrivateChat`），完成後 [selectedPrivateChat] 為原生回傳的
   /// 值（null）。之後公開聊天室的文字不會被送成私訊。bridge 錯誤會往上拋。
   Future<void> endPrivateChat() async => _applySelection(await _endPrivateChat());
+
+  /// 原生標頭未讀信封的動作：原生挑出最新收到未讀私訊的對話，回傳它的對話 ID（沒有未讀時 null）。
+  /// 只挑、不開啟：拿到 ID 後照一般流程開私訊畫面（畫面會呼叫 [startPrivateChat]，由原生清除未讀）。
+  /// bridge 錯誤會往上拋。
+  Future<String?> openLatestUnreadPrivateChat() => _openLatestUnread();
 
   void _applySelection(Object? raw) {
     final selection = PrivateChatSelection.fromEvent(raw);
@@ -200,6 +215,13 @@ class ChatService {
           return;
         }
         _privateChats.value = chats;
+      case ChatEvents.unread:
+        final unread = ChatUnread.fromEvent(event);
+        if (unread == null) {
+          debugPrint('ChatService: ignoring malformed ${ChatEvents.unread} event');
+          return;
+        }
+        _unread.value = unread;
     }
   }
 
@@ -213,5 +235,6 @@ class ChatService {
     _suggestions.dispose();
     _selectedPrivateChat.dispose();
     _privateChats.dispose();
+    _unread.dispose();
   }
 }

@@ -38,6 +38,9 @@ object ChatSerialization {
     /** Snapshot of every private conversation upstream holds (`ChatViewModel.privateChats`). */
     const val EVENT_PRIVATE_CHATS = "chat_private_chats"
 
+    /** Snapshot of upstream's unread private messages (see [ChatUnread]). */
+    const val EVENT_UNREAD = "chat_unread"
+
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
     // markers are mirrored here; HealthReportChatTimelineTest breaks if the producer drifts.
@@ -116,9 +119,9 @@ object ChatSerialization {
 
     /**
      * One peer-list row. Every key is always present; `nickname`, `rssi` and `signalBars` may be
-     * null. `connection` is a [ChatPeerList.Connection.wire] name. Dart mirrors these keys in
-     * `flutter_ui/lib/models/chat_peer.dart`; later fields (private chat, unread, favourites) are
-     * added here and there together.
+     * null. `connection` is a [ChatPeerList.Connection.wire] name; `unreadCount` is 0 when nothing
+     * from the peer is unread. Dart mirrors these keys in `flutter_ui/lib/models/chat_peer.dart`;
+     * later fields (favourites) are added here and there together.
      */
     fun peer(row: ChatPeerList.Row): Map<String, Any?> = mapOf(
         "peerID" to row.peerID,
@@ -127,7 +130,8 @@ object ChatSerialization {
         "displaySuffix" to row.displaySuffix,
         "rssi" to row.rssi,
         "signalBars" to row.signalBars,
-        "connection" to row.connection.wire
+        "connection" to row.connection.wire,
+        "unreadCount" to row.unreadCount
     )
 
     /**
@@ -196,6 +200,22 @@ object ChatSerialization {
     fun privateChatsEvent(chats: Map<String, List<BitchatMessage>>, self: ChatSelf): Map<String, Any?> = mapOf(
         "type" to EVENT_PRIVATE_CHATS,
         "chats" to chats.mapValues { (_, messages) -> messages.map { message(it, self) } }
+    )
+
+    /**
+     * `{type: "chat_unread", hasUnread, conversations: {conversationID: unreadCount}}` — whether
+     * upstream marks any private conversation unread (the native header's envelope,
+     * `unreadPrivateMessages`), and the badge of every conversation that has one, under upstream's
+     * key (`ChatViewModel.conversations`). A connected peer's badge also rides on its `chat_peers`
+     * row. See [ChatUnread].
+     */
+    fun unreadEvent(
+        unreadConversationIDs: Set<String>,
+        conversations: List<ChatUnread.Conversation>
+    ): Map<String, Any?> = mapOf(
+        "type" to EVENT_UNREAD,
+        "hasUnread" to unreadConversationIDs.isNotEmpty(),
+        "conversations" to conversations.associate { it.conversationID to it.unreadCount }
     )
 
     /** True for upstream's own notices (command output, debug lines), drawn as system lines. */

@@ -21,7 +21,8 @@ import kotlinx.coroutines.launch
  *
  * 以 headless 方式承載上游聊天核心 [ChatViewModel]（#49），建立方式與 `MainActivity` 相同：
  * 同一個 factory、mesh service 同樣取自 [MeshServiceHolder]。前景（resumed）時把 mesh delegate
- * 掛成 [ChatViewModel]，暫停時卸下，讓背景時由 `BluetoothMeshService` 自己發私訊通知。
+ * 掛成 [ChatViewModel]，暫停時卸下（[ForegroundMeshDelegate]），讓背景時由 `BluetoothMeshService`
+ * 自己發私訊通知、不送已讀回條——上游聊天的「App 在前景」就是這個 delegate 有沒有掛上。
  *
  * 這裡只「掛」delegate，不啟動 mesh、不要求權限：mesh 由 Flutter 呼叫 `startMesh`
  * （或 `MeshForegroundService`）啟動，權限由 Flutter 的 setup 流程經 `requestPermissions` 要求。
@@ -54,13 +55,16 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         unifiedMeshService = MeshServiceHolder.getUnifiedOrCreate(applicationContext)
         super.onCreate(savedInstanceState)
 
+        // Foreground: the ChatViewModel is the mesh delegate while resumed (mirrors MainActivity's
+        // onResume/onPause); paused, the foreground service owns DM notifications.
+        val foreground = ForegroundMeshDelegate(unifiedMeshService) { chatViewModel }
+        lifecycle.addObserver(foreground)
+
         // Keep the unified mesh delegate attached when Wi-Fi Aware starts after the UI.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 WifiAwareController.running.collect { running ->
-                    if (running && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                        unifiedMeshService.delegate = chatViewModel
-                    }
+                    if (running) foreground.reattach()
                 }
             }
         }
@@ -90,17 +94,5 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         chatBridge?.destroy()
         chatBridge = null
         super.cleanUpFlutterEngine(flutterEngine)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Foreground: the ChatViewModel is the mesh delegate (mirrors MainActivity.onResume).
-        unifiedMeshService.delegate = chatViewModel
-    }
-
-    override fun onPause() {
-        super.onPause()
-        // Detach so the foreground service owns DM notifications while the UI is not in front.
-        unifiedMeshService.delegate = null
     }
 }

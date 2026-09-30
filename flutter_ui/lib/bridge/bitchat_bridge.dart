@@ -13,6 +13,7 @@ abstract final class ChatMethods {
   static const clearSuggestions = 'chat_clearSuggestions';
   static const startPrivateChat = 'chat_startPrivateChat';
   static const endPrivateChat = 'chat_endPrivateChat';
+  static const openLatestUnreadPrivateChat = 'chat_openLatestUnreadPrivateChat';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -38,8 +39,14 @@ abstract final class ChatEvents {
   static const selectedPrivatePeer = 'chat_selected_private_peer';
 
   /// `{type, chats: {conversationID: List<Map>}}`：原生持有的所有私訊對話，訊息 map 與
-  /// [publicMessages] 相同（見 `models/chat_message.dart`）。
+  /// [publicMessages] 相同（見 `models/chat_message.dart`）。自己送出的私訊帶 `deliveryStatus`，
+  /// 送達、已讀或失敗時隨快照更新。
   static const privateChats = 'chat_private_chats';
+
+  /// `{type, hasUnread: bool, conversations: {conversationID: int}}`：原生是否有未讀私訊（原生標頭的
+  /// 未讀信封），以及每個有未讀的對話的未讀數（見 `models/chat_unread.dart`）。在線 peer 的未讀數也
+  /// 在 [peers] 的列上。
+  static const unread = 'chat_unread';
 }
 
 class BitchatBridge {
@@ -140,6 +147,12 @@ class BitchatBridge {
   /// 回傳當下的 [ChatEvents.selectedPrivatePeer] map（`peerID` 為 null）。bridge 錯誤會往上拋。
   static Future<Map<dynamic, dynamic>?> endPrivateChat() =>
       _method.invokeMethod<Map>(ChatMethods.endPrivateChat);
+
+  /// 原生標頭未讀信封的動作（原生 `ChatViewModel.openLatestUnreadPrivateChat`）：原生挑出最新收到
+  /// 未讀私訊的對話，回傳要開啟的對話 ID；沒有未讀時回傳 null。只挑、不開啟：拿到 ID 後照一般流程
+  /// 開私訊畫面（[startPrivateChat]）。bridge 錯誤會往上拋。
+  static Future<String?> openLatestUnreadPrivateChat() =>
+      _method.invokeMethod<String>(ChatMethods.openLatestUnreadPrivateChat);
 
   /// 設定 mesh 暱稱（原生 `ChatViewModel.setNickname`：儲存後立即重新 announce）。
   ///
