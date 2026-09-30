@@ -826,13 +826,35 @@ class _DonateCardState extends State<_DonateCard> {
                 ],
               ),
             ),
-            Text(
-              '${(progress * 100).toStringAsFixed(0)}%',
-              style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: catColor),
-            ),
+            // 收合時也看得到：集齊比例與還差多少
+            if (item.totalRequestedQty == 0)
+              const Text('目前無需求',
+                  style: TextStyle(fontSize: 12, color: _textSecondary))
+            else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '已集齊 ${(progress * 100).toStringAsFixed(0)}%',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: catColor),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    item.netNeededQty > 0
+                        ? '尚需 ${item.netNeededQty} ${item.unit}'
+                        : '已足額',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: item.netNeededQty > 0
+                            ? const Color(0xFFC4553A)
+                            : const Color(0xFF7AA67A)),
+                  ),
+                ],
+              ),
           ],
         ),
         body: Column(
