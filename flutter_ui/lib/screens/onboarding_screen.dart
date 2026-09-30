@@ -157,7 +157,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         if (!mounted || _done || _scene != 0) return;
         _introGifCtrl.repeat();
       });
-      await _audioPlayer.play(AssetSource('mp3/audio_1.mp3'));
+      if (!await _playAudio('mp3/audio_1.m4a')) _ttsComplete = true;
       _minTimer = Timer(const Duration(milliseconds: 6000), () {
         if (!_done && mounted) {
           _minTimeReached = true;
@@ -169,7 +169,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     } else {
       if (mounted) setState(() => _scene2Phase = 0);
       _startScene2Sequence();
-      await _audioPlayer.play(AssetSource('mp3/audio_3.mp3'));
+      if (!await _playAudio('mp3/audio_3.mp3')) _ttsComplete = true;
       _minTimer = Timer(const Duration(milliseconds: 12000), () {
         if (!_done && mounted) {
           _minTimeReached = true;
@@ -210,13 +210,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
     // 先播開頭
     if (mounted && !_done) {
-      _currentAudioCompleter = Completer<void>();
-      await _audioPlayer.play(AssetSource('mp3/audio_2_0.mp3'));
-      await _currentAudioCompleter!.future.timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {},
-      );
-      _currentAudioCompleter = null;
+      await _playAndWait('mp3/audio_2_0.mp3', const Duration(seconds: 15));
       if (mounted && !_done) await Future.delayed(const Duration(milliseconds: 300));
     }
 
@@ -232,13 +226,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     for (int i = 0; i < audioFiles.length; i++) {
       if (!mounted || _done || !_inFeatureTour || _scene != 1) break;
       if (mounted) setState(() => _highlightedFeature = i);
-      _currentAudioCompleter = Completer<void>();
-      await _audioPlayer.play(AssetSource(audioFiles[i]));
-      await _currentAudioCompleter!.future.timeout(
-        const Duration(seconds: 20),
-        onTimeout: () {},
-      );
-      _currentAudioCompleter = null;
+      await _playAndWait(audioFiles[i], const Duration(seconds: 20));
       if (!mounted || _done || !_inFeatureTour || _scene != 1) break;
       await Future.delayed(const Duration(milliseconds: 400));
     }
@@ -251,6 +239,29 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       _minTimeReached = true;
       _tryAutoAdvance();
     }
+  }
+
+  /// 播放音檔。播放失敗（瀏覽器擋自動播放、檔案讀不到等）時回傳 false，
+  /// 讓動畫照樣往下走，不會因為沒聲音就卡在同一頁。
+  Future<bool> _playAudio(String path) async {
+    try {
+      await _audioPlayer.play(AssetSource(path));
+      return true;
+    } catch (e) {
+      debugPrint('Onboarding audio failed ($path): $e');
+      return false;
+    }
+  }
+
+  /// 播放並等到播完；播放失敗時改成靜音停留一段時間，功能卡高亮仍會依序切換。
+  Future<void> _playAndWait(String path, Duration timeout) async {
+    final completer = _currentAudioCompleter = Completer<void>();
+    if (await _playAudio(path)) {
+      await completer.future.timeout(timeout, onTimeout: () {});
+    } else {
+      await Future.delayed(const Duration(seconds: 3));
+    }
+    if (identical(_currentAudioCompleter, completer)) _currentAudioCompleter = null;
   }
 
   void _tryAutoAdvance() {

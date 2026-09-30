@@ -135,7 +135,8 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5C3D2E)),
         useMaterial3: true,
       ),
-      navigatorObservers: [mascotRouteObserver],
+      // mascotVisibilityObserver 要排在前面：先隱藏，再讓頁面的 RouteAware 設回選項
+      navigatorObservers: [mascotVisibilityObserver, mascotRouteObserver],
       builder: (context, child) => Stack(
         children: [
           child!,
