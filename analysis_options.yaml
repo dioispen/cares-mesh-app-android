@@ -1,0 +1,8 @@
+# 只供以 repo 根目錄開啟編輯器時的 Dart 分析器使用；flutter_ui/ 有自己的 analysis_options.yaml。
+#
+# firestore-tests/ 的 npm 相依 firebase-tools 內附 Cloud Functions 的 Dart 範本
+# （templates/init/functions/dart/，含 pubspec.yaml 與 server.dart）。分析器會把它當成
+# 一個未執行 pub get 的 Dart 專案，回報找不到 package:firebase_functions 等錯誤。
+analyzer:
+  exclude:
+    - firestore-tests/node_modules/**
