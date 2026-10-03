@@ -15,6 +15,7 @@ abstract final class ChatMethods {
   static const endPrivateChat = 'chat_endPrivateChat';
   static const openLatestUnreadPrivateChat = 'chat_openLatestUnreadPrivateChat';
   static const takePendingNavigation = 'chat_takePendingNavigation';
+  static const toggleFavorite = 'chat_toggleFavorite';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -26,7 +27,8 @@ abstract final class ChatEvents {
   static const nickname = 'chat_nickname';
 
   /// `{type, onlineCount: int, peers: List<Map>}`：線上人數與 mesh peer 列表的完整快照，
-  /// 依原生列表的顯示順序（見 `models/chat_peer.dart`）。
+  /// 依原生列表的顯示順序：在線 peer，再接離線的我的最愛（`connection: offline`，#58）；每列帶
+  /// 我的最愛星號的兩個方向 `isFavorite`、`theyFavoritedUs`（見 `models/chat_peer.dart`）。
   static const peers = 'chat_peers';
 
   /// `{type, showCommands: bool, commands: List<Map>, showMentions: bool, mentions: List<String>}`：
@@ -34,14 +36,15 @@ abstract final class ChatEvents {
   /// `models/chat_suggestions.dart`）。
   static const suggestions = 'chat_suggestions';
 
-  /// `{type, peerID: String?, conversationID: String?, displayName: String?, draft: String?}`：
-  /// 原生「目前選定的私訊對象」（`ChatViewModel.selectedPrivateChatPeer`）；沒有時除 `type` 外都是
-  /// null。私訊畫面依它開關（見 `models/private_chat.dart`）。
+  /// `{type, peerID: String?, conversationID: String?, displayName: String?, draft: String?,
+  /// isFavorite: bool?, theyFavoritedUs: bool?}`：原生「目前選定的私訊對象」
+  /// （`ChatViewModel.selectedPrivateChatPeer`）與它標頭的我的最愛星號（#58）；沒有時除 `type` 外
+  /// 都是 null。私訊畫面依它開關（見 `models/private_chat.dart`）。
   static const selectedPrivatePeer = 'chat_selected_private_peer';
 
   /// `{type, chats: {conversationID: List<Map>}}`：原生持有的所有私訊對話，訊息 map 與
   /// [publicMessages] 相同（見 `models/chat_message.dart`）。自己送出的私訊帶 `deliveryStatus`，
-  /// 送達、已讀或失敗時隨快照更新。
+  /// 送達、已讀或失敗時隨快照更新。被 `/block` 的對象傳來的訊息不在裡面（[publicMessages] 也是，#58）。
   static const privateChats = 'chat_private_chats';
 
   /// `{type, hasUnread: bool, conversations: {conversationID: int}}`：原生是否有未讀私訊（原生標頭的
@@ -165,6 +168,15 @@ class BitchatBridge {
   /// 私訊畫面照一般流程呼叫 [startPrivateChat]。bridge 錯誤會往上拋。
   static Future<Map<dynamic, dynamic>?> takePendingChatNavigation() =>
       _method.invokeMethod<Map>(ChatMethods.takePendingNavigation);
+
+  /// 切換我的最愛（原生 `ChatViewModel.toggleFavorite`，原生私訊標頭星號做的事）：加入或移出，
+  /// 記下對方的 Noise 公鑰與暱稱（離線後仍找得到），對方在 mesh 上時通知他。[peerID] 原樣傳過去：
+  /// peer 列表那一列的 `peerID`（在線是 mesh peer ID，離線的最愛是 Noise 公鑰），或私訊畫面的
+  /// [ChatEvents.selectedPrivatePeer] `peerID`。新的星號經 [ChatEvents.peers]、
+  /// [ChatEvents.selectedPrivatePeer] 快照回推。bridge 錯誤會往上拋。
+  static Future<void> toggleFavorite(String peerID) async {
+    await _method.invokeMethod<void>(ChatMethods.toggleFavorite, <String, dynamic>{'peerID': peerID});
+  }
 
   /// 設定 mesh 暱稱（原生 `ChatViewModel.setNickname`：儲存後立即重新 announce）。
   ///

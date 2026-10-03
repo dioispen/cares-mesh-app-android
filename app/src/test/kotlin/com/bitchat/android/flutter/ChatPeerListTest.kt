@@ -2,7 +2,9 @@ package com.bitchat.android.flutter
 
 import com.bitchat.android.model.BitchatMessage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Date
 
@@ -19,7 +21,13 @@ class ChatPeerListTest {
         peerDirect: Map<String, Boolean> = emptyMap(),
         wifiAwarePeerIDs: Set<String> = emptySet(),
         privateChats: Map<String, List<BitchatMessage>> = emptyMap(),
-        unreadConversations: List<ChatUnread.Conversation> = emptyList()
+        unreadConversations: List<ChatUnread.Conversation> = emptyList(),
+        favoritePeers: Set<String> = emptySet(),
+        peerFavoritedUs: Set<String> = emptySet(),
+        peerFingerprints: Map<String, String> = emptyMap(),
+        ourFavorites: List<ChatFavorites.Favorite> = emptyList(),
+        peerNoiseKeys: Map<String, String> = emptyMap(),
+        peerNostrKeys: Map<String, String> = emptyMap()
     ) = ChatPeerList.Inputs(
         myPeerID = ME,
         connectedPeers = connectedPeers,
@@ -28,14 +36,23 @@ class ChatPeerListTest {
         peerDirect = peerDirect,
         wifiAwarePeerIDs = wifiAwarePeerIDs,
         privateChats = privateChats,
-        unreadConversations = unreadConversations
+        unreadConversations = unreadConversations,
+        favoritePeers = favoritePeers,
+        peerFavoritedUs = peerFavoritedUs,
+        peerFingerprints = peerFingerprints,
+        ourFavorites = ourFavorites,
+        peerNoiseKeys = peerNoiseKeys,
+        peerNostrKeys = peerNostrKeys
     )
 
-    private fun rows(inputs: ChatPeerList.Inputs, isDirectFallback: (String) -> Boolean = { false }) =
-        ChatPeerList.rows(inputs, isDirectFallback)
+    private fun rows(
+        inputs: ChatPeerList.Inputs,
+        favoriteFallbacks: ChatFavorites.Fallbacks = ChatFavorites.Fallbacks.NONE,
+        isDirectFallback: (String) -> Boolean = { false }
+    ) = ChatPeerList.rows(inputs, favoriteFallbacks, isDirectFallback)
 
     private fun row(inputs: ChatPeerList.Inputs, isDirectFallback: (String) -> Boolean = { false }) =
-        rows(inputs, isDirectFallback).single()
+        rows(inputs, isDirectFallback = isDirectFallback).single()
 
     // --- online count (ChatHeader.MainHeader → PeerCounter) --------------------------------------
 
@@ -290,9 +307,169 @@ class ChatPeerListTest {
     @Test
     fun `connection wire names are what Dart parses`() {
         assertEquals(
-            listOf("wifiAware", "bluetooth", "routed"),
+            listOf("wifiAware", "bluetooth", "routed", "offline"),
             ChatPeerList.Connection.values().map { it.wire }
         )
+    }
+
+    // --- favourites (#58: PeopleSection peerFavoriteStates / peerTheyFavoritedUsStates) ----------
+
+    @Test
+    fun `rows carry upstream's favourite and favourited-us state, by fingerprint`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB, CAROL),
+            peerNicknames = mapOf(ALICE to "alice", BOB to "bob", CAROL to "carol"),
+            peerFingerprints = mapOf(ALICE to FP_ALICE, BOB to FP_BOB, CAROL to FP_CAROL),
+            favoritePeers = setOf(FP_ALICE, FP_CAROL),
+            peerFavoritedUs = setOf(FP_BOB, FP_CAROL)
+        )
+
+        assertEquals(
+            mapOf(ALICE to (true to false), BOB to (false to true), CAROL to (true to true)),
+            rows(state).associate { it.peerID to (it.isFavorite to it.theyFavoritedUs) }
+        )
+    }
+
+    @Test
+    fun `a peer without a known fingerprint is looked up by its ID, as upstream does`() {
+        val asked = mutableListOf<String>()
+        val state = inputs(connectedPeers = listOf(ALICE, BOB), peerFingerprints = mapOf(BOB to FP_BOB))
+
+        val byId = rows(
+            state,
+            ChatFavorites.Fallbacks(
+                isFavorite = { id -> asked += "isFavorite:$id"; id == ALICE },
+                theyFavoritedUs = { id -> id == ALICE }
+            )
+        ).associateBy { it.peerID }
+
+        assertTrue(byId.getValue(ALICE).isFavorite)
+        assertTrue(byId.getValue(ALICE).theyFavoritedUs)
+        assertFalse(byId.getValue(BOB).isFavorite)
+        assertEquals("only the peer without a fingerprint", listOf("isFavorite:$ALICE"), asked)
+    }
+
+    @Test
+    fun `favourites are listed after more recent private chats and before the alphabetical order`() {
+        // sortedPeers: unread first, then the most recent DM, then favourites, then by name.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB, CAROL),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob", CAROL to "zoe"),
+            peerFingerprints = mapOf(ALICE to FP_ALICE, BOB to FP_BOB, CAROL to FP_CAROL),
+            favoritePeers = setOf(FP_CAROL),
+            privateChats = mapOf(BOB to listOf(dm("bob", at = 2_000L)))
+        )
+
+        assertEquals(listOf("bob", "zoe", "amy"), rows(state).map { it.displayName })
+    }
+
+    @Test
+    fun `unread messages still come before a favourite`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "bob"),
+            peerFingerprints = mapOf(ALICE to FP_ALICE),
+            favoritePeers = setOf(FP_ALICE),
+            unreadConversations = listOf(ChatUnread.Conversation(CONTACT, BOB, 1))
+        )
+
+        assertEquals(listOf(BOB, ALICE), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `being favourited by a peer does not move it`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "amy", BOB to "zoe"),
+            peerFingerprints = mapOf(BOB to FP_BOB),
+            peerFavoritedUs = setOf(FP_BOB)
+        )
+
+        assertEquals(listOf("amy", "zoe"), rows(state).map { it.displayName })
+    }
+
+    // --- offline favourites (#58: PeopleSection offlineFavoriteRows) ------------------------------
+
+    @Test
+    fun `offline favourites are appended after the connected peers, in the store's order`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE, ME),
+            peerNicknames = mapOf(ALICE to "zed"),
+            ourFavorites = listOf(favorite(NOISE_DORA, "dora"), favorite(NOISE_ERIN, "erin", theyFavoritedUs = true))
+        )
+
+        val rows = rows(state)
+
+        // The row is keyed by the favourite's Noise key: what upstream opens the private chat with.
+        assertEquals(listOf(ALICE, NOISE_DORA, NOISE_ERIN), rows.map { it.peerID })
+        val dora = rows[1]
+        assertEquals("dora", dora.displayName)
+        assertNull("no announce under that key", dora.nickname)
+        assertNull(dora.rssi)
+        assertNull(dora.signalBars)
+        assertEquals(ChatPeerList.Connection.OFFLINE, dora.connection)
+        assertTrue("every offline row is one of our favourites", dora.isFavorite)
+        assertFalse(dora.theyFavoritedUs)
+        assertTrue("the record says whether they favourited us", rows[2].theyFavoritedUs)
+    }
+
+    @Test
+    fun `the online count leaves offline favourites out`() {
+        val state = inputs(connectedPeers = listOf(ALICE, ME), ourFavorites = listOf(favorite(NOISE_DORA, "dora")))
+
+        assertEquals(1, ChatPeerList.onlineCount(state))
+        assertEquals(2, rows(state).size)
+    }
+
+    @Test
+    fun `a favourite on the mesh is listed once, as its connected row`() {
+        // isFavoriteMappedToConnected: its Noise key, or its Nostr key, is a connected peer's.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "alice", BOB to "bob"),
+            peerNoiseKeys = mapOf(ALICE to NOISE_DORA.uppercase()),
+            peerNostrKeys = mapOf(BOB to NOSTR_ERIN),
+            ourFavorites = listOf(
+                favorite(NOISE_DORA, "dora"),
+                favorite(NOISE_ERIN, "erin", nostrPubkeyHex = NOSTR_ERIN.uppercase()),
+                favorite(NOISE_FRED, "fred")
+            )
+        )
+
+        assertEquals(listOf(ALICE, BOB, NOISE_FRED), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `offline favourites count when deciding on hash suffixes`() {
+        // PeopleSection counts base names across connected and offline rows alike.
+        val state = inputs(
+            connectedPeers = listOf(ALICE),
+            peerNicknames = mapOf(ALICE to "sam#0a1b"),
+            ourFavorites = listOf(favorite(NOISE_DORA, "sam#ffff"), favorite(NOISE_ERIN, "solo#1234"))
+        )
+
+        assertEquals(
+            listOf("sam" to "#0a1b", "sam" to "#ffff", "solo" to ""),
+            rows(state).map { it.displayName to it.displaySuffix }
+        )
+    }
+
+    @Test
+    fun `an offline favourite's name is truncated like any row's`() {
+        val state = inputs(connectedPeers = emptyList(), ourFavorites = listOf(favorite(NOISE_DORA, "d".repeat(40))))
+
+        assertEquals("d".repeat(15), row(state).displayName)
+    }
+
+    @Test
+    fun `an offline favourite's badge is its conversation's unread count`() {
+        val state = inputs(
+            connectedPeers = emptyList(),
+            ourFavorites = listOf(favorite(NOISE_DORA, "dora")),
+            unreadConversations = listOf(ChatUnread.Conversation(CONTACT_DORA.uppercase(), null, 4))
+        )
+
+        assertEquals(4, row(state).unreadCount)
     }
 
     // --- signal (PeerManager RSSI, MeshPeerListSheet.convertRSSIToSignalStrength) -----------------
@@ -333,11 +510,33 @@ class ChatPeerListTest {
         senderPeerID = ALICE
     )
 
+    /** One of our favourites as upstream's favourites store records it. */
+    private fun favorite(
+        noiseKeyHex: String,
+        nickname: String,
+        theyFavoritedUs: Boolean = false,
+        nostrPubkeyHex: String? = null
+    ) = ChatFavorites.Favorite(
+        noiseKeyHex = noiseKeyHex,
+        nostrPubkeyHex = nostrPubkeyHex,
+        nickname = nickname,
+        theyFavoritedUs = theyFavoritedUs,
+        conversationID = "contact_" + noiseKeyHex.reversed()
+    )
+
     private companion object {
         const val ME = "a1b2c3d4e5f60718"
         const val ALICE = "1111111111111111"
         const val BOB = "2222222222222222"
         const val CAROL = "3333333333333333"
         val CONTACT = "contact_" + "b".repeat(64)
+        val FP_ALICE = "a".repeat(64)
+        val FP_BOB = "b".repeat(64)
+        val FP_CAROL = "c".repeat(64)
+        val NOISE_DORA = "d".repeat(63) + "1"
+        val NOISE_ERIN = "e".repeat(63) + "2"
+        val NOISE_FRED = "f".repeat(63) + "3"
+        val CONTACT_DORA = "contact_" + NOISE_DORA.reversed()
+        val NOSTR_ERIN = "9".repeat(64)
     }
 }

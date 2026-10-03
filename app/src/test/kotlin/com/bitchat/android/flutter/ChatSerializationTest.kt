@@ -287,6 +287,17 @@ class ChatSerializationTest {
         assertFalse(ChatSerialization.isHealthReportLine(quoted))
     }
 
+    @Test
+    fun `a blocked peer's lines are left out of the public timeline (#58)`() {
+        val mallory = "6666666666666666"
+        val event = ChatSerialization.publicMessagesEvent(
+            listOf(message(id = "A", senderPeerID = alice), message(id = "M", senderPeerID = mallory)),
+            me
+        ) { it == mallory }
+
+        assertEquals(listOf("A"), messageMaps(event).map { it["id"] })
+    }
+
     // --- mesh nickname -----------------------------------------------------------------------
 
     @Test
@@ -326,7 +337,11 @@ class ChatSerializationTest {
         peerRSSI: Map<String, Int> = emptyMap(),
         peerDirect: Map<String, Boolean> = emptyMap(),
         wifiAwarePeerIDs: Set<String> = emptySet(),
-        unreadConversations: List<ChatUnread.Conversation> = emptyList()
+        unreadConversations: List<ChatUnread.Conversation> = emptyList(),
+        favoritePeers: Set<String> = emptySet(),
+        peerFavoritedUs: Set<String> = emptySet(),
+        peerFingerprints: Map<String, String> = emptyMap(),
+        ourFavorites: List<ChatFavorites.Favorite> = emptyList()
     ) = ChatPeerList.Inputs(
         myPeerID = me.peerID,
         connectedPeers = connectedPeers,
@@ -335,8 +350,15 @@ class ChatSerializationTest {
         peerDirect = peerDirect,
         wifiAwarePeerIDs = wifiAwarePeerIDs,
         privateChats = emptyMap(),
-        unreadConversations = unreadConversations
+        unreadConversations = unreadConversations,
+        favoritePeers = favoritePeers,
+        peerFavoritedUs = peerFavoritedUs,
+        peerFingerprints = peerFingerprints,
+        ourFavorites = ourFavorites
     )
+
+    private val aliceFingerprint = "a".repeat(64)
+    private val doraNoiseKey = "d".repeat(64)
 
     @Test
     fun `peer maps every bridge field`() {
@@ -346,7 +368,9 @@ class ChatSerializationTest {
                 peerNicknames = mapOf(alice to "alice"),
                 peerRSSI = mapOf(alice to -67),
                 peerDirect = mapOf(alice to true),
-                unreadConversations = listOf(ChatUnread.Conversation(contact, alice, 3))
+                unreadConversations = listOf(ChatUnread.Conversation(contact, alice, 3)),
+                peerFingerprints = mapOf(alice to aliceFingerprint),
+                favoritePeers = setOf(aliceFingerprint)
             )
         ) { false }
 
@@ -360,7 +384,40 @@ class ChatSerializationTest {
                     "rssi" to -67,
                     "signalBars" to 2,
                     "connection" to "bluetooth",
-                    "unreadCount" to 3
+                    "unreadCount" to 3,
+                    "isFavorite" to true,
+                    "theyFavoritedUs" to false
+                )
+            ),
+            peerMaps(event)
+        )
+    }
+
+    @Test
+    fun `an offline favourite is a row keyed by its Noise key, marked offline`() {
+        val event = ChatSerialization.peersEvent(
+            peerInputs(
+                connectedPeers = emptyList(),
+                ourFavorites = listOf(
+                    ChatFavorites.Favorite(doraNoiseKey, null, "dora", theyFavoritedUs = true, conversationID = contact)
+                )
+            )
+        ) { false }
+
+        assertEquals(0, event["onlineCount"])
+        assertEquals(
+            listOf(
+                mapOf(
+                    "peerID" to doraNoiseKey,
+                    "nickname" to null,
+                    "displayName" to "dora",
+                    "displaySuffix" to "",
+                    "rssi" to null,
+                    "signalBars" to null,
+                    "connection" to "offline",
+                    "unreadCount" to 0,
+                    "isFavorite" to true,
+                    "theyFavoritedUs" to true
                 )
             ),
             peerMaps(event)
@@ -377,6 +434,7 @@ class ChatSerializationTest {
         assertEquals(alice.take(12), peer["displayName"])
         assertEquals("routed", peer["connection"])
         assertEquals("nothing unread is a zero count", 0, peer["unreadCount"])
+        assertEquals("no favourite either way", false to false, peer["isFavorite"] to peer["theyFavoritedUs"])
         assertTrue("null values are present, not missing keys", peer.containsKey("rssi"))
     }
 
@@ -411,7 +469,10 @@ class ChatSerializationTest {
                 peerRSSI = mapOf(alice to -40),
                 peerDirect = mapOf(alice to true, bob to false),
                 wifiAwarePeerIDs = setOf(bob),
-                unreadConversations = listOf(ChatUnread.Conversation(contact, bob, 2))
+                unreadConversations = listOf(ChatUnread.Conversation(contact, bob, 2)),
+                peerFingerprints = mapOf(alice to aliceFingerprint),
+                peerFavoritedUs = setOf(aliceFingerprint),
+                ourFavorites = listOf(ChatFavorites.Favorite(doraNoiseKey, null, "小明#d0d0", false, contact))
             )
         ) { false }
         val codec = StandardMessageCodec.INSTANCE
@@ -512,10 +573,21 @@ class ChatSerializationTest {
                 "peerID" to alice,
                 "conversationID" to contact,
                 "displayName" to "alice",
-                "draft" to "half a senten"
+                "draft" to "half a senten",
+                "isFavorite" to false,
+                "theyFavoritedUs" to false
             ),
             ChatSerialization.selectedPrivatePeerEvent(focus)
         )
+    }
+
+    @Test
+    fun `the focus carries the header star's two directions (#58)`() {
+        val focus = ChatPrivateChat.Focus(alice, contact, "alice", "", isFavorite = false, theyFavoritedUs = true)
+
+        val event = ChatSerialization.selectedPrivatePeerEvent(focus)
+
+        assertEquals(false to true, event["isFavorite"] to event["theyFavoritedUs"])
     }
 
     @Test
@@ -526,7 +598,9 @@ class ChatSerializationTest {
                 "peerID" to null,
                 "conversationID" to null,
                 "displayName" to null,
-                "draft" to null
+                "draft" to null,
+                "isFavorite" to null,
+                "theyFavoritedUs" to null
             ),
             ChatSerialization.selectedPrivatePeerEvent(null)
         )
@@ -566,6 +640,25 @@ class ChatSerializationTest {
         assertEquals(true, map["isPrivate"])
         assertEquals(true, map["isFromSelf"])
         assertEquals(mapOf("kind" to "sent"), map["deliveryStatus"])
+    }
+
+    @Test
+    fun `a blocked peer's private messages are left out, ours to them stay (#58)`() {
+        val event = ChatSerialization.privateChatsEvent(
+            mapOf(
+                contact to listOf(
+                    message(id = "IN", senderPeerID = bob, isPrivate = true),
+                    message(id = "OUT", sender = "me", senderPeerID = me.peerID, isPrivate = true)
+                ),
+                alice to listOf(message(id = "ALICE", senderPeerID = alice, isPrivate = true))
+            ),
+            me
+        ) { it == contact }
+
+        assertEquals(
+            mapOf(contact to listOf("OUT"), alice to listOf("ALICE")),
+            privateChatMaps(event).mapValues { (_, messages) -> messages.map { it["id"] } }
+        )
     }
 
     @Test

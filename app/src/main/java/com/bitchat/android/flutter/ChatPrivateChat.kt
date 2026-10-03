@@ -2,6 +2,7 @@ package com.bitchat.android.flutter
 
 import com.bitchat.android.favorites.FavoritesPersistenceService
 import com.bitchat.android.services.ContactDirectory
+import com.bitchat.android.services.ContactIdentityResolver
 
 /**
  * The private chat the native core has in focus, as the Flutter private chat screen shows it (#55).
@@ -17,8 +18,12 @@ import com.bitchat.android.services.ContactDirectory
  *   `chat_private_chats` snapshot. The two differ while upstream is still re-keying a conversation
  *   (a peer's Noise key or favourite record turns its mesh peer ID into a `contact_…` ID).
  * - the title, [displayName].
+ * - the header's favourite star (#58): [ChatFavorites.status] by [fingerprint]; tapping it runs
+ *   `ChatViewModel.toggleFavorite` with the chat's ID (`chat_toggleFavorite`).
  *
- * Not mirrored: the `#geohash/@name` title of Nostr geohash DMs (Nostr is disabled in this app).
+ * Not mirrored: the `#geohash/@name` title of Nostr geohash DMs, and the "reachable over Nostr"
+ * header icon of an offline mutual favourite (Nostr is disabled in this app); the star's wobble
+ * when a peer favourites us (the star itself does change).
  */
 object ChatPrivateChat {
 
@@ -45,8 +50,22 @@ object ChatPrivateChat {
         val conversationID: String,
         val displayName: String,
         /** The composer draft upstream keeps for this conversation; "" when there is none. */
-        val draft: String
+        val draft: String,
+        /** We favourited this peer: the header star is filled. */
+        val isFavorite: Boolean = false,
+        /** They told us they favourited us: the star is orange even when we have not. */
+        val theyFavoritedUs: Boolean = false
     )
+
+    /**
+     * The fingerprint `PrivateChatSheet` looks the star up by: the live mesh peer's, else the
+     * selected ID's own (`ChatViewModel.peerFingerprints`), else the one a `contact_…` ID names —
+     * an offline contact's. Null when none is known.
+     */
+    fun fingerprint(peerID: String, contact: Contact, peerFingerprints: Map<String, String>): String? =
+        contact.meshPeerID?.let(peerFingerprints::get)
+            ?: peerFingerprints[peerID]
+            ?: ContactIdentityResolver.fingerprintFromContactConversationId(peerID)
 
     /**
      * `PrivateChatSheet`'s title for [peerID]: the nickname announced under that ID, else under the

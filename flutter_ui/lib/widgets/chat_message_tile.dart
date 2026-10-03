@@ -19,6 +19,10 @@ abstract final class ChatPalette {
   /// 未讀私訊的標示色（原生的強調橘色：標頭的未讀信封、對話列的數字徽章）。
   static const unread = mention;
 
+  /// 我的最愛星號的顏色（原生的強調橘色，#58）：我加了對方、或對方加了我時是橘色，都沒有時灰色
+  /// （[textSecondary]）。
+  static const favorite = mention;
+
   /// 送達標記的三種顏色，對照原生 `MessageComponents.kt` 的 `deliveryCheckColors`：
   /// 還沒有回條時灰色（原生 `onSurface` 35%）、送達／已讀用主色綠、失敗用錯誤紅。
   static const deliveryPending = Color(0x593D2C1E);

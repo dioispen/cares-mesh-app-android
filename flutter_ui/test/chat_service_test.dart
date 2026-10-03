@@ -39,6 +39,7 @@ void main() {
     Future<Object?> Function()? endPrivateChat,
     Future<String?> Function()? openLatestUnreadPrivateChat,
     Future<Object?> Function()? takePendingNavigation,
+    Future<void> Function(String peerID)? toggleFavorite,
   }) =>
       ChatService(
         events: () => events.stream,
@@ -90,6 +91,10 @@ void main() {
             () async {
               calls.add('takePendingNavigation');
               return null;
+            },
+        toggleFavorite: toggleFavorite ??
+            (peerID) async {
+              calls.add('toggleFavorite:$peerID');
             },
       );
 
@@ -697,6 +702,59 @@ void main() {
       expect(service.publicMessages.value.map((m) => m.id), ['M']);
       expect(service.nickname.value, 'anon4821');
       expect(service.peerList.value!.peers.map((p) => p.peerID), ['A']);
+    });
+  });
+
+  group('favourites (#58)', () {
+    Map<String, dynamic> peersWith({required bool isFavorite}) => {
+          'type': 'chat_peers',
+          'onlineCount': 1,
+          'peers': [
+            {
+              'peerID': 'A',
+              'displayName': 'alice',
+              'connection': 'bluetooth',
+              'isFavorite': isFavorite,
+              'theyFavoritedUs': false,
+            },
+          ],
+        };
+
+    test('toggleFavorite hands the ID to the bridge as it is', () async {
+      await service.toggleFavorite('d' * 64);
+
+      expect(calls, ['toggleFavorite:${'d' * 64}']);
+    });
+
+    test('the star is not changed locally; it waits for Kotlin\'s snapshot', () async {
+      await service.start();
+      events.add(peersWith(isFavorite: false));
+      await pumpEventQueue();
+
+      await service.toggleFavorite('A');
+      expect(service.peerList.value!.peers.single.isFavorite, isFalse);
+
+      events.add(peersWith(isFavorite: true));
+      await pumpEventQueue();
+      expect(service.peerList.value!.peers.single.isFavorite, isTrue);
+    });
+
+    test('the private chat star follows the selection snapshot', () async {
+      await service.start();
+
+      events.add({..._focusEvent('contact_aaaa'), 'isFavorite': false, 'theyFavoritedUs': true});
+      await pumpEventQueue();
+
+      final focus = service.selectedPrivateChat.value!;
+      expect([focus.isFavorite, focus.theyFavoritedUs], [false, true]);
+    });
+
+    test('a bridge error from toggleFavorite is surfaced', () async {
+      service = buildService(toggleFavorite: (peerID) async {
+        throw PlatformException(code: 'INVALID_ARGUMENT');
+      });
+
+      await expectLater(service.toggleFavorite('A'), throwsA(isA<PlatformException>()));
     });
   });
 

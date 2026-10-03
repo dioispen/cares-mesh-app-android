@@ -8,7 +8,8 @@
 /// 解析一律容錯、永遠不丟例外：單一欄位型別不符時用預設值；沒有 peer ID 的項目不算 peer；
 /// 整份快照的外框（`onlineCount`、`peers`）不對時整份拒收，讓呼叫端保留現有狀態。
 ///
-/// 之後的票在這裡加欄位：#58 我的最愛／對方最愛我。
+/// 列表先是在線的 peer，再接著離線的我的最愛（#58，[ChatPeerConnection.offline]），都由原生
+/// 依原生列表的規則排好。
 library;
 
 /// 我們如何連到這個 peer（原生的判斷順序：Wi-Fi Aware → 藍牙直連 → 經其他 peer 轉傳）。
@@ -16,6 +17,10 @@ enum ChatPeerConnection {
   bluetooth,
   wifiAware,
   routed,
+
+  /// 目前不在 mesh 上的我的最愛（#58，原生 peer 列表附在在線 peer 之後的「離線最愛」）。
+  /// 仍可開啟私訊；送出的訊息由原生排隊，對方回到 mesh 後送達。
+  offline,
 
   /// 缺值或不認得的值；不猜測是直連還是轉傳。
   unknown,
@@ -31,8 +36,12 @@ class ChatPeer {
     this.signalBars,
     this.connection = ChatPeerConnection.unknown,
     this.unreadCount = 0,
+    this.isFavorite = false,
+    this.theyFavoritedUs = false,
   });
 
+  /// 在線 peer 是 mesh peer ID；離線的我的最愛是原生用來開啟私訊的 Noise 公鑰（hex）。
+  /// 兩者都原樣交給 `chat_startPrivateChat`／`chat_toggleFavorite`。
   final String peerID;
 
   /// 對方 announce 的原始暱稱；原生端還沒收到 announce 時為 null。
@@ -56,6 +65,15 @@ class ChatPeer {
   /// 沒有時是 0；開啟對話後由原生歸零。
   final int unreadCount;
 
+  /// 我把對方加入了我的最愛（#58，原生星號實心）。離線的最愛一定是 true。
+  final bool isFavorite;
+
+  /// 對方告訴我們他把我加入了最愛（#58；我沒有加對方時，原生星號是橘色空心）。
+  final bool theyFavoritedUs;
+
+  /// 對方目前在 mesh 上（不是離線的我的最愛）。
+  bool get isOnline => connection != ChatPeerConnection.offline;
+
   /// 不是 Map、或沒有非空字串的 `peerID` 時回傳 null；其餘情況一定回傳 peer。
   static ChatPeer? fromMap(Object? raw) {
     if (raw is! Map) return null;
@@ -77,9 +95,12 @@ class ChatPeer {
         'bluetooth' => ChatPeerConnection.bluetooth,
         'wifiAware' => ChatPeerConnection.wifiAware,
         'routed' => ChatPeerConnection.routed,
+        'offline' => ChatPeerConnection.offline,
         _ => ChatPeerConnection.unknown,
       },
       unreadCount: unreadCount is int && unreadCount > 0 ? unreadCount : 0,
+      isFavorite: raw['isFavorite'] == true,
+      theyFavoritedUs: raw['theyFavoritedUs'] == true,
     );
   }
 }
@@ -90,10 +111,10 @@ class ChatPeer {
 class ChatPeerList {
   const ChatPeerList({required this.onlineCount, required this.peers});
 
-  /// 目前 mesh 上的線上人數（不含自己）。
+  /// 目前 mesh 上的線上人數（不含自己；不含離線的我的最愛）。
   final int onlineCount;
 
-  /// 依原生列表順序；不可修改。
+  /// 依原生列表順序：在線 peer，再接離線的我的最愛；不可修改。
   final List<ChatPeer> peers;
 
   /// 解析 `{type: chat_peers, onlineCount, peers}`。`onlineCount` 不是非負整數、

@@ -7,6 +7,8 @@ import 'package:flutter_ui/screens/chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
 import 'package:flutter_ui/screens/private_chat_screen.dart';
+import 'package:flutter_ui/widgets/chat_message_tile.dart' show ChatPalette;
+import 'package:flutter_ui/widgets/favorite_star_button.dart';
 import 'package:flutter_ui/widgets/peer_list_sheet.dart';
 
 /// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
@@ -34,6 +36,9 @@ void main() {
   late Future<Object?> Function(String peerID) startPrivateChat;
   late Future<Object?> Function() endPrivateChat;
   late Future<String?> Function() openLatestUnread;
+
+  /// IDs handed to `chat_toggleFavorite`, in order (#58).
+  late List<String> toggledFavorites;
   late ChatService service;
 
   setUp(() async {
@@ -52,6 +57,7 @@ void main() {
     startPrivateChat = (peerID) async => focusEvent(peerID, name: 'nick-$peerID');
     endPrivateChat = () async => focusEvent(null);
     openLatestUnread = () async => null;
+    toggledFavorites = [];
     service = ChatService(
       events: () => events.stream,
       requestSnapshot: () async {},
@@ -83,6 +89,7 @@ void main() {
         routing.add('openLatestUnread');
         return openLatestUnread();
       },
+      toggleFavorite: (peerID) async => toggledFavorites.add(peerID),
     );
     await service.start();
   });
@@ -339,6 +346,8 @@ void main() {
       int? signalBars = 2,
       String connection = 'bluetooth',
       int unreadCount = 0,
+      bool isFavorite = false,
+      bool theyFavoritedUs = false,
     }) =>
         {
           'peerID': peerID,
@@ -349,6 +358,8 @@ void main() {
           'signalBars': signalBars,
           'connection': connection,
           'unreadCount': unreadCount,
+          'isFavorite': isFavorite,
+          'theyFavoritedUs': theyFavoritedUs,
         };
 
     Future<void> pushPeers(WidgetTester tester, int onlineCount, List<Map<String, Object?>> peers) async {
@@ -500,6 +511,83 @@ void main() {
       await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
 
       expect(inSheet(find.byType(UnreadBadge)), findsNothing);
+    });
+
+    // --- favourites (#58) ---------------------------------------------------------------------
+
+    Finder starOf(String name) => find.descendant(
+          of: find.ancestor(of: inSheet(find.text(name)), matching: find.byType(PeerListTile)),
+          matching: find.byType(FavoriteStarButton),
+        );
+
+    Icon starIcon(WidgetTester tester, String name) =>
+        tester.widget<Icon>(find.descendant(of: starOf(name), matching: find.byType(Icon)));
+
+    testWidgets('each row\'s star shows the native three states', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 3, [
+        peer('1111111111111111', displayName: 'alice', isFavorite: true),
+        peer('2222222222222222', displayName: 'bob', theyFavoritedUs: true),
+        peer('3333333333333333', displayName: 'carol'),
+      ]);
+      await openPeerList(tester);
+
+      // Filled orange: our favourite. Orange outline: they favourited us. Grey outline: neither.
+      expect(starIcon(tester, 'alice').icon, Icons.star);
+      expect(starIcon(tester, 'alice').color, ChatPalette.favorite);
+      expect(starIcon(tester, 'bob').icon, Icons.star_border);
+      expect(starIcon(tester, 'bob').color, ChatPalette.favorite);
+      expect(starIcon(tester, 'carol').icon, Icons.star_border);
+      expect(starIcon(tester, 'carol').color, ChatPalette.textSecondary);
+      expect(find.descendant(of: starOf('alice'), matching: find.byTooltip('從最愛移除')), findsOneWidget);
+      expect(find.descendant(of: starOf('carol'), matching: find.byTooltip('加入最愛')), findsOneWidget);
+      expect(find.bySemanticsLabel(RegExp('已將你加入最愛')), findsOneWidget, reason: 'bob favourited us');
+    });
+
+    testWidgets('a row\'s star toggles the favourite and leaves the list open', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
+      await openPeerList(tester);
+
+      await tester.tap(starOf('alice'));
+      await tester.pumpAndSettle();
+
+      expect(toggledFavorites, ['1111111111111111']);
+      expect(routing, isEmpty, reason: 'the star is not the row: no private chat opens');
+      expect(sheet(), findsOneWidget);
+    });
+
+    testWidgets('the star follows the native side, not the tap', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice')]);
+      await openPeerList(tester);
+
+      await tester.tap(starOf('alice'));
+      await tester.pump();
+      expect(starIcon(tester, 'alice').icon, Icons.star_border, reason: 'nothing changes before Kotlin reports it');
+
+      await pushPeers(tester, 1, [peer('1111111111111111', displayName: 'alice', isFavorite: true)]);
+      expect(starIcon(tester, 'alice').icon, Icons.star);
+    });
+
+    testWidgets('an offline favourite is listed as such and opens a private chat by its key', (tester) async {
+      final noiseKey = 'd' * 64;
+      await pumpChat(tester);
+      await pushPeers(tester, 0, [
+        peer(noiseKey, displayName: 'dora', rssi: null, signalBars: null, connection: 'offline', isFavorite: true),
+      ]);
+      await openPeerList(tester);
+
+      expect(inSheet(find.text('附近的人（0）')), findsOneWidget);
+      expect(inSheet(find.text('目前沒有人連線')), findsNothing);
+      expect(inSheet(find.text('離線最愛')), findsOneWidget);
+      expect(starIcon(tester, 'dora').icon, Icons.star);
+
+      await tester.tap(inSheet(find.text('dora')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PrivateChatScreen), findsOneWidget);
+      expect(routing, ['start:$noiseKey']);
     });
   });
 

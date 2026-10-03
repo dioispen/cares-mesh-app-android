@@ -5,6 +5,7 @@ import '../models/private_chat.dart';
 import '../services/chat_service.dart';
 import '../widgets/chat_composer.dart';
 import '../widgets/chat_message_tile.dart';
+import '../widgets/favorite_star_button.dart';
 
 /// 私訊畫面（#55）：原生聊天核心「目前選定的私訊」（[ChatService.selectedPrivateChat]）的投影。
 ///
@@ -13,7 +14,8 @@ import '../widgets/chat_message_tile.dart';
 /// 紀錄、設為選定對象。原生回覆前畫面只顯示 [title] 與等待中，輸入框不能用。
 ///
 /// 之後畫面完全跟隨原生的選定私訊，不自行判斷：
-/// - 標題、訊息、輸入框所屬的私訊都取自它（[PrivateChatFocus]）。
+/// - 標題、訊息、輸入框所屬的私訊、AppBar 的我的最愛星號（#58）都取自它（[PrivateChatFocus]）。
+///   對方離線也一樣能開、能送：原生把訊息排隊，對方回到 mesh 後送達。
 /// - 原生改選了別的對話（在這裡輸入 `/m 別人`，或 peer ID 正規化成 `contact_…` 對話）就跟著換；
 ///   輸入框是空的時放入新對話的草稿。
 /// - 原生不再有選定私訊（開啟被拒，例如對方已封鎖；或 `/block`、刪除對話、panic 清除）就自行關閉。
@@ -119,6 +121,20 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     navigator.pop();
   }
 
+  /// 標頭星號：交給原生切換這個對話的我的最愛（用原生選定的 ID，與原生標頭相同）；星號隨快照更新。
+  Future<void> _toggleFavorite(String peerID) async {
+    try {
+      await _chat.toggleFavorite(peerID);
+    } catch (e) {
+      debugPrint('PrivateChatScreen: toggleFavorite failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('無法變更我的最愛，請稍後再試')),
+        );
+      }
+    }
+  }
+
   List<ChatMessage> _messagesOf(Map<String, List<ChatMessage>> chats) => _focus?.messagesIn(chats) ?? const [];
 
   /// 有新訊息（包括自己送出、經原生回推的那則）時捲到底部。
@@ -173,6 +189,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       appBar: AppBar(
         backgroundColor: ChatPalette.card,
         iconTheme: const IconThemeData(color: ChatPalette.textPrimary),
+        actions: [
+          // 原生私訊標頭的星號（#58）：原生回覆開啟前還不知道是哪個對話，不顯示。
+          if (focus != null)
+            FavoriteStarButton(
+              isFavorite: focus.isFavorite,
+              theyFavoritedUs: focus.theyFavoritedUs,
+              onPressed: () => _toggleFavorite(focus.peerID),
+            ),
+        ],
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

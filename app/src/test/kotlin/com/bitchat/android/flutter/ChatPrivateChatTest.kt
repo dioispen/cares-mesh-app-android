@@ -89,6 +89,41 @@ class ChatPrivateChatTest {
         assertEquals("fp-name", title)
     }
 
+    // --- the header star's fingerprint (#58: PrivateChatSheet `fingerprint`) -------------------
+
+    @Test
+    fun `the star is looked up by the fingerprint of the peer the chat is live under first`() {
+        val fingerprint = ChatPrivateChat.fingerprint(
+            CONTACT,
+            contact(meshPeerID = ALICE),
+            peerFingerprints = mapOf(ALICE to "f".repeat(64), CONTACT to "e".repeat(64))
+        )
+
+        assertEquals("f".repeat(64), fingerprint)
+    }
+
+    @Test
+    fun `then by the selected ID's own fingerprint`() {
+        val fingerprint = ChatPrivateChat.fingerprint(
+            ALICE,
+            contact(conversationID = ALICE, meshPeerID = BOB),
+            peerFingerprints = mapOf(ALICE to "f".repeat(64))
+        )
+
+        assertEquals("f".repeat(64), fingerprint)
+    }
+
+    @Test
+    fun `an offline contact's fingerprint is the one its conversation ID names`() {
+        assertEquals("a".repeat(64), ChatPrivateChat.fingerprint(CONTACT, contact(), emptyMap()))
+    }
+
+    @Test
+    fun `a peer with no fingerprint anywhere has none`() {
+        // Upstream then asks isFavorite by ID instead (see ChatFavorites.status).
+        assertEquals(null, ChatPrivateChat.fingerprint(ALICE, contact(conversationID = ALICE), emptyMap()))
+    }
+
     private companion object {
         const val ALICE = "1111111111111111"
         const val BOB = "2222222222222222"

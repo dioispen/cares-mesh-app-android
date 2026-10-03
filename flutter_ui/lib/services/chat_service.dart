@@ -33,6 +33,7 @@ class ChatService {
     Future<Object?> Function()? endPrivateChat,
     Future<String?> Function()? openLatestUnreadPrivateChat,
     Future<Object?> Function()? takePendingNavigation,
+    Future<void> Function(String peerID)? toggleFavorite,
   })  : _events = events ?? BitchatBridge.events,
         _requestSnapshot = requestSnapshot ?? BitchatBridge.requestChatSnapshot,
         _send = sendMessage ?? ((text, privateChat) => BitchatBridge.sendMessage(text, privateChat: privateChat)),
@@ -45,7 +46,8 @@ class ChatService {
         _startPrivateChat = startPrivateChat ?? BitchatBridge.startPrivateChat,
         _endPrivateChat = endPrivateChat ?? BitchatBridge.endPrivateChat,
         _openLatestUnread = openLatestUnreadPrivateChat ?? BitchatBridge.openLatestUnreadPrivateChat,
-        _takePendingNavigation = takePendingNavigation ?? BitchatBridge.takePendingChatNavigation;
+        _takePendingNavigation = takePendingNavigation ?? BitchatBridge.takePendingChatNavigation,
+        _toggleFavorite = toggleFavorite ?? BitchatBridge.toggleFavorite;
 
   static final ChatService instance = ChatService();
 
@@ -61,6 +63,7 @@ class ChatService {
   final Future<Object?> Function() _endPrivateChat;
   final Future<String?> Function() _openLatestUnread;
   final Future<Object?> Function() _takePendingNavigation;
+  final Future<void> Function(String peerID) _toggleFavorite;
 
   final ValueNotifier<List<ChatMessage>> _publicMessages =
       ValueNotifier<List<ChatMessage>>(const []);
@@ -85,7 +88,8 @@ class ChatService {
   ValueListenable<String?> get nickname => _nickname;
 
   /// 目前 mesh 上的線上人數與 peer 列表（原生標頭人數與 peer 列表的投影），peer 加入、
-  /// 離開、改名或訊號變化時整份更新；原生端還沒回報前是 null。
+  /// 離開、改名、訊號或我的最愛變化時整份更新；原生端還沒回報前是 null。列表最後是離線的
+  /// 我的最愛（[ChatPeer.isOnline] 為 false），人數不算它們。
   ///
   /// 人數與列表放在同一個值裡，一定來自同一份快照。
   ValueListenable<ChatPeerList?> get peerList => _peerList;
@@ -161,6 +165,11 @@ class ChatService {
     _pendingNavigation.value = null;
     return taken;
   }
+
+  /// 切換我的最愛（原生 `ChatViewModel.toggleFavorite`）。[peerID] 是 peer 列表那一列的
+  /// [ChatPeer.peerID]，或私訊畫面的 [PrivateChatFocus.peerID]，原樣交給原生。星號不在這裡先改，
+  /// 等原生的 [peerList]／[selectedPrivateChat] 快照回推。bridge 錯誤會往上拋。
+  Future<void> toggleFavorite(String peerID) => _toggleFavorite(peerID);
 
   void _applySelection(Object? raw) {
     final selection = PrivateChatSelection.fromEvent(raw);

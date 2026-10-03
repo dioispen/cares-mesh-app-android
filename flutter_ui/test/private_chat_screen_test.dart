@@ -5,18 +5,30 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/screens/private_chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
+import 'package:flutter_ui/widgets/chat_message_tile.dart' show ChatPalette;
+import 'package:flutter_ui/widgets/favorite_star_button.dart';
 
 const _alice = '1111111111111111';
 const _contact = 'contact_aaaa';
 const _bob = '2222222222222222';
 
 /// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
-Map<String, dynamic> _focus(String? peerID, {String? name, String? conversationID, String draft = ''}) => {
+Map<String, dynamic> _focus(
+  String? peerID, {
+  String? name,
+  String? conversationID,
+  String draft = '',
+  bool isFavorite = false,
+  bool theyFavoritedUs = false,
+}) =>
+    {
       'type': 'chat_selected_private_peer',
       'peerID': peerID,
       'conversationID': peerID == null ? null : (conversationID ?? peerID),
       'displayName': peerID == null ? null : (name ?? peerID),
       'draft': peerID == null ? null : draft,
+      'isFavorite': peerID == null ? null : isFavorite,
+      'theyFavoritedUs': peerID == null ? null : theyFavoritedUs,
     };
 
 Map<String, Object?> _message(
@@ -41,6 +53,7 @@ void main() {
   late Completer<Object?>? pendingStart;
   late Object? startAnswer;
   late Future<bool> Function(String text, String? privateChat) send;
+  late Future<void> Function(String peerID) toggleFavorite;
   late ChatService service;
 
   setUp(() async {
@@ -49,6 +62,7 @@ void main() {
     pendingStart = null;
     startAnswer = _focus(_contact, name: 'alice');
     send = (text, privateChat) async => true;
+    toggleFavorite = (peerID) async {};
     service = ChatService(
       events: () => events.stream,
       requestSnapshot: () async {},
@@ -71,6 +85,10 @@ void main() {
       endPrivateChat: () async {
         calls.add('end');
         return _focus(null);
+      },
+      toggleFavorite: (peerID) {
+        calls.add('toggleFavorite:$peerID');
+        return toggleFavorite(peerID);
       },
     );
     await service.start();
@@ -340,5 +358,62 @@ void main() {
     await tester.pumpAndSettle();
     expect(screen(), findsOneWidget);
     expect(find.text('alice'), findsWidgets);
+  });
+
+  group('favourite star (#58)', () {
+    Finder star() => find.descendant(of: find.byType(AppBar), matching: find.byType(FavoriteStarButton));
+    Icon starIcon(WidgetTester tester) =>
+        tester.widget<Icon>(find.descendant(of: star(), matching: find.byType(Icon)));
+
+    testWidgets('there is no star until the native side answers the start', (tester) async {
+      pendingStart = Completer<Object?>();
+      await openPrivateChat(tester);
+
+      expect(star(), findsNothing);
+
+      pendingStart!.complete(_focus(_contact, name: 'alice'));
+      await tester.pumpAndSettle();
+      expect(star(), findsOneWidget);
+    });
+
+    testWidgets('the star shows the native three states', (tester) async {
+      startAnswer = _focus(_contact, name: 'alice');
+      await openPrivateChat(tester);
+      expect(starIcon(tester).icon, Icons.star_border);
+      expect(starIcon(tester).color, ChatPalette.textSecondary, reason: 'grey outline: no relation');
+      expect(find.byTooltip('加入最愛'), findsOneWidget);
+
+      await push(tester, _focus(_contact, name: 'alice', theyFavoritedUs: true));
+      expect(starIcon(tester).icon, Icons.star_border);
+      expect(starIcon(tester).color, ChatPalette.favorite, reason: 'orange outline: they favourited us');
+      expect(find.bySemanticsLabel(RegExp('已將你加入最愛')), findsOneWidget);
+
+      await push(tester, _focus(_contact, name: 'alice', isFavorite: true, theyFavoritedUs: true));
+      expect(starIcon(tester).icon, Icons.star);
+      expect(starIcon(tester).color, ChatPalette.favorite, reason: 'filled orange: our favourite');
+      expect(find.byTooltip('從最愛移除'), findsOneWidget);
+    });
+
+    testWidgets('tapping it toggles the favourite of the chat the native side has in focus', (tester) async {
+      // Opened from the list by mesh peer ID; the native side focuses the contact conversation.
+      await openPrivateChat(tester, peerID: _alice);
+
+      await tester.tap(star());
+      await tester.pump();
+
+      expect(calls.where((c) => c.startsWith('toggleFavorite')), ['toggleFavorite:$_contact']);
+      expect(screen(), findsOneWidget);
+    });
+
+    testWidgets('a failed toggle says so and keeps the chat open', (tester) async {
+      toggleFavorite = (peerID) async => throw PlatformException(code: 'INVALID_ARGUMENT');
+      await openPrivateChat(tester);
+
+      await tester.tap(star());
+      await tester.pump();
+
+      expect(find.text('無法變更我的最愛，請稍後再試'), findsOneWidget);
+      expect(screen(), findsOneWidget);
+    });
   });
 }

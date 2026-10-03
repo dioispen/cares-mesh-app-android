@@ -19,6 +19,8 @@ class PrivateChatFocus {
     required this.conversationID,
     required this.displayName,
     this.draft = '',
+    this.isFavorite = false,
+    this.theyFavoritedUs = false,
   });
 
   /// 原生持有的選定值，原樣保留：送出與草稿都以它標明「這是哪個私訊的輸入框」。
@@ -34,6 +36,12 @@ class PrivateChatFocus {
   /// 原生為這個對話保存的輸入框草稿；沒有時是空字串。
   final String draft;
 
+  /// 我把對方加入了我的最愛（#58）：原生私訊標頭的星號實心橘色。
+  final bool isFavorite;
+
+  /// 對方告訴我們他把我加入了最愛（#58）：我沒有加對方時，星號是橘色空心。
+  final bool theyFavoritedUs;
+
   /// 這個對話的訊息：先找 [conversationID]、再找 [peerID]，與原生私訊畫面的查找順序相同
   /// （原生改用新鍵的過渡期間兩者會不同）。都沒有時是空清單。
   List<ChatMessage> messagesIn(Map<String, List<ChatMessage>> chats) =>
@@ -45,10 +53,12 @@ class PrivateChatFocus {
       other.peerID == peerID &&
       other.conversationID == conversationID &&
       other.displayName == displayName &&
-      other.draft == draft;
+      other.draft == draft &&
+      other.isFavorite == isFavorite &&
+      other.theyFavoritedUs == theyFavoritedUs;
 
   @override
-  int get hashCode => Object.hash(peerID, conversationID, displayName, draft);
+  int get hashCode => Object.hash(peerID, conversationID, displayName, draft, isFavorite, theyFavoritedUs);
 
   @override
   String toString() => 'PrivateChatFocus($peerID, $displayName)';
@@ -65,7 +75,7 @@ class PrivateChatSelection {
 
   /// 不是 Map、或 `peerID` 既不是 null 也不是非空字串時回傳 null（格式錯，保留現狀）；
   /// `peerID` 為 null 時回傳 [none]。其餘欄位缺值時用後備：對話鍵用 `peerID`、名稱用 `peerID`
-  /// 前 8 字（原生最後的後備也是這樣）、草稿用空字串。
+  /// 前 8 字（原生最後的後備也是這樣）、草稿用空字串、星號兩個方向都是 false。
   static PrivateChatSelection? fromEvent(Object? raw) {
     if (raw is! Map) return null;
     final peerID = raw['peerID'];
@@ -81,6 +91,8 @@ class PrivateChatSelection {
           ? displayName
           : peerID.substring(0, peerID.length < 8 ? peerID.length : 8),
       draft: draft is String ? draft : '',
+      isFavorite: raw['isFavorite'] == true,
+      theyFavoritedUs: raw['theyFavoritedUs'] == true,
     ));
   }
 }

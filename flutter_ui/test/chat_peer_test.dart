@@ -11,6 +11,8 @@ Map<String, Object?> _peer({
   int? signalBars = 2,
   String connection = 'bluetooth',
   int unreadCount = 0,
+  bool isFavorite = false,
+  bool theyFavoritedUs = false,
 }) =>
     {
       'peerID': peerID,
@@ -21,12 +23,16 @@ Map<String, Object?> _peer({
       'signalBars': signalBars,
       'connection': connection,
       'unreadCount': unreadCount,
+      'isFavorite': isFavorite,
+      'theyFavoritedUs': theyFavoritedUs,
     };
 
 void main() {
   group('ChatPeer.fromMap', () {
     test('reads every bridge field', () {
-      final peer = ChatPeer.fromMap(_peer(displaySuffix: '#beef', unreadCount: 4))!;
+      final peer = ChatPeer.fromMap(
+        _peer(displaySuffix: '#beef', unreadCount: 4, isFavorite: true, theyFavoritedUs: true),
+      )!;
 
       expect(peer.peerID, '1111111111111111');
       expect(peer.nickname, 'alice');
@@ -36,6 +42,42 @@ void main() {
       expect(peer.signalBars, 2);
       expect(peer.connection, ChatPeerConnection.bluetooth);
       expect(peer.unreadCount, 4);
+      expect(peer.isFavorite, isTrue);
+      expect(peer.theyFavoritedUs, isTrue);
+    });
+
+    test('the favourite star reads both directions separately (#58)', () {
+      final ours = ChatPeer.fromMap(_peer(isFavorite: true))!;
+      final theirs = ChatPeer.fromMap(_peer(theyFavoritedUs: true))!;
+
+      expect([ours.isFavorite, ours.theyFavoritedUs], [true, false]);
+      expect([theirs.isFavorite, theirs.theyFavoritedUs], [false, true]);
+    });
+
+    test('missing or wrongly typed favourite flags are no favourite, never thrown on (#58)', () {
+      final missing = ChatPeer.fromMap(_peer()..remove('isFavorite')..remove('theyFavoritedUs'))!;
+      final wrong = ChatPeer.fromMap(_peer()..['isFavorite'] = 'yes'..['theyFavoritedUs'] = 1)!;
+
+      for (final peer in [missing, wrong]) {
+        expect(peer.isFavorite, isFalse);
+        expect(peer.theyFavoritedUs, isFalse);
+      }
+    });
+
+    test('an offline favourite is offline and not on the mesh (#58)', () {
+      final offline = ChatPeer.fromMap(_peer(
+        peerID: 'd' * 64,
+        nickname: null,
+        rssi: null,
+        signalBars: null,
+        connection: 'offline',
+        isFavorite: true,
+      ))!;
+
+      expect(offline.connection, ChatPeerConnection.offline);
+      expect(offline.isOnline, isFalse);
+      expect(offline.peerID, 'd' * 64);
+      expect(ChatPeer.fromMap(_peer(connection: 'routed'))!.isOnline, isTrue);
     });
 
     test('nothing unread is zero (#56)', () {

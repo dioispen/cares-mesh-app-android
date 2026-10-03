@@ -241,7 +241,8 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         },
       );
 
-  /// 打開「附近的人」；列表隨 [ChatService.peerList] 即時更新，點一個人開啟私訊。
+  /// 打開「附近的人」；列表隨 [ChatService.peerList] 即時更新，點一個人開啟私訊（離線的我的最愛
+  /// 也可以，訊息由原生排隊），按尾端星號切換我的最愛（#58）。
   Future<void> _showPeerList() => showModalBottomSheet<void>(
         context: context,
         backgroundColor: Colors.transparent,
@@ -249,8 +250,23 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         builder: (sheetContext) => PeerListSheet(
           peerList: _chat.peerList,
           onPeerTap: (peer) => _onPeerTap(sheetContext, peer),
+          onFavoriteToggle: (peer) => _toggleFavorite(sheetContext, peer.peerID),
         ),
       );
+
+  /// 交給原生切換我的最愛；列表保持開著，新的星號隨快照回來。
+  Future<void> _toggleFavorite(BuildContext sheetContext, String peerID) async {
+    try {
+      await _chat.toggleFavorite(peerID);
+    } catch (e) {
+      debugPrint('ChatScreen: toggleFavorite failed: $e');
+      if (sheetContext.mounted) {
+        ScaffoldMessenger.of(sheetContext).showSnackBar(
+          const SnackBar(content: Text('無法變更我的最愛，請稍後再試')),
+        );
+      }
+    }
+  }
 
   /// AppBar 最右側的線上人數（對照原生標頭的 `PeerCounter`：人數在最右、點了打開 peer 列表）。
   /// 原生端回報前不顯示；沒有人在線時變淡。

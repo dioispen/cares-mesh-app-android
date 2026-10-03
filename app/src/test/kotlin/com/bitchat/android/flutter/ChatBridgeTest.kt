@@ -61,7 +61,13 @@ class ChatBridgeTest {
     private val unreadPrivateMessages = MutableStateFlow<Set<String>>(emptySet())
     private val conversations = MutableStateFlow<List<ConversationSummary>>(emptyList())
     private val privateChatSheetPeer = MutableStateFlow<String?>(null)
+    private val favoritePeers = MutableStateFlow<Set<String>>(emptySet())
+    private val peerFavoritedUs = MutableStateFlow<Set<String>>(emptySet())
+    private val peerFingerprints = MutableStateFlow<Map<String, String>>(emptyMap())
     private val drafts = mutableMapOf<String, String>()
+
+    /** Upstream's favourites store and block list, as ChatBridge reads them. */
+    private val records = FakeRecords()
 
     /** Upstream's contact records, as ChatBridge reads them; unknown IDs resolve to themselves. */
     private val contacts = mutableMapOf<String, ChatPrivateChat.Contact>()
@@ -86,11 +92,14 @@ class ChatBridgeTest {
         whenever(vm.unreadPrivateMessages).thenAnswer { unreadPrivateMessages }
         whenever(vm.conversations).thenAnswer { conversations }
         whenever(vm.privateChatSheetPeer).thenAnswer { privateChatSheetPeer }
+        whenever(vm.favoritePeers).thenAnswer { favoritePeers }
+        whenever(vm.peerFavoritedUs).thenAnswer { peerFavoritedUs }
+        whenever(vm.peerFingerprints).thenAnswer { peerFingerprints }
         whenever(vm.conversationDraft(anyOrNull())).thenAnswer { drafts[it.arguments[0]] ?: "" }
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
     private val pendingNavigation = PendingChatNavigation()
-    private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers, pendingNavigation) { id ->
+    private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers, pendingNavigation, records) { id ->
         contacts[id] ?: ChatPrivateChat.Contact(id, meshPeerID = null, displayName = null, favoriteNickname = null)
     }
 
@@ -713,7 +722,9 @@ class ChatBridgeTest {
                 "peerID" to CONTACT,
                 "conversationID" to CONTACT,
                 "displayName" to "alice",
-                "draft" to "half a senten"
+                "draft" to "half a senten",
+                "isFavorite" to false,
+                "theyFavoritedUs" to false
             ),
             result.values.single()
         )
@@ -1175,6 +1186,220 @@ class ChatBridgeTest {
         assertEquals(listOf(mapOf("target" to "publicChat")), pendingNavigations())
     }
 
+    // --- favourites (#58) ----------------------------------------------------------------------
+
+    @Test
+    fun `toggleFavorite hands the ID to upstream's toggle and answers once it ran`() {
+        // The ID is the one the row or the private chat carries: a mesh peer ID, an offline
+        // favourite's Noise key, or the contact_ conversation upstream has in focus.
+        listOf(ALICE, NOISE_DORA, CONTACT).forEach { id ->
+            val result = RecordingResult()
+
+            val claimed = bridge.handle(toggleFavoriteCall(id), result)
+
+            assertTrue(claimed)
+            verify(viewModel).toggleFavorite(id)
+            assertEquals(listOf("success:null"), result.calls)
+        }
+    }
+
+    @Test
+    fun `toggleFavorite without a peer ID is rejected`() {
+        listOf(
+            MethodCall(ChatBridge.METHOD_TOGGLE_FAVORITE, null),
+            MethodCall(ChatBridge.METHOD_TOGGLE_FAVORITE, mapOf("peerID" to "")),
+            MethodCall(ChatBridge.METHOD_TOGGLE_FAVORITE, mapOf("peerID" to 7)),
+            MethodCall(ChatBridge.METHOD_TOGGLE_FAVORITE, ALICE)
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            bridge.handle(call, result)
+
+            assertEquals(listOf("error:INVALID_ARGUMENT"), result.calls)
+        }
+        verify(viewModel, never()).toggleFavorite(any())
+    }
+
+    @Test
+    fun `a favourite upstream toggles is pushed with the peer's row and the open private chat`() {
+        connectedPeers.value = listOf(ALICE)
+        peerNicknames.value = mapOf(ALICE to "alice")
+        peerFingerprints.value = mapOf(ALICE to FP_ALICE)
+        contacts[CONTACT] = ChatPrivateChat.Contact(CONTACT, meshPeerID = ALICE, displayName = "alice", favoriteNickname = null)
+        selectedPrivateChatPeer.value = CONTACT
+        settleAndClear()
+
+        // What PrivateChatManager.toggleFavorite does to upstream state.
+        favoritePeers.value = setOf(FP_ALICE)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(ALICE to true)), peerRows().map { rows -> rows.map { it["peerID"] to it["isFavorite"] } })
+        assertEquals(listOf(true to false), focusEvents().map { it["isFavorite"] to it["theyFavoritedUs"] })
+    }
+
+    @Test
+    fun `a peer telling us it favourited us is pushed too`() {
+        connectedPeers.value = listOf(ALICE)
+        peerFingerprints.value = mapOf(ALICE to FP_ALICE)
+        settleAndClear()
+
+        // MessageHandler records it in the favourites store; ChatViewModel's listener then
+        // refreshes peerFavoritedUs.
+        peerFavoritedUs.value = setOf(FP_ALICE)
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(false to true)), peerRows().map { rows -> rows.map { it["isFavorite"] to it["theyFavoritedUs"] } })
+    }
+
+    @Test
+    fun `the private chat star falls back to upstream's by-ID lookups`() {
+        // No fingerprint known for the chat: upstream asks isFavorite(peerID) and the favourites store.
+        whenever(viewModel.isFavorite(ALICE)).thenReturn(true)
+        records.theyFavoritedUsIDs += ALICE
+        selectedPrivateChatPeer.value = ALICE
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf(true to true), focusEvents().map { it["isFavorite"] to it["theyFavoritedUs"] })
+    }
+
+    @Test
+    fun `offline favourites from upstream's store are listed after the connected peers`() {
+        connectedPeers.value = listOf(ALICE)
+        peerNicknames.value = mapOf(ALICE to "alice")
+        records.favorites += favorite(NOISE_DORA, "dora")
+        records.favorites += favorite(NOISE_ALICE, "alice")
+        whenever(viewModel.getMeshPeerInfo(ALICE)).thenReturn(peerInfo(ALICE, isDirect = true, noiseKeyHex = NOISE_ALICE))
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        // Alice's record is her connected row; Dora is offline, keyed by her Noise key.
+        assertEquals(
+            listOf(listOf(ALICE to "bluetooth", NOISE_DORA to "offline")),
+            peerRows().map { rows -> rows.map { it["peerID"] to it["connection"] } }
+        )
+        assertEquals("the online count is still the mesh's", listOf(1), peerEvents().map { it["onlineCount"] })
+    }
+
+    @Test
+    fun `a connected peer's cached Noise key also matches its favourite record`() {
+        connectedPeers.value = listOf(ALICE)
+        records.favorites += favorite(NOISE_ALICE, "alice")
+        records.cachedNoiseKeys[ALICE] = NOISE_ALICE
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf(listOf(ALICE)), peerRows().map { rows -> rows.map { it["peerID"] } })
+    }
+
+    @Test
+    fun `a change in upstream's favourites store is pushed`() {
+        settleAndClear()
+
+        // E.g. an offline favourite toggled off: toggleFavorite rewrites its record.
+        records.favorites += favorite(NOISE_DORA, "dora")
+        records.notifyFavoritesChanged()
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(NOISE_DORA)), peerRows().map { rows -> rows.map { it["peerID"] } })
+    }
+
+    @Test
+    fun `the favourites store listener goes with the engine`() {
+        assertTrue(records.hasListener)
+
+        bridge.destroy()
+
+        assertFalse(records.hasListener)
+    }
+
+    // --- blocking (#58) -----------------------------------------------------------------------
+
+    @Test
+    fun `a blocked peer's public and private messages are not projected`() {
+        records.blocked += MALLORY
+        records.blocked += MALLORY_CONTACT
+        messages.value = listOf(message("A1", senderPeerID = ALICE), message("M1", senderPeerID = MALLORY))
+        privateChats.value = mapOf(
+            MALLORY_CONTACT to listOf(message("PM", senderPeerID = MALLORY), privateMessage("MINE", DeliveryStatus.Sent)),
+            CONTACT to listOf(message("PA", senderPeerID = ALICE))
+        )
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf(listOf("A1")), publicTimelineIds())
+        assertEquals(listOf(mapOf(MALLORY_CONTACT to listOf("MINE"), CONTACT to listOf("PA"))), privateChatIds())
+    }
+
+    @Test
+    fun `a blocked peer's unread conversation is not projected as unread`() {
+        records.blocked += MALLORY_CONTACT
+        connectedPeers.value = listOf(MALLORY)
+        unreadPrivateMessages.value = setOf(MALLORY_CONTACT)
+        conversations.value = listOf(summary(MALLORY_CONTACT, unreadCount = 3, connectedPeerID = MALLORY))
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf(false to emptyMap<String, Int>()), unreadEvents().map { it["hasUnread"] to it["conversations"] })
+        assertEquals(listOf(listOf(MALLORY to 0)), peerRows().map { rows -> rows.map { it["peerID"] to it["unreadCount"] } })
+    }
+
+    @Test
+    fun `block and unblock commands are re-projected once upstream ran them`() {
+        acceptSends(true)
+        messages.value = listOf(message("M1", senderPeerID = MALLORY))
+        privateChats.value = mapOf(MALLORY_CONTACT to listOf(message("PM", senderPeerID = MALLORY)))
+        settleAndClear()
+
+        // CommandProcessor's /block adds the fingerprint to DataManager, outside any flow.
+        doAnswer { invocation ->
+            records.blocked += setOf(MALLORY, MALLORY_CONTACT)
+            @Suppress("UNCHECKED_CAST")
+            (invocation.arguments[1] as (Boolean) -> Unit).invoke(true)
+            null
+        }.whenever(viewModel).sendMessage(eq("/block mallory"), any())
+        bridge.handle(sendCall("/block mallory"), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(emptyList<Any?>()), publicTimelineIds())
+        assertEquals(listOf(mapOf(MALLORY_CONTACT to emptyList<Any?>())), privateChatIds())
+        sink.events.clear()
+
+        // /unblock: everything the peer sent shows again, as it is still in upstream's store.
+        doAnswer { invocation ->
+            records.blocked.clear()
+            @Suppress("UNCHECKED_CAST")
+            (invocation.arguments[1] as (Boolean) -> Unit).invoke(true)
+            null
+        }.whenever(viewModel).sendMessage(eq("/unblock mallory"), any())
+        bridge.handle(sendCall("/unblock mallory"), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf("M1")), publicTimelineIds())
+        assertEquals(listOf(mapOf(MALLORY_CONTACT to listOf("PM"))), privateChatIds())
+    }
+
+    @Test
+    fun `while nobody is blocked no sender is looked up`() {
+        messages.value = List(3) { i -> message("A$i", senderPeerID = ALICE) }
+        privateChats.value = mapOf(CONTACT to listOf(message("PA", senderPeerID = ALICE)))
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(emptyList<String>(), records.blockLookups)
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
 
     @Test
@@ -1312,6 +1537,18 @@ class ChatBridgeTest {
 
     private fun startPrivateChatCall(peerID: String) =
         MethodCall(ChatBridge.METHOD_START_PRIVATE_CHAT, mapOf("peerID" to peerID))
+
+    private fun toggleFavoriteCall(peerID: String) =
+        MethodCall(ChatBridge.METHOD_TOGGLE_FAVORITE, mapOf("peerID" to peerID))
+
+    /** One of our favourites as upstream's favourites store records it. */
+    private fun favorite(noiseKeyHex: String, nickname: String) = ChatFavorites.Favorite(
+        noiseKeyHex = noiseKeyHex,
+        nostrPubkeyHex = null,
+        nickname = nickname,
+        theyFavoritedUs = false,
+        conversationID = "contact_" + noiseKeyHex.reversed()
+    )
 
     private fun selectCommandCall(command: String) =
         MethodCall(ChatBridge.METHOD_SELECT_COMMAND_SUGGESTION, mapOf("command" to command))
@@ -1457,22 +1694,56 @@ class ChatBridgeTest {
         sink.events.clear()
     }
 
-    private fun peerInfo(id: String, isDirect: Boolean) = PeerInfo(
+    private fun peerInfo(id: String, isDirect: Boolean, noiseKeyHex: String? = null) = PeerInfo(
         id = id,
         nickname = "",
         isConnected = true,
         isDirectConnection = isDirect,
-        noisePublicKey = null,
+        noisePublicKey = noiseKeyHex?.chunked(2)?.map { it.toInt(16).toByte() }?.toByteArray(),
         signingPublicKey = null,
         isVerifiedNickname = false,
         lastSeen = 0L
     )
 
+    /** In-memory stand-in for upstream's favourites store and block list. */
+    private class FakeRecords : ChatRecords {
+        val favorites = mutableListOf<ChatFavorites.Favorite>()
+        val theyFavoritedUsIDs = mutableSetOf<String>()
+        val nostrKeys = mutableMapOf<String, String>()
+        val cachedNoiseKeys = mutableMapOf<String, String>()
+        val blocked = mutableSetOf<String>()
+        val blockLookups = mutableListOf<String>()
+        private var listener: (() -> Unit)? = null
+
+        val hasListener: Boolean get() = listener != null
+
+        fun notifyFavoritesChanged() = listener?.invoke()
+
+        override fun ourFavorites() = favorites.toList()
+        override fun theyFavoritedUs(peerID: String) = peerID in theyFavoritedUsIDs
+        override fun nostrPubkeyHex(peerID: String) = nostrKeys[peerID]
+        override fun cachedNoiseKeyHex(peerID: String) = cachedNoiseKeys[peerID]
+        override fun addFavoritesListener(onChange: () -> Unit): () -> Unit {
+            listener = onChange
+            return { listener = null }
+        }
+        override fun hasBlockedPeers() = blocked.isNotEmpty()
+        override fun isPeerBlocked(peerID: String): Boolean {
+            blockLookups += peerID
+            return peerID in blocked
+        }
+    }
+
     private companion object {
         const val MY_PEER_ID = "a1b2c3d4e5f60718"
         const val ALICE = "1111111111111111"
         const val BOB = "2222222222222222"
+        const val MALLORY = "6666666666666666"
         val CONTACT = "contact_" + "a".repeat(64)
+        val MALLORY_CONTACT = "contact_" + "6".repeat(64)
+        val FP_ALICE = "f".repeat(64)
+        val NOISE_ALICE = "a".repeat(63) + "1"
+        val NOISE_DORA = "d".repeat(63) + "1"
         val CLEAR = CommandSuggestion("/clear", emptyList(), null, "clear chat messages")
     }
 }

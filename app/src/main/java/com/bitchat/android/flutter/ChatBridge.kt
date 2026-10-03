@@ -1,6 +1,7 @@
 package com.bitchat.android.flutter
 
 import android.util.Log
+import com.bitchat.android.services.ContactIdentityResolver
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.plugin.common.MethodCall
@@ -13,10 +14,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -47,6 +50,14 @@ import kotlinx.coroutines.launch
  * destination in [PendingChatNavigation], projected as `chat_pending_navigation`; Dart takes it with
  * [METHOD_TAKE_PENDING_NAVIGATION] once it can navigate and opens its screens as usual.
  *
+ * Favourites and blocking (#58) are upstream's too: [METHOD_TOGGLE_FAVORITE] runs
+ * `ChatViewModel.toggleFavorite`, and `/block` / `/unblock` are plain commands. Their state rides on
+ * the existing snapshots — the stars and offline favourites on `chat_peers` and
+ * `chat_selected_private_peer` ([ChatFavorites]), the blocked peers' messages left out of the
+ * timelines and unread counts ([ChatBlocking]). Part of it lives outside `ChatViewModel`'s flows
+ * ([ChatRecords]), so those snapshots are also re-pushed when the favourites store reports a change
+ * and after every command upstream ran.
+ *
  * It owns no channel. [BitchatFlutterChannels] registers the one method handler and the one
  * stream handler, and offers this bridge every method it does not recognise
  * (see [BridgeMethodDispatcher]).
@@ -64,6 +75,8 @@ class ChatBridge(
     private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers,
     /** The Activity's notification tap waiting for Dart (#57); it outlives this engine. */
     private val pendingNavigation: PendingChatNavigation = PendingChatNavigation(),
+    /** Upstream's favourites store and block list (#58). */
+    private val records: ChatRecords = UpstreamChatRecords(chatViewModel),
     /** Upstream's contact records for a private chat ID (`ContactDirectory`, favourites). */
     private val privateChatContact: (String) -> ChatPrivateChat.Contact = ChatPrivateChat::upstreamContact
 ) : BridgeMethodHandler {
@@ -81,12 +94,28 @@ class ChatBridge(
     /** The latest private chat start or end; each one waits for the one before (see [endPrivateChat]). */
     private var privateChatAction: Job? = null
 
+    /** Counts the favourites store's change reports (#58): offline favourites and stars read it. */
+    private val favoritesChanged = MutableStateFlow(0L)
+
+    /**
+     * Counts the `/` commands upstream ran (#58). Its block list changes only through `/block` and
+     * `/unblock`, inside `DataManager`, with no flow to follow; what it hides is re-projected after
+     * every command instead.
+     */
+    private val commandsRun = MutableStateFlow(0L)
+
+    /** What upstream's star asks by ID while a peer's fingerprint is unknown (#58). */
+    private val favoriteFallbacks = ChatFavorites.Fallbacks(
+        isFavorite = { id -> runCatching { chatViewModel.isFavorite(id) }.getOrDefault(false) },
+        theyFavoritedUs = records::theyFavoritedUs
+    )
+
     private val projections = listOf(
         Projection(
             // Nickname is part of the key: it decides which messages count as our own.
-            changes = combine(chatViewModel.messages, chatViewModel.nickname) { _, _ -> },
+            changes = merge(combine(chatViewModel.messages, chatViewModel.nickname) { _, _ -> }, commandsRun),
             snapshot = {
-                ChatSerialization.publicMessagesEvent(chatViewModel.messages.value, currentSelf())
+                ChatSerialization.publicMessagesEvent(chatViewModel.messages.value, currentSelf(), blockedPeers())
             }
         ),
         // Covers every writer, not just chat_setNickname (e.g. the panic reset to a new anonXXXX).
@@ -94,9 +123,10 @@ class ChatBridge(
             changes = chatViewModel.nickname,
             snapshot = { ChatSerialization.nicknameEvent(chatViewModel.nickname.value) }
         ),
-        // Every flow the native list reads. Upstream refreshes nicknames, RSSI and directness
-        // once a second and the peer set on every join/leave; the debounce folds a refresh that
-        // touches several flows into one snapshot, read from all of them at once.
+        // Every flow the native list reads. Upstream refreshes nicknames, RSSI, directness and
+        // fingerprints once a second and the peer set on every join/leave; the debounce folds a
+        // refresh that touches several flows into one snapshot, read from all of them at once.
+        // Offline favourites come from the favourites store; unread badges hide blocked peers.
         Projection(
             changes = merge(
                 chatViewModel.connectedPeers,
@@ -105,9 +135,16 @@ class ChatBridge(
                 chatViewModel.peerDirect,
                 chatViewModel.privateChats,
                 chatViewModel.conversations,
-                wifiAwarePeers
+                wifiAwarePeers,
+                chatViewModel.favoritePeers,
+                chatViewModel.peerFavoritedUs,
+                chatViewModel.peerFingerprints,
+                favoritesChanged,
+                commandsRun
             ),
-            snapshot = { ChatSerialization.peersEvent(currentPeerInputs(), ::isDirectOnMesh) }
+            snapshot = {
+                ChatSerialization.peersEvent(currentPeerInputs(blockedPeers()), favoriteFallbacks, ::isDirectOnMesh)
+            }
         ),
         // The `/` and `@` popups follow every keystroke (chat_updateInput), so they get their own
         // short debounce; see SUGGESTIONS_DEBOUNCE_MS.
@@ -129,13 +166,17 @@ class ChatBridge(
             }
         ),
         // The private chat in focus, whoever set it (a Flutter start, `/m`, `/block`, deletion...),
-        // plus what its title and conversation key are resolved against: upstream's private chat
-        // screen re-resolves them as peers come, go and announce.
+        // plus what its title, conversation key and header star are resolved against: upstream's
+        // private chat screen re-resolves them as peers come, go, announce and (un)favourite.
         Projection(
             changes = merge(
                 chatViewModel.selectedPrivateChatPeer,
                 chatViewModel.peerNicknames,
-                chatViewModel.connectedPeers
+                chatViewModel.connectedPeers,
+                chatViewModel.favoritePeers,
+                chatViewModel.peerFavoritedUs,
+                chatViewModel.peerFingerprints,
+                favoritesChanged
             ),
             snapshot = { ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()) }
         ),
@@ -143,19 +184,20 @@ class ChatBridge(
         // status changes arrive here too: upstream replaces the message with a copy carrying the
         // new status (BitchatMessage equality includes it), so the flow emits.
         Projection(
-            changes = combine(chatViewModel.privateChats, chatViewModel.nickname) { _, _ -> },
+            changes = merge(combine(chatViewModel.privateChats, chatViewModel.nickname) { _, _ -> }, commandsRun),
             snapshot = {
-                ChatSerialization.privateChatsEvent(chatViewModel.privateChats.value, currentSelf())
+                ChatSerialization.privateChatsEvent(chatViewModel.privateChats.value, currentSelf(), blockedPeers())
             }
         ),
         // Unread marks and counts (#56). `conversations` is upstream's derived list and settles a
         // moment after the unread set; the debounce usually folds both into one snapshot.
         Projection(
-            changes = merge(chatViewModel.unreadPrivateMessages, chatViewModel.conversations),
+            changes = merge(chatViewModel.unreadPrivateMessages, chatViewModel.conversations, commandsRun),
             snapshot = {
+                val blocked = blockedPeers()
                 ChatSerialization.unreadEvent(
-                    chatViewModel.unreadPrivateMessages.value,
-                    ChatUnread.conversations(chatViewModel.conversations.value)
+                    ChatBlocking.visibleUnread(chatViewModel.unreadPrivateMessages.value, blocked),
+                    ChatBlocking.visibleConversations(ChatUnread.conversations(chatViewModel.conversations.value), blocked)
                 )
             }
         ),
@@ -167,6 +209,9 @@ class ChatBridge(
         )
     )
 
+    /** Stops [favoritesChanged] following the favourites store; run when the engine goes. */
+    private val removeFavoritesListener: () -> Unit
+
     init {
         projections.forEach { projection ->
             scope.launch {
@@ -176,6 +221,9 @@ class ChatBridge(
             }
         }
         events.addOnListenCallback(::pushSnapshots)
+        // The store reports from whichever thread changed it; the counter is thread-safe and the
+        // projections collect it on [scope].
+        removeFavoritesListener = records.addFavoritesListener { favoritesChanged.update { it + 1 } }
     }
 
     override fun handle(call: MethodCall, result: MethodChannel.Result): Boolean {
@@ -193,6 +241,7 @@ class ChatBridge(
             METHOD_START_PRIVATE_CHAT -> startPrivateChat(call, result)
             METHOD_END_PRIVATE_CHAT -> endPrivateChat(result)
             METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT -> openLatestUnreadPrivateChat(result)
+            METHOD_TOGGLE_FAVORITE -> toggleFavorite(call, result)
             METHOD_TAKE_PENDING_NAVIGATION ->
                 result.success(ChatSerialization.navigation(pendingNavigation.take()))
             METHOD_REQUEST_SNAPSHOT -> {
@@ -238,6 +287,29 @@ class ChatBridge(
             return
         }
         chatViewModel.sendMessage(trimmed) { accepted -> result.success(accepted) }
+        // Upstream has run a command by the time sendMessage returns (the same `/` test it makes);
+        // re-project what its block list hides, which no flow reports.
+        if (trimmed.startsWith("/")) commandsRun.update { it + 1 }
+    }
+
+    /**
+     * `chat_toggleFavorite({peerID})` → `ChatViewModel.toggleFavorite`, what the star in upstream's
+     * private chat header runs: it flips the favourite for the peer's fingerprint, records it in
+     * the favourites store (with the peer's Noise key and nickname, so the favourite stays
+     * reachable offline) and tells the peer over the mesh when it has a session. [peerID] is the ID
+     * the Dart row or screen carries — a mesh peer ID, an offline favourite's Noise key, or the
+     * focused `contact_…` conversation; upstream resolves every one. Answers null once upstream
+     * ran it; the new star arrives with the `chat_peers` and `chat_selected_private_peer`
+     * snapshots.
+     */
+    private fun toggleFavorite(call: MethodCall, result: MethodChannel.Result) {
+        val peerID = (call.arguments as? Map<*, *>)?.get("peerID") as? String
+        if (peerID.isNullOrBlank()) {
+            result.error("INVALID_ARGUMENT", "$METHOD_TOGGLE_FAVORITE expects {peerID: String}", null)
+            return
+        }
+        chatViewModel.toggleFavorite(peerID)
+        result.success(null)
     }
 
     /**
@@ -400,21 +472,60 @@ class ChatBridge(
         nickname = chatViewModel.nickname.value
     )
 
-    private fun currentPeerInputs() = ChatPeerList.Inputs(
-        myPeerID = chatViewModel.myPeerID,
-        connectedPeers = chatViewModel.connectedPeers.value,
-        peerNicknames = chatViewModel.peerNicknames.value,
-        peerRSSI = chatViewModel.peerRSSI.value,
-        peerDirect = chatViewModel.peerDirect.value,
-        wifiAwarePeerIDs = wifiAwarePeers.value.keys,
-        privateChats = chatViewModel.privateChats.value,
-        unreadConversations = ChatUnread.conversations(chatViewModel.conversations.value)
-    )
+    private fun currentPeerInputs(isBlocked: (String) -> Boolean): ChatPeerList.Inputs {
+        val connectedPeers = chatViewModel.connectedPeers.value
+        val ourFavorites = records.ourFavorites()
+        // Only needed to tell which favourites are online (PeopleSection's noiseHexByPeerID and
+        // nostrHexByPeerID).
+        val matchFavorites = ourFavorites.isNotEmpty()
+        return ChatPeerList.Inputs(
+            myPeerID = chatViewModel.myPeerID,
+            connectedPeers = connectedPeers,
+            peerNicknames = chatViewModel.peerNicknames.value,
+            peerRSSI = chatViewModel.peerRSSI.value,
+            peerDirect = chatViewModel.peerDirect.value,
+            wifiAwarePeerIDs = wifiAwarePeers.value.keys,
+            privateChats = chatViewModel.privateChats.value,
+            unreadConversations = ChatBlocking.visibleConversations(
+                ChatUnread.conversations(chatViewModel.conversations.value),
+                isBlocked
+            ),
+            favoritePeers = chatViewModel.favoritePeers.value,
+            peerFavoritedUs = chatViewModel.peerFavoritedUs.value,
+            peerFingerprints = chatViewModel.peerFingerprints.value,
+            ourFavorites = ourFavorites,
+            peerNoiseKeys = if (matchFavorites) connectedPeers.associateWithNotNull(::noiseKeyHex) else emptyMap(),
+            peerNostrKeys = if (matchFavorites) connectedPeers.associateWithNotNull(records::nostrPubkeyHex) else emptyMap()
+        )
+    }
+
+    /** A connected peer's Noise key as `PeopleSection` finds it: its mesh peer info's, else the cached one. */
+    private fun noiseKeyHex(peerID: String): String? =
+        runCatching {
+            chatViewModel.getMeshPeerInfo(peerID)?.noisePublicKey?.let(ContactIdentityResolver::noiseKeyHex)
+        }.getOrNull() ?: records.cachedNoiseKeyHex(peerID)
+
+    private inline fun List<String>.associateWithNotNull(value: (String) -> String?): Map<String, String> =
+        mapNotNull { key -> value(key)?.let { key to it } }.toMap()
+
+    /**
+     * Upstream's block decision for one snapshot ([ChatBlocking]): nobody while its block list is
+     * empty — then no ID is looked up at all — else asked at most once per ID.
+     */
+    private fun blockedPeers(): (String) -> Boolean =
+        if (records.hasBlockedPeers()) ChatBlocking.memo(records::isPeerBlocked) else NOBODY_BLOCKED
 
     /** The private chat upstream has in focus, resolved as its private chat screen does; null if none. */
     private fun currentPrivateChatFocus(): ChatPrivateChat.Focus? {
         val peerID = chatViewModel.selectedPrivateChatPeer.value ?: return null
         val contact = privateChatContact(peerID)
+        val favorite = ChatFavorites.status(
+            peerID = peerID,
+            fingerprint = ChatPrivateChat.fingerprint(peerID, contact, chatViewModel.peerFingerprints.value),
+            favoritePeers = chatViewModel.favoritePeers.value,
+            peerFavoritedUs = chatViewModel.peerFavoritedUs.value,
+            fallbacks = favoriteFallbacks
+        )
         return ChatPrivateChat.Focus(
             peerID = peerID,
             conversationID = contact.conversationID,
@@ -422,7 +533,9 @@ class ChatBridge(
                 runCatching { chatViewModel.resolvePeerDisplayNameForFingerprint(peerID) }.getOrNull()
                     ?: peerID.take(8)
             },
-            draft = runCatching { chatViewModel.conversationDraft(peerID) }.getOrNull().orEmpty()
+            draft = runCatching { chatViewModel.conversationDraft(peerID) }.getOrNull().orEmpty(),
+            isFavorite = favorite.isFavorite,
+            theyFavoritedUs = favorite.theyFavoritedUs
         )
     }
 
@@ -445,6 +558,7 @@ class ChatBridge(
      */
     fun destroy() {
         scope.cancel()
+        removeFavoritesListener()
         if (chatViewModel.selectedPrivateChatPeer.value != null) chatViewModel.endPrivateChat()
     }
 
@@ -480,7 +594,12 @@ class ChatBridge(
          */
         const val METHOD_TAKE_PENDING_NAVIGATION = "chat_takePendingNavigation"
 
+        /** The favourite star (#58): `ChatViewModel.toggleFavorite`, answered null. */
+        const val METHOD_TOGGLE_FAVORITE = "chat_toggleFavorite"
+
         private const val TAG = "ChatBridge"
+
+        private val NOBODY_BLOCKED: (String) -> Boolean = { false }
 
         /** Coalesces bursts (history sync, relayed floods) into one snapshot push. */
         const val SNAPSHOT_DEBOUNCE_MS = 100L

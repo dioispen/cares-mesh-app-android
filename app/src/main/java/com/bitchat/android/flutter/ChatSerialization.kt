@@ -104,10 +104,19 @@ object ChatSerialization {
      * only a Reporter's first Status ever shows — and it would sit next to the sender's peer ID,
      * which the anonymous Broadcast Tier deliberately avoids (ADR-0003). It is also only a text
      * line: any peer nicknamed "匿名回報" can type one, so it cannot be trusted as a system notice.
+     *
+     * Lines from peers upstream blocks ([isBlocked], upstream's `isPeerBlocked`) are left out too
+     * (#58, see [ChatBlocking]).
      */
-    fun publicMessagesEvent(messages: List<BitchatMessage>, self: ChatSelf): Map<String, Any?> = mapOf(
+    fun publicMessagesEvent(
+        messages: List<BitchatMessage>,
+        self: ChatSelf,
+        isBlocked: (String) -> Boolean = { false }
+    ): Map<String, Any?> = mapOf(
         "type" to EVENT_PUBLIC_MESSAGES,
-        "messages" to messages.filterNot(::isHealthReportLine).map { message(it, self) }
+        "messages" to ChatBlocking.visiblePublicMessages(messages, self, isBlocked)
+            .filterNot(::isHealthReportLine)
+            .map { message(it, self) }
     )
 
     /**
@@ -122,9 +131,10 @@ object ChatSerialization {
 
     /**
      * One peer-list row. Every key is always present; `nickname`, `rssi` and `signalBars` may be
-     * null. `connection` is a [ChatPeerList.Connection.wire] name; `unreadCount` is 0 when nothing
-     * from the peer is unread. Dart mirrors these keys in `flutter_ui/lib/models/chat_peer.dart`;
-     * later fields (favourites) are added here and there together.
+     * null. `connection` is a [ChatPeerList.Connection.wire] name (`offline` for an offline
+     * favourite, whose `peerID` is its Noise key); `unreadCount` is 0 when nothing from the peer is
+     * unread; `isFavorite` / `theyFavoritedUs` are the star's two directions (#58). Dart mirrors
+     * these keys in `flutter_ui/lib/models/chat_peer.dart`; change both together.
      */
     fun peer(row: ChatPeerList.Row): Map<String, Any?> = mapOf(
         "peerID" to row.peerID,
@@ -134,18 +144,26 @@ object ChatSerialization {
         "rssi" to row.rssi,
         "signalBars" to row.signalBars,
         "connection" to row.connection.wire,
-        "unreadCount" to row.unreadCount
+        "unreadCount" to row.unreadCount,
+        "isFavorite" to row.isFavorite,
+        "theyFavoritedUs" to row.theyFavoritedUs
     )
 
     /**
      * `{type: "chat_peers", onlineCount, peers: [peer, ...]}` — the native header count and list
-     * rows, built from one reading of [inputs] so the two always agree. Rows are in display order.
-     * Peer IDs and nicknames are what every device in range already sees in ANNOUNCE packets.
+     * rows, built from one reading of [inputs] so the two always agree. Rows are in display order:
+     * the connected peers, then the offline favourites (which the count leaves out). Peer IDs and
+     * nicknames are what every device in range already sees in ANNOUNCE packets; an offline
+     * favourite's name and key are what that peer once announced to us.
      */
-    fun peersEvent(inputs: ChatPeerList.Inputs, isDirectFallback: (String) -> Boolean): Map<String, Any?> = mapOf(
+    fun peersEvent(
+        inputs: ChatPeerList.Inputs,
+        favoriteFallbacks: ChatFavorites.Fallbacks = ChatFavorites.Fallbacks.NONE,
+        isDirectFallback: (String) -> Boolean
+    ): Map<String, Any?> = mapOf(
         "type" to EVENT_PEERS,
         "onlineCount" to ChatPeerList.onlineCount(inputs),
-        "peers" to ChatPeerList.rows(inputs, isDirectFallback).map(::peer)
+        "peers" to ChatPeerList.rows(inputs, favoriteFallbacks, isDirectFallback).map(::peer)
     )
 
     /**
@@ -180,18 +198,21 @@ object ChatSerialization {
     )
 
     /**
-     * `{type: "chat_selected_private_peer", peerID, conversationID, displayName, draft}` — the
-     * private chat upstream routes the composer's text to (see [ChatPrivateChat.Focus]). With no
-     * private chat in focus every field but `type` is null: the composer then posts to the public
-     * timeline. Dart shows its private chat screen exactly while `peerID` is set. The same map
-     * answers `chat_startPrivateChat` and `chat_endPrivateChat`.
+     * `{type: "chat_selected_private_peer", peerID, conversationID, displayName, draft, isFavorite,
+     * theyFavoritedUs}` — the private chat upstream routes the composer's text to (see
+     * [ChatPrivateChat.Focus]) and its header star (#58). With no private chat in focus every field
+     * but `type` is null: the composer then posts to the public timeline. Dart shows its private
+     * chat screen exactly while `peerID` is set. The same map answers `chat_startPrivateChat` and
+     * `chat_endPrivateChat`.
      */
     fun selectedPrivatePeerEvent(focus: ChatPrivateChat.Focus?): Map<String, Any?> = mapOf(
         "type" to EVENT_SELECTED_PRIVATE_PEER,
         "peerID" to focus?.peerID,
         "conversationID" to focus?.conversationID,
         "displayName" to focus?.displayName,
-        "draft" to focus?.draft
+        "draft" to focus?.draft,
+        "isFavorite" to focus?.isFavorite,
+        "theyFavoritedUs" to focus?.theyFavoritedUs
     )
 
     /**
@@ -199,10 +220,17 @@ object ChatSerialization {
      * conversations under upstream's keys, each in upstream's order. A conversation not open holds
      * only its latest message (upstream keeps just a summary row in memory); opening it with
      * `chat_startPrivateChat` loads its stored history, which then arrives in a later snapshot.
+     * A conversation with a peer upstream blocks ([isBlocked]) keeps only our own messages (#58,
+     * see [ChatBlocking]).
      */
-    fun privateChatsEvent(chats: Map<String, List<BitchatMessage>>, self: ChatSelf): Map<String, Any?> = mapOf(
+    fun privateChatsEvent(
+        chats: Map<String, List<BitchatMessage>>,
+        self: ChatSelf,
+        isBlocked: (String) -> Boolean = { false }
+    ): Map<String, Any?> = mapOf(
         "type" to EVENT_PRIVATE_CHATS,
-        "chats" to chats.mapValues { (_, messages) -> messages.map { message(it, self) } }
+        "chats" to ChatBlocking.visiblePrivateChats(chats, self, isBlocked)
+            .mapValues { (_, messages) -> messages.map { message(it, self) } }
     )
 
     /**

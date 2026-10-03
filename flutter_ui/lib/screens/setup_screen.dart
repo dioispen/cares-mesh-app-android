@@ -205,11 +205,14 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   }
 
   /// 附近已發現的 mesh peer，直接看聊天用的 peer 快照（`ChatService.peerList`，#53），
-  /// 與聊天室的「附近的人」是同一份資料。
+  /// 與聊天室的「附近的人」是同一份資料；不含附在最後的離線我的最愛（#58），它們不在附近。
   Widget _nearbyPeers(Color brown) => ValueListenableBuilder<ChatPeerList?>(
         valueListenable: ChatService.instance.peerList,
         builder: (context, peerList, _) {
-          final peers = peerList?.peers ?? const <ChatPeer>[];
+          final peers = [
+            for (final peer in peerList?.peers ?? const <ChatPeer>[])
+              if (peer.isOnline) peer,
+          ];
           if (peers.isEmpty) {
             return const Text(
               '正在尋找其他 Bitchat 節點...',
