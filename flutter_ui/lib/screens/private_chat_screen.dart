@@ -6,6 +6,8 @@ import '../services/chat_service.dart';
 import '../widgets/chat_composer.dart';
 import '../widgets/chat_message_tile.dart';
 import '../widgets/favorite_star_button.dart';
+import '../widgets/favorite_toggle.dart';
+import '../widgets/scroll_to_end.dart';
 
 /// 私訊畫面（#55）：原生聊天核心「目前選定的私訊」（[ChatService.selectedPrivateChat]）的投影。
 ///
@@ -121,20 +123,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     navigator.pop();
   }
 
-  /// 標頭星號：交給原生切換這個對話的我的最愛（用原生選定的 ID，與原生標頭相同）；星號隨快照更新。
-  Future<void> _toggleFavorite(String peerID) async {
-    try {
-      await _chat.toggleFavorite(peerID);
-    } catch (e) {
-      debugPrint('PrivateChatScreen: toggleFavorite failed: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('無法變更我的最愛，請稍後再試')),
-        );
-      }
-    }
-  }
-
   List<ChatMessage> _messagesOf(Map<String, List<ChatMessage>> chats) => _focus?.messagesIn(chats) ?? const [];
 
   /// 有新訊息（包括自己送出、經原生回推的那則）時捲到底部。
@@ -144,17 +132,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (lastId == _lastMessageId) return;
     final first = _lastMessageId == null;
     _lastMessageId = lastId;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom(animate: !first));
-  }
-
-  void _scrollToBottom({bool animate = true}) {
-    if (!mounted || !_scrollController.hasClients) return;
-    final target = _scrollController.position.maxScrollExtent;
-    if (animate) {
-      _scrollController.animateTo(target, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-    } else {
-      _scrollController.jumpTo(target);
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollController.scrollToEnd(animate: !first);
+    });
   }
 
   Widget _timeline() {
@@ -192,10 +172,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         actions: [
           // 原生私訊標頭的星號（#58）：原生回覆開啟前還不知道是哪個對話，不顯示。
           if (focus != null)
+            // 用原生選定的 ID 切換，與原生標頭相同。
             FavoriteStarButton(
               isFavorite: focus.isFavorite,
               theyFavoritedUs: focus.theyFavoritedUs,
-              onPressed: () => _toggleFavorite(focus.peerID),
+              onPressed: () => toggleFavoriteOrNotify(context, _chat, focus.peerID, logTag: 'PrivateChatScreen'),
             ),
         ],
         title: Column(

@@ -136,6 +136,17 @@ class ChatBridge(
      */
     private val commandsRun = MutableStateFlow(0L)
 
+    /**
+     * Everything a favourite star is resolved against (#58), for both the peer rows and the private
+     * chat header: our favourites, theirs, the fingerprints they are keyed by, and the store.
+     */
+    private val favoriteStarChanges: Flow<*> = merge(
+        chatViewModel.favoritePeers,
+        chatViewModel.peerFavoritedUs,
+        chatViewModel.peerFingerprints,
+        favoritesChanged
+    )
+
     /** What upstream's star asks by ID while a peer's fingerprint is unknown (#58). */
     private val favoriteFallbacks = ChatFavorites.Fallbacks(
         isFavorite = { id -> runCatching { chatViewModel.isFavorite(id) }.getOrDefault(false) },
@@ -168,10 +179,7 @@ class ChatBridge(
                 chatViewModel.privateChats,
                 chatViewModel.conversations,
                 wifiAwarePeers,
-                chatViewModel.favoritePeers,
-                chatViewModel.peerFavoritedUs,
-                chatViewModel.peerFingerprints,
-                favoritesChanged,
+                favoriteStarChanges,
                 commandsRun
             ),
             snapshot = {
@@ -205,10 +213,7 @@ class ChatBridge(
                 chatViewModel.selectedPrivateChatPeer,
                 chatViewModel.peerNicknames,
                 chatViewModel.connectedPeers,
-                chatViewModel.favoritePeers,
-                chatViewModel.peerFavoritedUs,
-                chatViewModel.peerFingerprints,
-                favoritesChanged
+                favoriteStarChanges
             ),
             snapshot = ::privateChatFocusEvent
         ),
@@ -298,18 +303,13 @@ class ChatBridge(
      * or worse, private text be broadcast to the public timeline.
      */
     private fun sendMessage(call: MethodCall, result: MethodChannel.Result) {
-        val arguments = call.arguments as? Map<*, *>
-        val text = arguments?.get("text") as? String
-        val privateChat = arguments?.get("privateChat")
-        if (text == null || (privateChat != null && privateChat !is String)) {
-            result.error("INVALID_ARGUMENT", "$METHOD_SEND_MESSAGE expects {text: String, privateChat: String?}", null)
-            return
-        }
-        val trimmed = text.trim()
+        val input = call.composerInput() ?: return result.invalidArguments(call, ComposerInput.EXPECTS)
+        val trimmed = input.text.trim()
         if (trimmed.isEmpty()) {
             result.success(false)
             return
         }
+        val privateChat = input.privateChat
         val focus = chatViewModel.selectedPrivateChatPeer.value
         if (focus != privateChat) {
             Log.w(TAG, "Not sending: composer is for ${privateChat ?: "the public chat"}, upstream focus is ${focus ?: "the public chat"}")
@@ -333,11 +333,7 @@ class ChatBridge(
      * snapshots.
      */
     private fun toggleFavorite(call: MethodCall, result: MethodChannel.Result) {
-        val peerID = (call.arguments as? Map<*, *>)?.get("peerID") as? String
-        if (peerID.isNullOrBlank()) {
-            result.error("INVALID_ARGUMENT", "$METHOD_TOGGLE_FAVORITE expects {peerID: String}", null)
-            return
-        }
+        val peerID = call.peerIDArgument() ?: return result.invalidArguments(call, PEER_ID_EXPECTED)
         chatViewModel.toggleFavorite(peerID)
         result.success(null)
     }
@@ -352,11 +348,7 @@ class ChatBridge(
      * map as it then stands, so Dart learns the outcome without waiting for the snapshot.
      */
     private fun startPrivateChat(call: MethodCall, result: MethodChannel.Result) {
-        val peerID = (call.arguments as? Map<*, *>)?.get("peerID") as? String
-        if (peerID.isNullOrBlank()) {
-            result.error("INVALID_ARGUMENT", "$METHOD_START_PRIVATE_CHAT expects {peerID: String}", null)
-            return
-        }
+        val peerID = call.peerIDArgument() ?: return result.invalidArguments(call, PEER_ID_EXPECTED)
         val previous = privateChatAction
         privateChatAction = scope.launch {
             previous?.join()
@@ -416,11 +408,7 @@ class ChatBridge(
      * so the bridge adds no rule. The new value reaches Dart through the `chat_nickname` snapshot.
      */
     private fun setNickname(call: MethodCall, result: MethodChannel.Result) {
-        val nickname = (call.arguments as? Map<*, *>)?.get("nickname") as? String
-        if (nickname == null) {
-            result.error("INVALID_ARGUMENT", "$METHOD_SET_NICKNAME expects {nickname: String}", null)
-            return
-        }
+        val nickname = call.stringArgument("nickname") ?: return result.invalidArguments(call, "{nickname: String}")
         chatViewModel.setNickname(nickname)
         result.success(null)
     }
@@ -440,13 +428,7 @@ class ChatBridge(
      *   the next `chat_selected_private_peer`.
      */
     private fun updateInput(call: MethodCall, result: MethodChannel.Result) {
-        val arguments = call.arguments as? Map<*, *>
-        val text = arguments?.get("text") as? String
-        val privateChat = arguments?.get("privateChat")
-        if (text == null || (privateChat != null && privateChat !is String)) {
-            result.error("INVALID_ARGUMENT", "$METHOD_UPDATE_INPUT expects {text: String, privateChat: String?}", null)
-            return
-        }
+        val (text, privateChat) = call.composerInput() ?: return result.invalidArguments(call, ComposerInput.EXPECTS)
         chatViewModel.setConversationDraft(privateChat, text)
         if (privateChat == null) {
             chatViewModel.updateCommandSuggestions(text)
@@ -463,11 +445,7 @@ class ChatBridge(
      * longer offered (the list moved on) answers null and selects nothing.
      */
     private fun selectCommandSuggestion(call: MethodCall, result: MethodChannel.Result) {
-        val command = (call.arguments as? Map<*, *>)?.get("command") as? String
-        if (command == null) {
-            result.error("INVALID_ARGUMENT", "$METHOD_SELECT_COMMAND_SUGGESTION expects {command: String}", null)
-            return
-        }
+        val command = call.stringArgument("command") ?: return result.invalidArguments(call, "{command: String}")
         val suggestion = chatViewModel.commandSuggestions.value.firstOrNull { it.command == command }
         result.success(suggestion?.let(chatViewModel::selectCommandSuggestion))
     }
@@ -478,19 +456,30 @@ class ChatBridge(
      * hides the popup.
      */
     private fun selectMentionSuggestion(call: MethodCall, result: MethodChannel.Result) {
-        val arguments = call.arguments as? Map<*, *>
-        val nickname = arguments?.get("nickname") as? String
-        val currentText = arguments?.get("currentText") as? String
+        val nickname = call.stringArgument("nickname")
+        val currentText = call.stringArgument("currentText")
         if (nickname == null || currentText == null) {
-            result.error(
-                "INVALID_ARGUMENT",
-                "$METHOD_SELECT_MENTION_SUGGESTION expects {nickname: String, currentText: String}",
-                null
-            )
-            return
+            return result.invalidArguments(call, "{nickname: String, currentText: String}")
         }
         result.success(chatViewModel.selectMentionSuggestion(nickname, currentText))
     }
+
+    /** What a composer hands over: its text, and the private chat it belongs to (null: the public one). */
+    private data class ComposerInput(val text: String, val privateChat: String?) {
+        companion object {
+            const val EXPECTS = "{text: String, privateChat: String?}"
+        }
+    }
+
+    /** `chat_sendMessage`'s and `chat_updateInput`'s arguments; null when they are invalid. */
+    private fun MethodCall.composerInput(): ComposerInput? {
+        val text = stringArgument("text") ?: return null
+        if (!hasOptionalString("privateChat")) return null
+        return ComposerInput(text, stringArgument("privateChat"))
+    }
+
+    /** The non-blank `peerID` argument of the private chat and favourite methods; null when invalid. */
+    private fun MethodCall.peerIDArgument(): String? = stringArgument("peerID")?.takeIf { it.isNotBlank() }
 
     /** Every projection pushes its snapshot as soon as it is built (Dart subscribed, or asked). */
     private fun pushSnapshots() {
@@ -635,6 +624,8 @@ class ChatBridge(
         const val METHOD_TOGGLE_FAVORITE = "chat_toggleFavorite"
 
         private const val TAG = "ChatBridge"
+
+        private const val PEER_ID_EXPECTED = "{peerID: String}"
 
         private val NOBODY_BLOCKED: (String) -> Boolean = { false }
 

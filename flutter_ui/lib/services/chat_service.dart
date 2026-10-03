@@ -204,51 +204,24 @@ class ChatService {
   Future<void> clearSuggestions() => _clearSuggestions();
 
   void _handleEvent(Map<String, dynamic> event) {
-    switch (event['type']) {
+    final type = event['type'];
+    switch (type) {
       case ChatEvents.publicMessages:
         final messages = ChatMessage.listFrom(event['messages']);
-        if (messages == null) {
-          debugPrint('ChatService: ignoring malformed ${ChatEvents.publicMessages} event');
-          return;
-        }
-        _publicMessages.value = List.unmodifiable(messages);
+        _replace(_publicMessages, type, messages == null ? null : List<ChatMessage>.unmodifiable(messages));
       case ChatEvents.nickname:
         final nickname = event['nickname'];
-        if (nickname is! String) {
-          debugPrint('ChatService: ignoring malformed ${ChatEvents.nickname} event');
-          return;
-        }
-        _nickname.value = nickname;
+        _replace(_nickname, type, nickname is String ? nickname : null);
       case ChatEvents.peers:
-        final peerList = ChatPeerList.fromEvent(event);
-        if (peerList == null) {
-          debugPrint('ChatService: ignoring malformed ${ChatEvents.peers} event');
-          return;
-        }
-        _peerList.value = peerList;
+        _replace(_peerList, type, ChatPeerList.fromEvent(event));
       case ChatEvents.suggestions:
-        final suggestions = ChatSuggestions.fromEvent(event);
-        if (suggestions == null) {
-          debugPrint('ChatService: ignoring malformed ${ChatEvents.suggestions} event');
-          return;
-        }
-        _suggestions.value = suggestions;
+        _replace(_suggestions, type, ChatSuggestions.fromEvent(event));
       case ChatEvents.selectedPrivatePeer:
         _applySelection(event);
       case ChatEvents.privateChats:
-        final chats = PrivateChats.fromEvent(event);
-        if (chats == null) {
-          debugPrint('ChatService: ignoring malformed ${ChatEvents.privateChats} event');
-          return;
-        }
-        _privateChats.value = chats;
+        _replace(_privateChats, type, PrivateChats.fromEvent(event));
       case ChatEvents.unread:
-        final unread = ChatUnread.fromEvent(event);
-        if (unread == null) {
-          debugPrint('ChatService: ignoring malformed ${ChatEvents.unread} event');
-          return;
-        }
-        _unread.value = unread;
+        _replace(_unread, type, ChatUnread.fromEvent(event));
       case ChatEvents.pendingNavigation:
         if (!event.containsKey('navigation')) {
           debugPrint('ChatService: ignoring malformed ${ChatEvents.pendingNavigation} event');
@@ -257,6 +230,15 @@ class ChatService {
         // 這個 app 不認得的目的地當作沒有：它留在原生，等下一次點擊取代。
         _pendingNavigation.value = ChatNavigation.fromMap(event['navigation']);
     }
+  }
+
+  /// 解析好的快照 [snapshot] 整份取代 [notifier] 的值；格式錯誤（null）時記 log、保留原值。
+  void _replace<T>(ValueNotifier<T> notifier, Object? type, T? snapshot) {
+    if (snapshot == null) {
+      debugPrint('ChatService: ignoring malformed $type event');
+      return;
+    }
+    notifier.value = snapshot;
   }
 
   @visibleForTesting

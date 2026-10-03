@@ -7,7 +7,9 @@ import '../services/chat_service.dart';
 import '../services/mascot_service.dart';
 import '../widgets/chat_composer.dart';
 import '../widgets/chat_message_tile.dart';
+import '../widgets/favorite_toggle.dart';
 import '../widgets/peer_list_sheet.dart';
+import '../widgets/scroll_to_end.dart';
 import 'private_chat_screen.dart';
 
 /// 公開 mesh 聊天室。訊息與送出都經由 [ChatService]（原生 `ChatViewModel` 的投影），
@@ -73,7 +75,7 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     _chat.selectedPrivateChat.addListener(_onSelectedPrivateChatChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // 打開聊天室時直接停在最新訊息
-      _scrollToBottom(animate: false);
+      if (mounted) _scrollController.scrollToEnd(animate: false);
       // 這個畫面打開前原生就已選定私訊：開啟那個私訊。
       _onSelectedPrivateChatChanged();
     });
@@ -119,21 +121,9 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     final lastId = _lastIdOf(_chat.publicMessages.value);
     if (lastId == _lastMessageId) return;
     _lastMessageId = lastId;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
-  }
-
-  void _scrollToBottom({bool animate = true}) {
-    if (!mounted || !_scrollController.hasClients) return;
-    final target = _scrollController.position.maxScrollExtent;
-    if (animate) {
-      _scrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    } else {
-      _scrollController.jumpTo(target);
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollController.scrollToEnd();
+    });
   }
 
   /// 原生選定了私訊而私訊畫面沒開：開啟它（`/m 暱稱` 等由原生選定的私訊）。
@@ -250,23 +240,10 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         builder: (sheetContext) => PeerListSheet(
           peerList: _chat.peerList,
           onPeerTap: (peer) => _onPeerTap(sheetContext, peer),
-          onFavoriteToggle: (peer) => _toggleFavorite(sheetContext, peer.peerID),
+          // 列表保持開著，失敗的提示也出現在列表上。
+          onFavoriteToggle: (peer) => toggleFavoriteOrNotify(sheetContext, _chat, peer.peerID, logTag: 'ChatScreen'),
         ),
       );
-
-  /// 交給原生切換我的最愛；列表保持開著，新的星號隨快照回來。
-  Future<void> _toggleFavorite(BuildContext sheetContext, String peerID) async {
-    try {
-      await _chat.toggleFavorite(peerID);
-    } catch (e) {
-      debugPrint('ChatScreen: toggleFavorite failed: $e');
-      if (sheetContext.mounted) {
-        ScaffoldMessenger.of(sheetContext).showSnackBar(
-          const SnackBar(content: Text('無法變更我的最愛，請稍後再試')),
-        );
-      }
-    }
-  }
 
   /// AppBar 最右側的線上人數（對照原生標頭的 `PeerCounter`：人數在最右、點了打開 peer 列表）。
   /// 原生端回報前不顯示；沒有人在線時變淡。
