@@ -1,4 +1,4 @@
-package com.bitchat.android.testing
+package com.bitchat.android.testsupport
 
 import java.io.InputStream
 import java.io.OutputStream

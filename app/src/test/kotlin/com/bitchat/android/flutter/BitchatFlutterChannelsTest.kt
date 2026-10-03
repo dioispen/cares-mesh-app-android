@@ -1,7 +1,8 @@
 package com.bitchat.android.flutter
 
 import android.os.Build
-import com.bitchat.android.testing.FakeAndroidKeyStore
+import com.bitchat.android.testsupport.FakeAndroidKeyStore
+import com.bitchat.android.testsupport.RecordingResult
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import kotlinx.coroutines.CoroutineDispatcher

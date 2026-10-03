@@ -1,5 +1,7 @@
 package com.bitchat.android.flutter
 
+import com.bitchat.android.testsupport.ManualPoster
+import com.bitchat.android.testsupport.RecordingSink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

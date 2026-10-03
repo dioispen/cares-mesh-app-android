@@ -4,6 +4,9 @@ import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.BitchatMessageType
 import com.bitchat.android.model.DeliveryStatus
+import com.bitchat.android.testsupport.ManualPoster
+import com.bitchat.android.testsupport.RecordingResult
+import com.bitchat.android.testsupport.RecordingSink
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.CommandSuggestion
 import com.bitchat.android.ui.ConversationSummary

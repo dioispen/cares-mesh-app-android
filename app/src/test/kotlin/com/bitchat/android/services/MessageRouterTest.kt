@@ -7,7 +7,7 @@ import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.nostr.NostrTransport
-import com.bitchat.android.testing.FakeAndroidKeyStore
+import com.bitchat.android.testsupport.FakeAndroidKeyStore
 import com.bitchat.android.util.AppConstants
 import org.junit.After
 import org.junit.Assert.assertEquals

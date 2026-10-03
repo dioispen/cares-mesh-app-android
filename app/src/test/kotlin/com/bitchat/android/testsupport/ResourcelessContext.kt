@@ -1,4 +1,4 @@
-package com.bitchat.android.testing
+package com.bitchat.android.testsupport
 
 import android.content.Context
 import android.content.ContextWrapper

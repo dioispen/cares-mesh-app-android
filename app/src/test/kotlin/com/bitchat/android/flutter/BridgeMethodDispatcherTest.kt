@@ -1,5 +1,6 @@
 package com.bitchat.android.flutter
 
+import com.bitchat.android.testsupport.RecordingResult
 import io.flutter.plugin.common.MethodCall
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

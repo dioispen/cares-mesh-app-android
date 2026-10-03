@@ -1,4 +1,4 @@
-package com.bitchat.android.flutter
+package com.bitchat.android.testsupport
 
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel

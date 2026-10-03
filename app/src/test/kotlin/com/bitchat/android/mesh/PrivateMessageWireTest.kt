@@ -12,8 +12,8 @@ import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.service.TransportBridgeService
-import com.bitchat.android.testing.FakeAndroidKeyStore
-import com.bitchat.android.testing.ResourcelessContext
+import com.bitchat.android.testsupport.FakeAndroidKeyStore
+import com.bitchat.android.testsupport.ResourcelessContext
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals

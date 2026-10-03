@@ -6,8 +6,8 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.pm.ShortcutManagerCompat
-import com.bitchat.android.testing.FakeAndroidKeyStore
-import com.bitchat.android.testing.ResourcelessContext
+import com.bitchat.android.testsupport.FakeAndroidKeyStore
+import com.bitchat.android.testsupport.ResourcelessContext
 import com.bitchat.android.ui.NotificationManager
 import org.junit.After
 import org.junit.Assert.assertEquals
