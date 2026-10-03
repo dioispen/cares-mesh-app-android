@@ -30,6 +30,19 @@ abstract final class ChatErrors {
   static const privateChatChanged = 'PRIVATE_CHAT_CHANGED';
 }
 
+/// `sendHealthReport` 沒有送出時原生回的錯誤碼（[PlatformException.code]），對應 Kotlin
+/// `BitchatFlutterChannels` 的 `"sendHealthReport"` 分支。
+abstract final class HealthReportErrors {
+  /// 原生認不得這份 Broadcast Tier（例如 handle 或 Status 不合法）。
+  static const invalidFormat = 'INVALID_FORMAT';
+
+  /// mesh 服務沒有在跑。
+  static const serviceNotReady = 'SERVICE_NOT_READY';
+
+  /// 編碼或交給 mesh 時出錯。
+  static const sendFailed = 'SEND_FAILED';
+}
+
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
@@ -266,11 +279,10 @@ class BitchatBridge {
   /// 傳入的 map 只應含不具識別性的欄位：`reporterHandle`、`status`（中文 label）、
   /// 以及原始 `lat`/`lng`（由原生端就地降精度為 geohash）。姓名、電話、血型、自由文字
   /// 等 Detail Tier 欄位不要放進來——原生端也會忽略（見 ADR-0003）。
-  static Future<void> sendHealthReport(Map<String, dynamic> broadcastTier) async {
-    try {
-      await _method.invokeMethod<void>('sendHealthReport', broadcastTier);
-    } catch (e) {
-      // Ignore
-    }
-  }
+  ///
+  /// 正常完成才表示原生已把它交給 mesh 廣播。沒有送出時往上拋，呼叫端必須讓使用者知道附近的人
+  /// 收不到：[PlatformException] 是原生回報的原因（錯誤碼見 [HealthReportErrors]）；
+  /// [MissingPluginException] 是這個平台沒有原生 mesh（例如 iOS、測試）。
+  static Future<void> sendHealthReport(Map<String, dynamic> broadcastTier) =>
+      _method.invokeMethod<void>('sendHealthReport', broadcastTier);
 }

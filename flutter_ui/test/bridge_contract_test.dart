@@ -112,6 +112,23 @@ void main() {
     });
   });
 
+  group('Dart explains every error the native sendHealthReport answers with', () {
+    test('the two sides list the same codes', () {
+      final channels = _read('$_kotlinBridgeDir/BitchatFlutterChannels.kt');
+      final start = channels.indexOf('"sendHealthReport" ->');
+      expect(start, isNot(-1), reason: 'sendHealthReport branch not found');
+      final branch = channels.substring(start, channels.indexOf('else -> return false', start));
+      final kotlinCodes = {for (final m in RegExp(r'result\.error\("(\w+)"').allMatches(branch)) m.group(1)!};
+
+      final block = RegExp(r'abstract final class HealthReportErrors \{([^}]*)\}').firstMatch(_read(_dartBridge))?.group(1) ??
+          fail('HealthReportErrors not found in $_dartBridge');
+      final dartCodes = {for (final m in RegExp(r"static const \w+ = '([^']+)';").allMatches(block)) m.group(1)!};
+
+      expect(kotlinCodes, isNotEmpty);
+      expect(dartCodes, kotlinCodes);
+    });
+  });
+
   group('the mesh nickname is only written from the nickname editor (#52, ADR-0003)', () {
     // The chat screen's editor is the only UI that sets it; ChatService and BitchatBridge
     // just forward. Login, registration, e-mail verification and setup must never write it,
