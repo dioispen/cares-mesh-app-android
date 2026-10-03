@@ -94,6 +94,24 @@ void main() {
     });
   });
 
+  group('Dart knows every error code the chat bridge refuses with', () {
+    Map<String, String> kotlinCodes() => {
+          for (final m in RegExp(r'const val (ERROR_\w+) = "(\w+)"').allMatches(_read('$_kotlinBridgeDir/ChatBridge.kt')))
+            m.group(1)!: m.group(2)!,
+        };
+
+    Set<String> dartCodes() {
+      final block = RegExp(r'abstract final class ChatErrors \{([^}]*)\}').firstMatch(_read(_dartBridge))?.group(1) ??
+          fail('ChatErrors not found in $_dartBridge');
+      return {for (final m in RegExp(r"static const \w+ = '([^']+)';").allMatches(block)) m.group(1)!};
+    }
+
+    test('the two sides list the same codes', () {
+      expect(kotlinCodes().values, isNotEmpty);
+      expect(dartCodes(), kotlinCodes().values.toSet());
+    });
+  });
+
   group('the mesh nickname is only written from the nickname editor (#52, ADR-0003)', () {
     // The chat screen's editor is the only UI that sets it; ChatService and BitchatBridge
     // just forward. Login, registration, e-mail verification and setup must never write it,

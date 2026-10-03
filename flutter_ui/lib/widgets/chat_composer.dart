@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../bridge/bitchat_bridge.dart';
 import '../models/chat_suggestions.dart';
 import '../services/chat_service.dart';
 import 'chat_message_tile.dart';
@@ -98,13 +100,18 @@ class _ChatComposerState extends State<ChatComposer> {
     } catch (e) {
       debugPrint('ChatComposer: send failed: $e');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('訊息送出失敗，請稍後再試')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_sendFailureText(e))));
     } finally {
       _sending = false;
     }
   }
+
+  /// 送出失敗時告訴使用者的話：原生擋下的原因（[ChatErrors]）各有說明，其他錯誤請使用者稍後再試。
+  /// 文字都留在輸入框。
+  static String _sendFailureText(Object error) => switch (error) {
+        PlatformException(code: ChatErrors.channelsUnsupported) => '頻道功能尚未支援，訊息沒有送出',
+        _ => '訊息送出失敗，請稍後再試',
+      };
 
   /// 使用者改動了文字：交給原生核心更新補完與草稿（與原生輸入框的 onValueChange 相同）。
   void _onInputChanged(String text) =>

@@ -80,6 +80,7 @@ class ChatBridgeTest {
     private val favoritePeers = MutableStateFlow<Set<String>>(emptySet())
     private val peerFavoritedUs = MutableStateFlow<Set<String>>(emptySet())
     private val peerFingerprints = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val currentChannel = MutableStateFlow<String?>(null)
     private val drafts = mutableMapOf<String, String>()
 
     /** Upstream's favourites store and block list, as ChatBridge reads them. */
@@ -111,6 +112,7 @@ class ChatBridgeTest {
         whenever(vm.favoritePeers).thenAnswer { favoritePeers }
         whenever(vm.peerFavoritedUs).thenAnswer { peerFavoritedUs }
         whenever(vm.peerFingerprints).thenAnswer { peerFingerprints }
+        whenever(vm.currentChannel).thenAnswer { currentChannel }
         whenever(vm.conversationDraft(anyOrNull())).thenAnswer { drafts[it.arguments[0]] ?: "" }
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
@@ -721,6 +723,93 @@ class ChatBridgeTest {
 
         assertEquals(false, suggestionEvents().single()["showCommands"])
         assertEquals(listOf(emptyList<Any?>()), suggestionCommands())
+    }
+
+    // --- channels, not supported yet (P3) -------------------------------------------------------
+
+    @Test
+    fun `the join command is never handed to upstream, from either composer`() {
+        acceptSends(true)
+        selectedPrivateChatPeer.value = ALICE
+        listOf(
+            sendCall("/j #help"),
+            sendCall("  /join help  "),
+            sendCall("/J #help"),
+            sendCall("/join"),
+            sendCall("/j #help", privateChat = ALICE)
+        ).forEach { call ->
+            val result = RecordingResult()
+
+            val claimed = bridge.handle(call, result)
+
+            assertTrue(claimed)
+            assertEquals(call.arguments.toString(), listOf("error:${ChatBridge.ERROR_CHANNELS_UNSUPPORTED}"), result.calls)
+        }
+        verify(viewModel, never()).sendMessage(any(), any())
+    }
+
+    @Test
+    fun `commands that only look like the join command are still handed over`() {
+        acceptSends(true)
+        listOf("/joinx", "/jump", "/w").forEach { text ->
+            val result = RecordingResult()
+
+            bridge.handle(sendCall(text), result)
+
+            assertEquals(text, listOf("success:true"), result.calls)
+            verify(viewModel).sendMessage(eq(text), any())
+        }
+    }
+
+    @Test
+    fun `the join command is not offered, nor selectable`() {
+        val join = CommandSuggestion("/j", listOf("/join"), "<channel>", "join or create a channel")
+        val msg = CommandSuggestion("/m", listOf("/msg"), "<nickname> [message]", "send private message")
+        showCommandSuggestions.value = true
+        commandSuggestions.value = listOf(join, msg)
+        val result = RecordingResult()
+
+        events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+        bridge.handle(selectCommandCall("/j"), result)
+
+        assertEquals(listOf(listOf("/m")), suggestionCommands())
+        assertEquals(listOf("success:null"), result.calls)
+        verify(viewModel, never()).selectCommandSuggestion(any())
+    }
+
+    @Test
+    fun `a channel upstream is already in is left for the main timeline`() {
+        // Joined before this rule, in the same ChatViewModel (it outlives the engine).
+        currentChannel.value = "#help"
+
+        dispatcher.scheduler.runCurrent()
+
+        verify(viewModel).switchToChannel(null)
+        verify(viewModel, never()).leaveChannel(any())
+    }
+
+    @Test
+    fun `a channel is left only once no private chat is in focus`() {
+        // switchToChannel clears the private chat focus too; upstream's back navigation also
+        // leaves the private chat first.
+        currentChannel.value = "#help"
+        selectedPrivateChatPeer.value = ALICE
+        dispatcher.scheduler.runCurrent()
+        verify(viewModel, never()).switchToChannel(anyOrNull())
+
+        selectedPrivateChatPeer.value = null
+        dispatcher.scheduler.runCurrent()
+
+        verify(viewModel).switchToChannel(null)
+    }
+
+    @Test
+    fun `on the main timeline upstream is left alone`() {
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verify(viewModel, never()).switchToChannel(anyOrNull())
     }
 
     // --- private chats (#55) --------------------------------------------------------------------

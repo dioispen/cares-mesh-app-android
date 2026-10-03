@@ -71,6 +71,9 @@ import kotlinx.coroutines.withContext
  * ([ChatRecords]), so those snapshots are also re-pushed when the favourites store reports a change
  * and after every command upstream ran.
  *
+ * Channels are not supported yet (P3): the bridge keeps upstream on the main timeline, refusing
+ * the join command and leaving a channel upstream is already in ([ChatChannels]).
+ *
  * It owns no channel. [BitchatFlutterChannels] registers the one method handler and the one
  * stream handler, and offers this bridge every method it does not recognise
  * (see [BridgeMethodDispatcher]).
@@ -187,7 +190,8 @@ class ChatBridge(
             }
         ),
         // The `/` and `@` popups follow every keystroke (chat_updateInput), so they get their own
-        // short debounce; see SUGGESTIONS_DEBOUNCE_MS.
+        // short debounce; see SUGGESTIONS_DEBOUNCE_MS. Never the join command (ChatChannels); Dart
+        // hides the list when that leaves it empty.
         Projection(
             changes = merge(
                 chatViewModel.showCommandSuggestions,
@@ -199,7 +203,7 @@ class ChatBridge(
             snapshot = {
                 ChatSerialization.suggestionsEvent(
                     showCommands = chatViewModel.showCommandSuggestions.value,
-                    commands = chatViewModel.commandSuggestions.value,
+                    commands = chatViewModel.commandSuggestions.value.filter(ChatChannels::isOffered),
                     showMentions = chatViewModel.showMentionSuggestions.value,
                     mentions = chatViewModel.mentionSuggestions.value
                 )
@@ -259,6 +263,23 @@ class ChatBridge(
         // The store reports from whichever thread changed it; the counter is thread-safe and the
         // projections collect it on [scope].
         removeFavoritesListener = records.addFavoritesListener { favoritesChanged.update { it + 1 } }
+        leaveChannels()
+    }
+
+    /**
+     * Keeps upstream on the main timeline (see [ChatChannels]): whenever it is in a channel — when
+     * this bridge starts, or later — and no private chat is in focus, it leaves the channel view as
+     * upstream's own back navigation does (`switchToChannel(null)`; a private chat is left first
+     * there too, and its focus would be cleared by it). Joined channels and their messages stay.
+     */
+    private fun leaveChannels() {
+        scope.launch {
+            combine(chatViewModel.currentChannel, chatViewModel.selectedPrivateChatPeer) { channel, privateChat ->
+                channel != null && privateChat == null
+            }.collect { inChannelView ->
+                if (inChannelView) chatViewModel.switchToChannel(null)
+            }
+        }
     }
 
     override fun handle(call: MethodCall, result: MethodChannel.Result): Boolean {
@@ -301,6 +322,9 @@ class ChatBridge(
      * snapshot, so for a moment the two can disagree — right after `/m`, or after upstream ends a
      * private chat by itself — and without this check public text could leave as a private message,
      * or worse, private text be broadcast to the public timeline.
+     *
+     * The join command (`/j`, `/join`) is never handed over, from either composer: it is answered
+     * with the [ERROR_CHANNELS_UNSUPPORTED] error, which Dart shows the user (see [ChatChannels]).
      */
     private fun sendMessage(call: MethodCall, result: MethodChannel.Result) {
         val input = call.composerInput() ?: return result.invalidArguments(call, ComposerInput.EXPECTS)
@@ -308,6 +332,9 @@ class ChatBridge(
         if (trimmed.isEmpty()) {
             result.success(false)
             return
+        }
+        if (ChatChannels.isJoinCommand(trimmed)) {
+            return result.error(ERROR_CHANNELS_UNSUPPORTED, "channels are not supported in the Flutter chat", null)
         }
         val privateChat = input.privateChat
         val focus = chatViewModel.selectedPrivateChatPeer.value
@@ -446,7 +473,7 @@ class ChatBridge(
      */
     private fun selectCommandSuggestion(call: MethodCall, result: MethodChannel.Result) {
         val command = call.stringArgument("command") ?: return result.invalidArguments(call, "{command: String}")
-        val suggestion = chatViewModel.commandSuggestions.value.firstOrNull { it.command == command }
+        val suggestion = chatViewModel.commandSuggestions.value.firstOrNull { it.command == command && ChatChannels.isOffered(it) }
         result.success(suggestion?.let(chatViewModel::selectCommandSuggestion))
     }
 
@@ -622,6 +649,9 @@ class ChatBridge(
 
         /** The favourite star (#58): `ChatViewModel.toggleFavorite`, answered null. */
         const val METHOD_TOGGLE_FAVORITE = "chat_toggleFavorite"
+
+        /** `chat_sendMessage` refused the join command: channels are not supported (see [ChatChannels]). */
+        const val ERROR_CHANNELS_UNSUPPORTED = "CHANNELS_UNSUPPORTED"
 
         private const val TAG = "ChatBridge"
 

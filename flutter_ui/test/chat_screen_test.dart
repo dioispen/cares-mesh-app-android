@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/bridge/bitchat_bridge.dart' show ChatErrors;
 import 'package:flutter_ui/screens/chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
@@ -212,6 +213,20 @@ void main() {
 
     expect(find.text('hello mesh'), findsOneWidget);
     expect(find.byType(SnackBar), findsOneWidget);
+  });
+
+  testWidgets('a channel command is refused with its own explanation, and stays in the field', (tester) async {
+    // Channels are not supported yet (#49 P3): the native side hands /j and /join to no one.
+    send = (text) async => throw PlatformException(code: ChatErrors.channelsUnsupported);
+    await pumpChat(tester);
+
+    await tester.enterText(find.byType(TextField), '/j #help');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+
+    expect(find.text('頻道功能尚未支援，訊息沒有送出'), findsOneWidget);
+    expect(find.text('訊息送出失敗，請稍後再試'), findsNothing);
+    expect(find.text('/j #help'), findsOneWidget);
   });
 
   testWidgets('blank input is not sent', (tester) async {

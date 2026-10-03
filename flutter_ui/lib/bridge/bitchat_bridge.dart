@@ -18,6 +18,14 @@ abstract final class ChatMethods {
   static const toggleFavorite = 'chat_toggleFavorite';
 }
 
+/// 聊天 method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `ChatBridge` 的 `ERROR_*`
+/// 常數。原生沒有做任何事；畫面依錯誤碼告訴使用者原因。
+abstract final class ChatErrors {
+  /// [ChatMethods.sendMessage] 收到頻道指令（`/j`、`/join`）：頻道功能尚未支援（#49 P3），
+  /// 原生沒有送出、也沒有加入頻道。
+  static const channelsUnsupported = 'CHANNELS_UNSUPPORTED';
+}
+
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
@@ -136,6 +144,7 @@ class BitchatBridge {
   /// [privateChat] 只標明文字是在哪個輸入框打的：公開聊天室為 null，私訊畫面為
   /// [ChatEvents.selectedPrivatePeer] 的 `peerID`。原生端只在它的選定對象與此相同時才送出，
   /// 否則回傳 false（沒送出），避免公開訊息被送成私訊、或私訊被公開廣播。空白文字不會送出。
+  /// 頻道指令（`/j`、`/join`）不交給原生核心，以錯誤碼 [ChatErrors.channelsUnsupported] 拒絕。
   /// 回傳原生核心是否接受；bridge 錯誤（例如 [PlatformException]）會往上拋。
   static Future<bool> sendMessage(String text, {String? privateChat}) async {
     final bool? accepted = await _method.invokeMethod<bool>(
