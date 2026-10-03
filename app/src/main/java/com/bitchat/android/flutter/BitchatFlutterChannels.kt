@@ -23,6 +23,14 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 核心橋樑：負責 Kotlin 原生功能與 Flutter UI 的通訊（系統狀態、權限、Health Report）。
@@ -40,12 +48,19 @@ class BitchatFlutterChannels(
     messenger: BinaryMessenger,
     private val activity: Activity? = null,
     private val events: BridgeEventEmitter = BridgeEventEmitter(),
-    additionalMethodHandlers: List<BridgeMethodHandler> = emptyList()
+    additionalMethodHandlers: List<BridgeMethodHandler> = emptyList(),
+    /** 回覆 method 的執行緒（主執行緒）；[destroy] 時取消。 */
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    /** 讀加密身分儲存區（keystore 與磁碟）的地方，不在主執行緒。 */
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : BridgeMethodHandler {
 
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL_NAME)
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL_NAME)
-    private val identityManager = SecureIdentityStateManager(context)
+
+    // 開啟 EncryptedSharedPreferences 要建 MasterKey、解開 keyset（keystore 與磁碟），所以不在 engine
+    // 建立時於主執行緒開，而是第一次用到時在 [ioDispatcher] 上開。
+    private val identityManager by lazy { SecureIdentityStateManager(context) }
     private val permissionManager = PermissionManager(context)
     private val gson = Gson()
 
@@ -147,9 +162,7 @@ class BitchatFlutterChannels(
                 result.success(true)
             }
 
-            "isRegistered" -> {
-                result.success(identityManager.hasIdentityData())
-            }
+            "isRegistered" -> answerIsRegistered(result)
 
             "startMesh" -> {
                 try {
@@ -209,6 +222,24 @@ class BitchatFlutterChannels(
             else -> return false
         }
         return true
+    }
+
+    /**
+     * `isRegistered`：身分儲存區裡有沒有 static key。在 [ioDispatcher] 上讀，回到主執行緒回覆；
+     * 讀不到（例如 keystore 失效）時回 error，Dart 端照舊當作 false。
+     */
+    private fun answerIsRegistered(result: MethodChannel.Result) {
+        scope.launch {
+            val registered = try {
+                withContext(ioDispatcher) { identityManager.hasIdentityData() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                result.error("IDENTITY_UNAVAILABLE", e.message, null)
+                return@launch
+            }
+            result.success(registered)
+        }
     }
 
     /** 經共用 emitter 走 main looper 送出，不依賴 Activity 存活；送不出去時會留下 log。 */
@@ -275,6 +306,7 @@ class BitchatFlutterChannels(
      * 卸下兩個 channel 的 handler 並關閉 emitter。重複呼叫無害。
      */
     fun destroy() {
+        scope.cancel()
         InboundPacketBridge.removeListener(packetListener)
         try {
             context.unregisterReceiver(statusReceiver)

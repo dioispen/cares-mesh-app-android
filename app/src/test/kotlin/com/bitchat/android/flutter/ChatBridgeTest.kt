@@ -8,11 +8,15 @@ import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.CommandSuggestion
 import com.bitchat.android.ui.ConversationSummary
 import com.bitchat.android.ui.DirectMessageTransport
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Runnable
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -33,6 +37,12 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyBlocking
 import org.mockito.kotlin.whenever
 import java.util.Date
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatBridgeTest {
@@ -44,6 +54,9 @@ class ChatBridgeTest {
     // Projection work only runs when a test advances this scheduler.
     private val dispatcher = StandardTestDispatcher()
     private val scope = CoroutineScope(dispatcher + Job())
+
+    /** The bridge's snapshot dispatcher: same scheduler, but tells snapshot work from the rest. */
+    private val snapshotWork = SnapshotWorkDispatcher(dispatcher)
 
     private val messages = MutableStateFlow<List<BitchatMessage>>(emptyList())
     private val nickname = MutableStateFlow("me")
@@ -67,7 +80,7 @@ class ChatBridgeTest {
     private val drafts = mutableMapOf<String, String>()
 
     /** Upstream's favourites store and block list, as ChatBridge reads them. */
-    private val records = FakeRecords()
+    private val records = FakeRecords(isSnapshotWork = { snapshotWork.running })
 
     /** Upstream's contact records, as ChatBridge reads them; unknown IDs resolve to themselves. */
     private val contacts = mutableMapOf<String, ChatPrivateChat.Contact>()
@@ -99,7 +112,7 @@ class ChatBridgeTest {
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
     private val pendingNavigation = PendingChatNavigation()
-    private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers, pendingNavigation, records) { id ->
+    private val bridge = ChatBridge(viewModel, events, scope, snapshotWork, wifiAwarePeers, pendingNavigation, records) { id ->
         contacts[id] ?: ChatPrivateChat.Contact(id, meshPeerID = null, displayName = null, favoriteNickname = null)
     }
 
@@ -288,6 +301,7 @@ class ChatBridgeTest {
         nickname.value = "anon4821"
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf("anon4821"), nicknames())
@@ -296,11 +310,13 @@ class ChatBridgeTest {
     @Test
     fun `requestSnapshot pushes the current nickname`() {
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
         sink.events.clear()
         nickname.value = "anon4821"
 
         bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf("anon4821"), nicknames())
@@ -352,6 +368,7 @@ class ChatBridgeTest {
         peerNicknames.value = mapOf(ALICE to "alice")
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(1 to listOf(ALICE)), peerSnapshots())
@@ -360,11 +377,13 @@ class ChatBridgeTest {
     @Test
     fun `requestSnapshot pushes the current peer list`() {
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
         sink.events.clear()
         connectedPeers.value = listOf(ALICE)
 
         bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(1 to listOf(ALICE)), peerSnapshots())
@@ -440,6 +459,7 @@ class ChatBridgeTest {
         connectedPeers.value = listOf(ALICE, BOB)
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(
@@ -454,6 +474,7 @@ class ChatBridgeTest {
         connectedPeers.value = listOf(ALICE)
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals("routed", peerRows().single().single()["connection"])
@@ -624,6 +645,7 @@ class ChatBridgeTest {
         mentionSuggestions.value = listOf("alice")
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         val event = suggestionEvents().single()
@@ -641,6 +663,7 @@ class ChatBridgeTest {
         mentionSuggestions.value = listOf("alice")
 
         bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf("alice"), suggestionEvents().single()["mentions"])
@@ -824,6 +847,7 @@ class ChatBridgeTest {
         privateChats.value = mapOf(ALICE to listOf(message("P1", senderPeerID = ALICE)))
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(ALICE), focusPeerIDs())
@@ -833,6 +857,7 @@ class ChatBridgeTest {
     @Test
     fun `no focus is pushed as a null peer`() {
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(null), focusPeerIDs())
@@ -879,6 +904,7 @@ class ChatBridgeTest {
         selectedPrivateChatPeer.value = CONTACT
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         val focus = focusEvents().single()
@@ -1011,6 +1037,7 @@ class ChatBridgeTest {
         conversations.value = listOf(summary(CONTACT, unreadCount = 2, connectedPeerID = ALICE))
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(
@@ -1153,6 +1180,7 @@ class ChatBridgeTest {
         pendingNavigation.offer(ChatNavigation.PublicChat)
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(mapOf("target" to "publicChat")), pendingNavigations())
@@ -1181,6 +1209,7 @@ class ChatBridgeTest {
         pendingNavigation.offer(ChatNavigation.PublicChat)
 
         bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(mapOf("target" to "publicChat")), pendingNavigations())
@@ -1261,6 +1290,7 @@ class ChatBridgeTest {
         selectedPrivateChatPeer.value = ALICE
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(true to true), focusEvents().map { it["isFavorite"] to it["theyFavoritedUs"] })
@@ -1275,6 +1305,7 @@ class ChatBridgeTest {
         whenever(viewModel.getMeshPeerInfo(ALICE)).thenReturn(peerInfo(ALICE, isDirect = true, noiseKeyHex = NOISE_ALICE))
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         // Alice's record is her connected row; Dora is offline, keyed by her Noise key.
@@ -1292,6 +1323,7 @@ class ChatBridgeTest {
         records.cachedNoiseKeys[ALICE] = NOISE_ALICE
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(listOf(ALICE)), peerRows().map { rows -> rows.map { it["peerID"] } })
@@ -1332,6 +1364,7 @@ class ChatBridgeTest {
         )
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(listOf("A1")), publicTimelineIds())
@@ -1346,6 +1379,7 @@ class ChatBridgeTest {
         conversations.value = listOf(summary(MALLORY_CONTACT, unreadCount = 3, connectedPeerID = MALLORY))
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(false to emptyMap<String, Int>()), unreadEvents().map { it["hasUnread"] to it["conversations"] })
@@ -1395,12 +1429,130 @@ class ChatBridgeTest {
         privateChats.value = mapOf(CONTACT to listOf(message("PA", senderPeerID = ALICE)))
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(emptyList<String>(), records.blockLookups)
     }
 
     // --- snapshot projection -----------------------------------------------------------------
+
+    @Test
+    fun `snapshots read upstream's stored records only off the bridge's thread`() {
+        // Every stored record a snapshot reads: favourites (offline rows, star fallbacks), the
+        // cached Noise and Nostr keys of connected peers, the block list and block decisions.
+        connectedPeers.value = listOf(ALICE)
+        records.favorites += favorite(NOISE_DORA, "dora")
+        records.blocked += MALLORY
+        messages.value = listOf(message("M1", senderPeerID = MALLORY))
+        // No fingerprint known for the chat: its star asks upstream by ID.
+        selectedPrivateChatPeer.value = BOB
+        val upstreamLookups = mutableListOf<Boolean>()
+        whenever(viewModel.getMeshPeerInfo(any())).thenAnswer {
+            upstreamLookups += snapshotWork.running
+            null
+        }
+        whenever(viewModel.isFavorite(any())).thenAnswer {
+            upstreamLookups += snapshotWork.running
+            false
+        }
+
+        // Subscribing only asks for the snapshots; nothing is read before snapshot work runs.
+        events.onListen(null, sink)
+        assertEquals(emptyList<String>(), records.reads)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+        // The private chat answers carry a focus snapshot too.
+        bridge.handle(startPrivateChatCall(BOB), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertTrue(sink.events.isNotEmpty())
+        assertEquals(
+            setOf("ourFavorites", "theyFavoritedUs", "nostrPubkeyHex", "cachedNoiseKeyHex", "hasBlockedPeers", "isPeerBlocked"),
+            records.reads.toSet()
+        )
+        assertEquals(emptyList<String>(), records.readsOutsideSnapshotWork)
+        assertTrue(upstreamLookups.isNotEmpty())
+        assertTrue("upstream's lookups run as snapshot work too", upstreamLookups.all { it })
+    }
+
+    @Test
+    fun `a slow snapshot is never overtaken by a newer one of the same projection`() {
+        // The bridge on virtual time; every snapshot built on a thread of its own, so builds really
+        // run side by side and only the projection's own pipeline can keep its snapshots in order.
+        val bridgeDispatcher = StandardTestDispatcher()
+        val builders = ThreadPerTask()
+        val older = listOf(ALICE)
+        val newer = listOf(ALICE, BOB)
+        val stalled = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stalledThread = AtomicReference<Thread>()
+        // The first peer snapshot stalls on the favourites store, after it read the peer set.
+        val slowRecords = object : ChatRecords {
+            override fun ourFavorites(): List<ChatFavorites.Favorite> {
+                if (stalledThread.compareAndSet(null, Thread.currentThread())) {
+                    stalled.countDown()
+                    release.await(5, TimeUnit.SECONDS)
+                }
+                return emptyList()
+            }
+            override fun theyFavoritedUs(peerID: String) = false
+            override fun nostrPubkeyHex(peerID: String): String? = null
+            override fun cachedNoiseKeyHex(peerID: String): String? = null
+            override fun addFavoritesListener(onChange: () -> Unit): () -> Unit = {}
+            override fun hasBlockedPeers() = false
+            override fun isPeerBlocked(peerID: String) = false
+        }
+        val delivered = CopyOnWriteArrayList<List<Any?>>()
+        val peerSink = object : EventChannel.EventSink {
+            override fun success(event: Any?) {
+                val map = event as Map<*, *>
+                if (map["type"] == ChatSerialization.EVENT_PEERS) {
+                    delivered += (map["peers"] as List<*>).map { (it as Map<*, *>)["peerID"] }
+                }
+            }
+            override fun error(errorCode: String?, errorMessage: String?, errorDetails: Any?) = Unit
+            override fun endOfStream() = Unit
+        }
+        val threadedEvents = BridgeEventEmitter(postToMain = { it.run() }, logDropped = {})
+        connectedPeers.value = older
+        val threaded = ChatBridge(
+            viewModel,
+            threadedEvents,
+            CoroutineScope(bridgeDispatcher + Job()),
+            builders.asCoroutineDispatcher(),
+            wifiAwarePeers,
+            PendingChatNavigation(),
+            slowRecords
+        ) { id -> ChatPrivateChat.Contact(id, meshPeerID = null, displayName = null, favoriteNickname = null) }
+        /** Lets every build but the stalled one finish, and the bridge emit what they built. */
+        fun settle() {
+            repeat(5) {
+                builders.joinAllBut(stalledThread.get())
+                bridgeDispatcher.scheduler.runCurrent()
+            }
+        }
+        try {
+            threadedEvents.onListen(null, peerSink)
+            bridgeDispatcher.scheduler.runCurrent()
+            assertTrue("the first peer snapshot started", stalled.await(5, TimeUnit.SECONDS))
+            settle()
+
+            // A peer joins, and Dart asks again while the older snapshot is still being built.
+            connectedPeers.value = newer
+            threaded.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+            settle()
+            release.countDown()
+            stalledThread.get().join(5_000)
+            settle()
+
+            assertEquals(listOf(older, newer), delivered)
+        } finally {
+            release.countDown()
+            threaded.destroy()
+        }
+    }
 
     @Test
     fun `a timeline upstream cleared is pushed as empty`() {
@@ -1418,12 +1570,14 @@ class ChatBridgeTest {
     @Test
     fun `requestSnapshot pushes the current public timeline`() {
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
         sink.events.clear()
         messages.value = listOf(message("A", sender = "alice"))
         val result = RecordingResult()
 
         val claimed = bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), result)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertTrue(claimed)
@@ -1436,6 +1590,7 @@ class ChatBridgeTest {
         messages.value = listOf(message("A"), message("B"))
 
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
 
         assertEquals(listOf(listOf("A", "B")), publicTimelineIds())
@@ -1444,6 +1599,7 @@ class ChatBridgeTest {
     @Test
     fun `timeline changes are pushed once, after the debounce`() {
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
         sink.events.clear()
 
@@ -1489,6 +1645,7 @@ class ChatBridgeTest {
     @Test
     fun `nothing is projected after destroy`() {
         events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
         poster.runAll()
         sink.events.clear()
 
@@ -1705,32 +1862,83 @@ class ChatBridgeTest {
         lastSeen = 0L
     )
 
-    /** In-memory stand-in for upstream's favourites store and block list. */
-    private class FakeRecords : ChatRecords {
+    /**
+     * In-memory stand-in for upstream's favourites store and block list. It notes every read
+     * (upstream's may touch disk and the keystore) and which of them did not run as snapshot work.
+     */
+    private class FakeRecords(private val isSnapshotWork: () -> Boolean = { true }) : ChatRecords {
         val favorites = mutableListOf<ChatFavorites.Favorite>()
         val theyFavoritedUsIDs = mutableSetOf<String>()
         val nostrKeys = mutableMapOf<String, String>()
         val cachedNoiseKeys = mutableMapOf<String, String>()
         val blocked = mutableSetOf<String>()
         val blockLookups = mutableListOf<String>()
+        val reads = mutableListOf<String>()
+        val readsOutsideSnapshotWork = mutableListOf<String>()
         private var listener: (() -> Unit)? = null
 
         val hasListener: Boolean get() = listener != null
 
         fun notifyFavoritesChanged() = listener?.invoke()
 
-        override fun ourFavorites() = favorites.toList()
-        override fun theyFavoritedUs(peerID: String) = peerID in theyFavoritedUsIDs
-        override fun nostrPubkeyHex(peerID: String) = nostrKeys[peerID]
-        override fun cachedNoiseKeyHex(peerID: String) = cachedNoiseKeys[peerID]
+        private fun <T> read(what: String, value: () -> T): T {
+            reads += what
+            if (!isSnapshotWork()) readsOutsideSnapshotWork += what
+            return value()
+        }
+
+        override fun ourFavorites() = read("ourFavorites") { favorites.toList() }
+        override fun theyFavoritedUs(peerID: String) = read("theyFavoritedUs") { peerID in theyFavoritedUsIDs }
+        override fun nostrPubkeyHex(peerID: String) = read("nostrPubkeyHex") { nostrKeys[peerID] }
+        override fun cachedNoiseKeyHex(peerID: String) = read("cachedNoiseKeyHex") { cachedNoiseKeys[peerID] }
+
+        // Registering a listener reads nothing; the bridge does it on its own thread.
         override fun addFavoritesListener(onChange: () -> Unit): () -> Unit {
             listener = onChange
             return { listener = null }
         }
-        override fun hasBlockedPeers() = blocked.isNotEmpty()
-        override fun isPeerBlocked(peerID: String): Boolean {
+        override fun hasBlockedPeers() = read("hasBlockedPeers") { blocked.isNotEmpty() }
+        override fun isPeerBlocked(peerID: String): Boolean = read("isPeerBlocked") {
             blockLookups += peerID
-            return peerID in blocked
+            peerID in blocked
+        }
+    }
+
+    /** Runs every task on a new thread of its own, and can wait for them to finish. */
+    private class ThreadPerTask : Executor {
+        private val threads = CopyOnWriteArrayList<Thread>()
+
+        override fun execute(command: Runnable) {
+            Thread(command, "snapshot-builder-${threads.size}").also { threads += it }.start()
+        }
+
+        /** Waits (bounded) for every thread started so far, except [running], to end. */
+        fun joinAllBut(running: Thread?) {
+            threads.filter { it !== running }.forEach { thread ->
+                thread.join(5_000)
+                assertFalse("${thread.name} did not finish", thread.isAlive)
+            }
+        }
+    }
+
+    /**
+     * Runs the bridge's snapshot work on [delegate] (so it stays on the test's virtual time) and
+     * tells whether the code running now is that work.
+     */
+    private class SnapshotWorkDispatcher(private val delegate: CoroutineDispatcher) : CoroutineDispatcher() {
+        @Volatile
+        var running = false
+            private set
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            delegate.dispatch(context, Runnable {
+                running = true
+                try {
+                    block.run()
+                } finally {
+                    running = false
+                }
+            })
         }
     }
 

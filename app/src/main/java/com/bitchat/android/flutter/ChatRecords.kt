@@ -13,6 +13,11 @@ import com.bitchat.android.ui.DataManager
  * Upstream records the chat bridge reads on demand, outside `ChatViewModel`'s flows (#58): the
  * favourites store and the block list. Read-only — every change goes through upstream's own
  * methods (`toggleFavorite`, `/block`, `/unblock`).
+ *
+ * Reads may touch disk and the keystore (the encrypted identity store, the block list in
+ * preferences), so [ChatBridge] makes them only while building a snapshot on its snapshot
+ * dispatcher — never on the main thread — and one at a time. [addFavoritesListener] is the
+ * exception: it only registers a listener.
  */
 interface ChatRecords {
 
@@ -41,6 +46,10 @@ interface ChatRecords {
 /**
  * [ChatRecords] read from the live upstream objects. Every read is defensive: a record that cannot
  * be read counts as nothing known (no favourite, not blocked), as the native UI treats it.
+ *
+ * Not thread-safe (its [DataManager] reloads the block list into a plain set): call it from one
+ * thread at a time, as [ChatBridge]'s snapshot dispatcher does. Constructing it reads nothing; the
+ * identity store and preferences are opened on the first read.
  */
 class UpstreamChatRecords(
     private val chatViewModel: ChatViewModel,

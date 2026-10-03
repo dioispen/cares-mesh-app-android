@@ -7,21 +7,26 @@ import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Chat half of the Flutter bridge (#49).
@@ -37,6 +42,14 @@ import kotlinx.coroutines.launch
  * snapshots back — they are pushed when Dart (re)subscribes to the event channel, and on demand through
  * [METHOD_REQUEST_SNAPSHOT], which a Dart listener that joined the shared broadcast stream late
  * (and so never triggered `onListen`) uses to catch up.
+ *
+ * Snapshots are built on [snapshotDispatcher], never on the main thread: building one reads
+ * upstream's stored records — the identity store's cached Noise keys and the block list in
+ * preferences ([ChatRecords]), and the identity store again inside upstream's own lookups
+ * (`ContactDirectory`, `PrivateChatManager.isPeerBlocked`) — which touch disk and the keystore.
+ * Only reads happen there; every call that changes upstream state stays on [scope]'s thread. Each
+ * projection builds and emits its snapshots one at a time, in the order they were asked for, so an
+ * older snapshot can never arrive after a newer one (see [Projection]).
  *
  * Methods are named `chat_<verb><Object>`; events `chat_<snake_case>`.
  *
@@ -71,6 +84,11 @@ class ChatBridge(
     private val chatViewModel: ChatViewModel,
     private val events: BridgeEventEmitter,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    /**
+     * Where snapshots are built (see the class doc). One at a time: [UpstreamChatRecords] reads
+     * through objects of its own that are not thread-safe.
+     */
+    private val snapshotDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
     /** Peers linked over Wi-Fi Aware (peer ID → address), as the native peer list reads them. */
     private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers,
     /** The Activity's notification tap waiting for Dart (#57); it outlives this engine. */
@@ -82,14 +100,28 @@ class ChatBridge(
 ) : BridgeMethodHandler {
 
     /**
-     * One `chat_*` snapshot event: re-pushed [debounceMs] after [changes] last emitted, built from
-     * current state.
+     * One `chat_*` snapshot event: re-pushed [debounceMs] after [changes] last emitted, and at once
+     * when a push is [requested]; [snapshot] builds it from current state.
+     *
+     * A single coroutine per projection takes both triggers in turn: it builds a snapshot, emits
+     * it, and only then takes the next trigger (triggers that pile up meanwhile fold into one —
+     * every snapshot reads the latest state anyway). So snapshots of one projection are emitted in
+     * the order they were built, and each is built after the one before was emitted.
      */
     private class Projection(
         val changes: Flow<*>,
         val debounceMs: Long = SNAPSHOT_DEBOUNCE_MS,
         val snapshot: () -> Map<String, Any?>
-    )
+    ) {
+        private val pushRequests = Channel<Unit>(Channel.CONFLATED)
+
+        /** Asks for a snapshot now, outside the debounce. Safe from any thread. */
+        fun requestPush() {
+            pushRequests.trySend(Unit)
+        }
+
+        val triggers: Flow<Any?> get() = merge(changes.debounce(debounceMs), pushRequests.receiveAsFlow()).conflate()
+    }
 
     /** The latest private chat start or end; each one waits for the one before (see [endPrivateChat]). */
     private var privateChatAction: Job? = null
@@ -178,7 +210,7 @@ class ChatBridge(
                 chatViewModel.peerFingerprints,
                 favoritesChanged
             ),
-            snapshot = { ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()) }
+            snapshot = ::privateChatFocusEvent
         ),
         // Nickname is part of the key for the same reason as the public timeline's. Delivery
         // status changes arrive here too: upstream replaces the message with a copy carrying the
@@ -215,9 +247,7 @@ class ChatBridge(
     init {
         projections.forEach { projection ->
             scope.launch {
-                projection.changes
-                    .debounce(projection.debounceMs)
-                    .collect { events.emit(projection.snapshot()) }
+                projection.triggers.collect { events.emit(buildSnapshot(projection.snapshot)) }
             }
         }
         events.addOnListenCallback(::pushSnapshots)
@@ -338,7 +368,7 @@ class ChatBridge(
                 result.error("PRIVATE_CHAT_FAILED", e.message, null)
                 return@launch
             }
-            result.success(ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()))
+            result.success(buildSnapshot(::privateChatFocusEvent))
         }
     }
 
@@ -356,7 +386,7 @@ class ChatBridge(
         privateChatAction = scope.launch {
             previous?.join()
             chatViewModel.endPrivateChat()
-            result.success(ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus()))
+            result.success(buildSnapshot(::privateChatFocusEvent))
         }
     }
 
@@ -462,10 +492,17 @@ class ChatBridge(
         result.success(chatViewModel.selectMentionSuggestion(nickname, currentText))
     }
 
+    /** Every projection pushes its snapshot as soon as it is built (Dart subscribed, or asked). */
     private fun pushSnapshots() {
         if (!scope.isActive) return
-        projections.forEach { events.emit(it.snapshot()) }
+        projections.forEach(Projection::requestPush)
     }
+
+    /** Runs [build] on [snapshotDispatcher] (see the class doc); the caller resumes on its own thread. */
+    private suspend fun <T> buildSnapshot(build: () -> T): T = withContext(snapshotDispatcher) { build() }
+
+    private fun privateChatFocusEvent(): Map<String, Any?> =
+        ChatSerialization.selectedPrivatePeerEvent(currentPrivateChatFocus())
 
     private fun currentSelf() = ChatSelf(
         peerID = chatViewModel.myPeerID,
