@@ -89,7 +89,8 @@ class ChatBridgeTest {
         whenever(vm.conversationDraft(anyOrNull())).thenAnswer { drafts[it.arguments[0]] ?: "" }
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
-    private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers) { id ->
+    private val pendingNavigation = PendingChatNavigation()
+    private val bridge = ChatBridge(viewModel, events, scope, wifiAwarePeers, pendingNavigation) { id ->
         contacts[id] ?: ChatPrivateChat.Contact(id, meshPeerID = null, displayName = null, favoriteNickname = null)
     }
 
@@ -1104,6 +1105,76 @@ class ChatBridgeTest {
         assertEquals(listOf("success:null"), result.calls)
     }
 
+    // --- notification taps (#57) --------------------------------------------------------------
+
+    @Test
+    fun `takePendingNavigation hands Dart the tapped notification's destination once`() {
+        pendingNavigation.offer(ChatNavigation.PrivateChat(ALICE, "alice"))
+        val first = RecordingResult()
+        val second = RecordingResult()
+
+        val claimed = bridge.handle(MethodCall(ChatBridge.METHOD_TAKE_PENDING_NAVIGATION, null), first)
+        bridge.handle(MethodCall(ChatBridge.METHOD_TAKE_PENDING_NAVIGATION, null), second)
+
+        assertTrue(claimed)
+        assertEquals(
+            listOf(mapOf("target" to "privateChat", "peerID" to ALICE, "senderNickname" to "alice")),
+            first.values
+        )
+        assertEquals(listOf("success:null"), second.calls)
+        assertEquals(null, pendingNavigation.pending.value)
+    }
+
+    @Test
+    fun `taking the destination opens nothing upstream by itself`() {
+        // Dart opens its private chat screen, which starts the chat like any other.
+        pendingNavigation.offer(ChatNavigation.PrivateChat(ALICE, "alice"))
+
+        bridge.handle(MethodCall(ChatBridge.METHOD_TAKE_PENDING_NAVIGATION, null), RecordingResult())
+
+        verifyBlocking(viewModel, never()) { startPrivateChat(any()) }
+        verify(viewModel, never()).endPrivateChat()
+    }
+
+    @Test
+    fun `Dart subscribing learns of a tap that came before the engine`() {
+        // Cold start: the Activity reads the notification before Dart runs.
+        pendingNavigation.offer(ChatNavigation.PublicChat)
+
+        events.onListen(null, sink)
+        poster.runAll()
+
+        assertEquals(listOf(mapOf("target" to "publicChat")), pendingNavigations())
+    }
+
+    @Test
+    fun `a tap while running is pushed after the debounce, and its taking too`() {
+        settleAndClear()
+
+        pendingNavigation.offer(ChatNavigation.PrivateChat(ALICE, null))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+        bridge.handle(MethodCall(ChatBridge.METHOD_TAKE_PENDING_NAVIGATION, null), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(
+            listOf(mapOf("target" to "privateChat", "peerID" to ALICE, "senderNickname" to null), null),
+            pendingNavigations()
+        )
+    }
+
+    @Test
+    fun `requestSnapshot pushes the pending destination`() {
+        settleAndClear()
+        pendingNavigation.offer(ChatNavigation.PublicChat)
+
+        bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
+        poster.runAll()
+
+        assertEquals(listOf(mapOf("target" to "publicChat")), pendingNavigations())
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
 
     @Test
@@ -1370,6 +1441,13 @@ class ChatBridgeTest {
         .map { event ->
             (event["chats"] as Map<String, List<Map<String, Any?>>>).mapValues { (_, list) -> list.map { it["id"] } }
         }
+
+    /** The `navigation` of every pushed pending navigation snapshot. */
+    @Suppress("UNCHECKED_CAST")
+    private fun pendingNavigations(): List<Any?> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_PENDING_NAVIGATION }
+        .map { it["navigation"] }
 
     /** Subscribes, lets the initial projections run, and forgets what they pushed. */
     private fun settleAndClear() {

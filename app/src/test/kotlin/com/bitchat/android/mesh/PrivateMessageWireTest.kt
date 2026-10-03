@@ -1,8 +1,5 @@
 package com.bitchat.android.mesh
 
-import android.content.Context
-import android.content.ContextWrapper
-import android.content.res.Resources
 import android.os.Build
 import com.bitchat.android.model.NoisePayload
 import com.bitchat.android.model.NoisePayloadType
@@ -16,6 +13,7 @@ import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.service.TransportBridgeService
 import com.bitchat.android.testing.FakeAndroidKeyStore
+import com.bitchat.android.testing.ResourcelessContext
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -158,22 +156,6 @@ class PrivateMessageWireTest {
         } finally {
             dh.destroy()
         }
-    }
-
-    /**
-     * Unit tests run without the app's merged resources, but the mesh service builds its
-     * notification channels (named from string resources) as it is constructed. Any string will do.
-     */
-    private class ResourcelessContext(base: Context) : ContextWrapper(base) {
-        @Suppress("DEPRECATION")
-        private val strings = object : Resources(base.assets, base.resources.displayMetrics, base.resources.configuration) {
-            override fun getText(id: Int): CharSequence = "string-$id"
-            override fun getString(id: Int): String = "string-$id"
-            override fun getString(id: Int, vararg formatArgs: Any?): String = "string-$id"
-        }
-
-        override fun getApplicationContext(): Context = this
-        override fun getResources(): Resources = strings
     }
 
     private companion object {

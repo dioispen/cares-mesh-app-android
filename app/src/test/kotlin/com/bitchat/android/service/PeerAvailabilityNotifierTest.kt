@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.bitchat.android.flutter.FlutterChatActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
@@ -180,6 +181,26 @@ class PeerAvailabilityNotifierTest {
         assertTrue(notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
         assertNotNull(
             systemNotificationManager.getNotificationChannel(PeerAvailabilityNotifier.CHANNEL_ID)
+        )
+    }
+
+    @Test
+    fun `tapping the availability notification opens the Flutter entry`() = runTest {
+        // Not upstream's Compose MainActivity (#57): the Flutter entry is the app's UI.
+        val notifier = createNotifier(scope = this)
+
+        notifier.onPeerCountChanged(1, isAppInBackground = true)
+        advanceTimeBy(PeerAvailabilityNotifier.AGGREGATION_WINDOW_MS)
+        runCurrent()
+
+        val notification =
+            shadowOf(systemNotificationManager).getNotification(
+                PeerAvailabilityNotifier.NOTIFICATION_ID
+            )
+        assertNotNull(notification)
+        assertEquals(
+            FlutterChatActivity::class.java.name,
+            shadowOf(notification.contentIntent).savedIntent.component?.className
         )
     }
 

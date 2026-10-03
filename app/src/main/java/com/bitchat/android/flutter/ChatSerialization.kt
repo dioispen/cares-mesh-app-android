@@ -41,6 +41,9 @@ object ChatSerialization {
     /** Snapshot of upstream's unread private messages (see [ChatUnread]). */
     const val EVENT_UNREAD = "chat_unread"
 
+    /** Snapshot of the tapped notification Dart has yet to act on (see [PendingChatNavigation]). */
+    const val EVENT_PENDING_NAVIGATION = "chat_pending_navigation"
+
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
     // markers are mirrored here; HealthReportChatTimelineTest breaks if the producer drifts.
@@ -216,6 +219,31 @@ object ChatSerialization {
         "type" to EVENT_UNREAD,
         "hasUnread" to unreadConversationIDs.isNotEmpty(),
         "conversations" to conversations.associate { it.conversationID to it.unreadCount }
+    )
+
+    /**
+     * Where a tapped notification asks to go: `{target: "privateChat", peerID, senderNickname}`
+     * (`senderNickname` may be null) or `{target: "publicChat"}`; null for nowhere. Answers
+     * `chat_takePendingNavigation`. Dart mirrors it in `flutter_ui/lib/models/chat_navigation.dart`.
+     */
+    fun navigation(navigation: ChatNavigation?): Map<String, Any?>? = when (navigation) {
+        null -> null
+        is ChatNavigation.PrivateChat -> mapOf(
+            "target" to "privateChat",
+            "peerID" to navigation.peerID,
+            "senderNickname" to navigation.senderNickname
+        )
+        ChatNavigation.PublicChat -> mapOf("target" to "publicChat")
+    }
+
+    /**
+     * `{type: "chat_pending_navigation", navigation}` — the tapped notification waiting for Dart
+     * ([navigation] map, null when none). It only tells Dart there is one: Dart navigates on what
+     * `chat_takePendingNavigation` answers, so each tap is acted on once.
+     */
+    fun pendingNavigationEvent(navigation: ChatNavigation?): Map<String, Any?> = mapOf(
+        "type" to EVENT_PENDING_NAVIGATION,
+        "navigation" to navigation(navigation)
     )
 
     /** True for upstream's own notices (command output, debug lines), drawn as system lines. */

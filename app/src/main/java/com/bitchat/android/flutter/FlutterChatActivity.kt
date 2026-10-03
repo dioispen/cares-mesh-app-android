@@ -1,5 +1,6 @@
 package com.bitchat.android.flutter
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.viewModels
 import androidx.lifecycle.Lifecycle
@@ -27,6 +28,13 @@ import kotlinx.coroutines.launch
  * 這裡只「掛」delegate，不啟動 mesh、不要求權限：mesh 由 Flutter 呼叫 `startMesh`
  * （或 `MeshForegroundService`）啟動，權限由 Flutter 的 setup 流程經 `requestPermissions` 要求。
  * mesh 尚未啟動時掛上 delegate 只是不會收到回呼，沒有副作用。
+ *
+ * 通知點擊（#57）：上游的聊天通知點下去都開這個 Activity（manifest `singleTop`、通知 intent 帶
+ * `SINGLE_TOP | CLEAR_TOP`）。App 還在時由 [onNewIntent] 收到，App 已關閉（只剩前景服務）時由
+ * [onCreate] 冷啟動收到。兩者都照 `MainActivity.handleNotificationIntent` 讀 intent extras
+ * （[ChatNavigation.fromNotification]）並清掉該對話的通知，但不直接開畫面：只有 Dart 知道何時可以
+ * 導航（走完自己的 setup 與登入之後），所以把目的地交給 [PendingChatNavigation]，由 Dart 以
+ * `chat_takePendingNavigation` 取走。
  */
 class FlutterChatActivity : FlutterFragmentActivity() {
 
@@ -42,6 +50,9 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             }
         }
     }
+
+    /** The notification tap Dart has yet to act on; kept across Activity recreation. */
+    private val pendingNavigation: PendingChatNavigation by viewModels()
 
     private var channels: BitchatFlutterChannels? = null
     private var chatBridge: ChatBridge? = null
@@ -68,6 +79,28 @@ class FlutterChatActivity : FlutterFragmentActivity() {
                 }
             }
         }
+
+        // A notification tap that started the Activity (cold start). Not when it is recreated:
+        // its intent is the one it was first started with, and that tap is already pending.
+        if (savedInstanceState == null) receiveNotificationTap(intent)
+    }
+
+    /** A notification tapped while the Activity exists (singleTop / CLEAR_TOP bring it back). */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveNotificationTap(intent)
+    }
+
+    /**
+     * What `MainActivity.handleNotificationIntent` does, minus opening the screen: clear that
+     * chat's notifications, then leave the destination for Dart. Any other intent (launcher, the
+     * mesh service's notification) only brings the app to the front.
+     */
+    private fun receiveNotificationTap(intent: Intent) {
+        val navigation = ChatNavigation.fromNotification(intent) ?: return
+        navigation.clearNotifications(chatViewModel)
+        pendingNavigation.offer(navigation)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -76,7 +109,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         // One emitter per engine, shared by both bridges; BitchatFlutterChannels registers the
         // only method/stream handlers and hands chat methods on to ChatBridge.
         val events = BridgeEventEmitter()
-        val chat = ChatBridge(chatViewModel, events)
+        val chat = ChatBridge(chatViewModel, events, pendingNavigation = pendingNavigation)
         chatBridge = chat
         // 傳遞 activity (this) 給 channels，以便支援權限請求
         channels = BitchatFlutterChannels(

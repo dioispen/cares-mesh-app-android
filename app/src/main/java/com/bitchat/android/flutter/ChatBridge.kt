@@ -43,6 +43,10 @@ import kotlinx.coroutines.launch
  * the bridge adds is on sending: text is handed over only when the composer it came from is the one
  * upstream would route it to (see [sendMessage]), because Dart sees the focus a debounce late.
  *
+ * Notification taps (#57) reach Dart the same way: the Activity leaves the tapped notification's
+ * destination in [PendingChatNavigation], projected as `chat_pending_navigation`; Dart takes it with
+ * [METHOD_TAKE_PENDING_NAVIGATION] once it can navigate and opens its screens as usual.
+ *
  * It owns no channel. [BitchatFlutterChannels] registers the one method handler and the one
  * stream handler, and offers this bridge every method it does not recognise
  * (see [BridgeMethodDispatcher]).
@@ -58,6 +62,8 @@ class ChatBridge(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     /** Peers linked over Wi-Fi Aware (peer ID → address), as the native peer list reads them. */
     private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers,
+    /** The Activity's notification tap waiting for Dart (#57); it outlives this engine. */
+    private val pendingNavigation: PendingChatNavigation = PendingChatNavigation(),
     /** Upstream's contact records for a private chat ID (`ContactDirectory`, favourites). */
     private val privateChatContact: (String) -> ChatPrivateChat.Contact = ChatPrivateChat::upstreamContact
 ) : BridgeMethodHandler {
@@ -152,6 +158,12 @@ class ChatBridge(
                     ChatUnread.conversations(chatViewModel.conversations.value)
                 )
             }
+        ),
+        // A tapped notification Dart has yet to act on (#57). On a cold start it is there before
+        // Dart runs; Dart's subscription (or chat_requestSnapshot) picks it up.
+        Projection(
+            changes = pendingNavigation.pending,
+            snapshot = { ChatSerialization.pendingNavigationEvent(pendingNavigation.pending.value) }
         )
     )
 
@@ -181,6 +193,8 @@ class ChatBridge(
             METHOD_START_PRIVATE_CHAT -> startPrivateChat(call, result)
             METHOD_END_PRIVATE_CHAT -> endPrivateChat(result)
             METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT -> openLatestUnreadPrivateChat(result)
+            METHOD_TAKE_PENDING_NAVIGATION ->
+                result.success(ChatSerialization.navigation(pendingNavigation.take()))
             METHOD_REQUEST_SNAPSHOT -> {
                 pushSnapshots()
                 result.success(null)
@@ -458,6 +472,13 @@ class ChatBridge(
 
         /** The native header's unread envelope: answers the conversation to open, or null. */
         const val METHOD_OPEN_LATEST_UNREAD_PRIVATE_CHAT = "chat_openLatestUnreadPrivateChat"
+
+        /**
+         * A tapped notification's destination (`ChatSerialization.navigation`), now no longer
+         * pending; null when there is none. Dart calls it once it can navigate (#57). Opens nothing
+         * upstream: Dart's private chat screen starts the chat as it always does.
+         */
+        const val METHOD_TAKE_PENDING_NAVIGATION = "chat_takePendingNavigation"
 
         private const val TAG = "ChatBridge"
 
