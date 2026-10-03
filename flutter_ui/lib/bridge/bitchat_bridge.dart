@@ -24,6 +24,10 @@ abstract final class ChatErrors {
   /// [ChatMethods.sendMessage] 收到頻道指令（`/j`、`/join`）：頻道功能尚未支援（#49 P3），
   /// 原生沒有送出、也沒有加入頻道。
   static const channelsUnsupported = 'CHANNELS_UNSUPPORTED';
+
+  /// [ChatMethods.sendMessage] 的 `privateChat` 不是原生目前選定的對話（同一個人的不同 ID 算同一個
+  /// 對話）：原生沒有送出。Dart 的選定私訊隨下一份快照跟上，再送一次即可。
+  static const privateChatChanged = 'PRIVATE_CHAT_CHANGED';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -142,10 +146,12 @@ class BitchatBridge {
   /// 決定，Dart 端沒有 peerId／isPublic 之類指定收件者的參數（#9）。
   ///
   /// [privateChat] 只標明文字是在哪個輸入框打的：公開聊天室為 null，私訊畫面為
-  /// [ChatEvents.selectedPrivatePeer] 的 `peerID`。原生端只在它的選定對象與此相同時才送出，
-  /// 否則回傳 false（沒送出），避免公開訊息被送成私訊、或私訊被公開廣播。空白文字不會送出。
+  /// [ChatEvents.selectedPrivatePeer] 的 `peerID`。原生端只在它的選定對話與此相同（同一個人的
+  /// mesh peer ID、Noise 公鑰、`contact_…` 算同一個）時才送出，否則以錯誤碼
+  /// [ChatErrors.privateChatChanged] 拒絕（沒送出），避免公開訊息被送成私訊、或私訊被公開廣播。
   /// 頻道指令（`/j`、`/join`）不交給原生核心，以錯誤碼 [ChatErrors.channelsUnsupported] 拒絕。
-  /// 回傳原生核心是否接受；bridge 錯誤（例如 [PlatformException]）會往上拋。
+  /// 空白文字不會送出。回傳原生核心是否接受（false 是原生核心自己拒絕，例如對方已被封鎖）；
+  /// bridge 錯誤（例如 [PlatformException]）會往上拋。
   static Future<bool> sendMessage(String text, {String? privateChat}) async {
     final bool? accepted = await _method.invokeMethod<bool>(
       ChatMethods.sendMessage,

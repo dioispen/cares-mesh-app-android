@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/bridge/bitchat_bridge.dart' show ChatErrors;
 import 'package:flutter_ui/screens/private_chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/widgets/chat_message_tile.dart' show ChatPalette;
@@ -237,8 +238,8 @@ void main() {
     expect(composer(tester).controller!.text, isEmpty);
   });
 
-  testWidgets('text the native side refuses stays in the composer', (tester) async {
-    // e.g. the native side has just left this chat: sending would have gone public.
+  testWidgets('text the native side refuses stays in the composer, and says it was not sent', (tester) async {
+    // e.g. the peer is blocked: the native core itself declines the send.
     send = (text, privateChat) async => false;
     await openPrivateChat(tester);
 
@@ -247,6 +248,21 @@ void main() {
     await tester.pump();
 
     expect(composer(tester).controller!.text, 'see you there');
+    expect(find.text('訊息沒有送出'), findsOneWidget);
+  });
+
+  testWidgets('text for a chat the native side has just changed asks to send again, and stays', (tester) async {
+    // e.g. the native side has just left this chat: sending would have gone public.
+    send = (text, privateChat) async => throw PlatformException(code: ChatErrors.privateChatChanged);
+    await openPrivateChat(tester);
+
+    await tester.enterText(find.byType(TextField), 'see you there');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+
+    expect(composer(tester).controller!.text, 'see you there');
+    expect(find.text('對話狀態更新中，請再送一次'), findsOneWidget);
+    expect(find.text('訊息送出失敗，請稍後再試'), findsNothing);
   });
 
   testWidgets('a failed send keeps the text and tells the user', (tester) async {

@@ -140,8 +140,9 @@ class ChatService {
   /// 把使用者輸入的文字交給原生聊天核心，回傳是否被接受（接受後才清空輸入框）。
   ///
   /// [privateChat] 標明是哪個輸入框：公開聊天室不傳，私訊畫面傳它的 [PrivateChatFocus.peerID]。
-  /// 送往哪裡仍由原生決定；原生的選定對象與 [privateChat] 不同時不送出、回傳 false
-  /// （見 `BitchatBridge.sendMessage`）。bridge 錯誤會往上拋，由畫面告知使用者。
+  /// 送往哪裡仍由原生決定；原生的選定對話與 [privateChat] 不同時不送出，以
+  /// [ChatErrors.privateChatChanged] 拒絕（見 `BitchatBridge.sendMessage`）。bridge 錯誤與拒絕都會
+  /// 往上拋，由畫面告知使用者。
   Future<bool> sendMessage(String text, {String? privateChat}) => _send(text, privateChat);
 
   /// 開啟私訊（原生 `ChatViewModel.startPrivateChat`），完成後以原生回傳的選定私訊更新

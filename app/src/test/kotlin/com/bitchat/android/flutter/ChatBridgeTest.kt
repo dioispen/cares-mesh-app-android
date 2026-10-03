@@ -36,6 +36,7 @@ import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.same
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyBlocking
 import org.mockito.kotlin.whenever
@@ -1025,7 +1026,7 @@ class ChatBridgeTest {
 
         bridge.handle(sendCall("meet at the gym"), result)
 
-        assertEquals(listOf("success:false"), result.calls)
+        assertEquals(listOf("error:${ChatBridge.ERROR_PRIVATE_CHAT_CHANGED}"), result.calls)
         verify(viewModel, never()).sendMessage(any(), any())
     }
 
@@ -1068,7 +1069,40 @@ class ChatBridgeTest {
 
             bridge.handle(sendCall("see you", privateChat = ALICE), result)
 
-            assertEquals("focus $focus", listOf("success:false"), result.calls)
+            assertEquals("focus $focus", listOf("error:${ChatBridge.ERROR_PRIVATE_CHAT_CHANGED}"), result.calls)
+        }
+        verify(viewModel, never()).sendMessage(any(), any())
+    }
+
+    @Test
+    fun `the private composer's text goes to upstream when its chat is the same person under another ID`() {
+        // Upstream re-keys a focused mesh peer to its contact_ conversation (or Dart opened it by
+        // its Noise key); Dart still carries the ID it opened the chat with.
+        acceptSends(true)
+        sameAlice()
+        listOf(CONTACT to ALICE, ALICE to CONTACT, CONTACT to NOISE_ALICE, NOISE_ALICE to ALICE).forEach { (focus, composer) ->
+            selectedPrivateChatPeer.value = focus
+            val result = RecordingResult()
+
+            bridge.handle(sendCall("see you", privateChat = composer), result)
+
+            assertEquals("focus $focus, composer $composer", listOf("success:true"), result.calls)
+        }
+        verify(viewModel, times(4)).sendMessage(eq("see you"), any())
+    }
+
+    @Test
+    fun `another person's chat, or the public one, never counts as the same chat`() {
+        acceptSends(true)
+        sameAlice()
+        contacts[BOB] = ChatPrivateChat.Contact(BOB_CONTACT, meshPeerID = BOB, displayName = "bob", favoriteNickname = null)
+        listOf(CONTACT to BOB, ALICE to BOB_CONTACT, CONTACT to null, null to CONTACT).forEach { (focus, composer) ->
+            selectedPrivateChatPeer.value = focus
+            val result = RecordingResult()
+
+            bridge.handle(sendCall("see you", privateChat = composer), result)
+
+            assertEquals("focus $focus, composer $composer", listOf("error:${ChatBridge.ERROR_PRIVATE_CHAT_CHANGED}"), result.calls)
         }
         verify(viewModel, never()).sendMessage(any(), any())
     }
@@ -1807,6 +1841,13 @@ class ChatBridgeTest {
         mapOf("nickname" to nickname, "currentText" to currentText)
     )
 
+    /** Alice's mesh peer ID, Noise key and contact conversation, as upstream resolves them: one chat. */
+    private fun sameAlice() {
+        listOf(ALICE, NOISE_ALICE, CONTACT).forEach { id ->
+            contacts[id] = ChatPrivateChat.Contact(CONTACT, meshPeerID = ALICE, displayName = "alice", favoriteNickname = null)
+        }
+    }
+
     /** Upstream's endPrivateChat clears the selection (`PrivateChatManager.endPrivateChat`). */
     private fun endClearsFocus() {
         doAnswer {
@@ -2041,6 +2082,7 @@ class ChatBridgeTest {
         const val MALLORY = "6666666666666666"
         val CONTACT = "contact_" + "a".repeat(64)
         val MALLORY_CONTACT = "contact_" + "6".repeat(64)
+        val BOB_CONTACT = "contact_" + "b".repeat(64)
         val FP_ALICE = "f".repeat(64)
         val NOISE_ALICE = "a".repeat(63) + "1"
         val NOISE_DORA = "d".repeat(63) + "1"

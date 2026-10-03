@@ -12,8 +12,9 @@ import 'chat_message_tile.dart';
 /// 使用者每次改動文字都交給 [ChatService.updateInput]，送出被接受後清空輸入框。
 ///
 /// [privateChat] 標明這是哪個私訊的輸入框（`PrivateChatFocus.peerID`），公開聊天室為 null。
-/// 它隨送出與每次文字變化交給原生端：原生只在它的選定私訊與此相同時送出（否則回 false，文字留在
-/// 輸入框），私訊輸入框的文字也存成該私訊的草稿、送出後清掉。
+/// 它隨送出與每次文字變化交給原生端：原生只在它的選定私訊與此相同時送出（否則拒絕，文字留在
+/// 輸入框），私訊輸入框的文字也存成該私訊的草稿、送出後清掉。沒有送出時一律以 SnackBar 告知原因，
+/// 文字留在輸入框。
 ///
 /// [withSuggestions]（公開聊天室）：補完由原生依輸入產生、經 [ChatService.suggestions] 顯示；選取
 /// 補完時以原生回傳的文字取代輸入框、游標移到結尾；送出被接受後關閉補完；開啟時先關掉別的輸入框
@@ -87,29 +88,35 @@ class _ChatComposerState extends State<ChatComposer> {
     final privateChat = widget.privateChat;
     try {
       final accepted = await _chat.sendMessage(text, privateChat: privateChat);
-      if (accepted) {
-        if (mounted) _controller.clear();
-        // 程式清空輸入框不會觸發 onChanged，補完要明確關掉（原生輸入框也這樣做）；私訊輸入框
-        // 沒有補完，以「文字變成空白」清掉這個私訊的草稿（原生私訊畫面送出後也這樣做）。
-        if (privateChat == null) {
-          if (widget.withSuggestions) _fireAndForget(_chat.clearSuggestions(), 'clearSuggestions');
-        } else {
-          _fireAndForget(_chat.updateInput('', privateChat: privateChat), 'updateInput');
-        }
+      if (!accepted) {
+        // 原生核心自己拒絕（例如對方已被封鎖；原生會在公開時間線留下系統訊息）。
+        if (mounted) _showSendProblem('訊息沒有送出');
+        return;
+      }
+      if (mounted) _controller.clear();
+      // 程式清空輸入框不會觸發 onChanged，補完要明確關掉（原生輸入框也這樣做）；私訊輸入框
+      // 沒有補完，以「文字變成空白」清掉這個私訊的草稿（原生私訊畫面送出後也這樣做）。
+      if (privateChat == null) {
+        if (widget.withSuggestions) _fireAndForget(_chat.clearSuggestions(), 'clearSuggestions');
+      } else {
+        _fireAndForget(_chat.updateInput('', privateChat: privateChat), 'updateInput');
       }
     } catch (e) {
       debugPrint('ChatComposer: send failed: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_sendFailureText(e))));
+      if (mounted) _showSendProblem(_sendFailureText(e));
     } finally {
       _sending = false;
     }
   }
 
+  void _showSendProblem(String text) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
   /// 送出失敗時告訴使用者的話：原生擋下的原因（[ChatErrors]）各有說明，其他錯誤請使用者稍後再試。
   /// 文字都留在輸入框。
   static String _sendFailureText(Object error) => switch (error) {
         PlatformException(code: ChatErrors.channelsUnsupported) => '頻道功能尚未支援，訊息沒有送出',
+        PlatformException(code: ChatErrors.privateChatChanged) => '對話狀態更新中，請再送一次',
         _ => '訊息送出失敗，請稍後再試',
       };
 

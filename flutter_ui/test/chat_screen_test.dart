@@ -201,6 +201,7 @@ void main() {
 
     expect(sent, ['hello mesh']);
     expect(find.text('hello mesh'), findsOneWidget);
+    expect(find.text('訊息沒有送出'), findsOneWidget);
   });
 
   testWidgets('a failed send keeps the text and tells the user', (tester) async {

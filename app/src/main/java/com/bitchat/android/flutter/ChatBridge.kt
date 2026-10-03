@@ -56,8 +56,8 @@ import kotlinx.coroutines.withContext
  * Private chats (#55) follow the same rule: which conversation the composer's text goes to is
  * `ChatViewModel.selectedPrivateChatPeer`, changed only by upstream's own methods; Dart opens and
  * closes its private chat screen from the `chat_selected_private_peer` projection. The one check
- * the bridge adds is on sending: text is handed over only when the composer it came from is the one
- * upstream would route it to (see [sendMessage]), because Dart sees the focus a debounce late.
+ * the bridge adds is on sending: text is handed over only when the composer it came from is for the
+ * chat upstream would route it to (see [sendMessage]), because Dart sees the focus a debounce late.
  *
  * Notification taps (#57) reach Dart the same way: the Activity leaves the tapped notification's
  * destination in [PendingChatNavigation], projected as `chat_pending_navigation`; Dart takes it with
@@ -317,11 +317,13 @@ class ChatBridge(
      * `privateChat` names the composer the text was typed in: absent or null for the public chat,
      * the `chat_selected_private_peer` `peerID` for the private chat screen. It routes nothing —
      * upstream alone decides where text goes, by its `selectedPrivateChatPeer` at this moment. It
-     * is a guard: text is only handed over when upstream's focus is that composer's, and otherwise
-     * answered `false` (not sent, left in the composer). Dart follows the focus through a debounced
-     * snapshot, so for a moment the two can disagree — right after `/m`, or after upstream ends a
-     * private chat by itself — and without this check public text could leave as a private message,
-     * or worse, private text be broadcast to the public timeline.
+     * is a guard: text is only handed over when upstream's focus is that composer's chat (see
+     * [isSameChat]), and otherwise refused with the [ERROR_PRIVATE_CHAT_CHANGED] error (not sent,
+     * left in the composer; Dart asks the user to send it again). Dart follows the focus through a
+     * debounced snapshot, so for a moment the two can disagree — right after `/m`, or after upstream
+     * ends a private chat by itself — and without this check public text could leave as a private
+     * message, or worse, private text be broadcast to the public timeline. `false` is then always
+     * upstream's own answer (e.g. a blocked peer).
      *
      * The join command (`/j`, `/join`) is never handed over, from either composer: it is answered
      * with the [ERROR_CHANNELS_UNSUPPORTED] error, which Dart shows the user (see [ChatChannels]).
@@ -338,15 +340,30 @@ class ChatBridge(
         }
         val privateChat = input.privateChat
         val focus = chatViewModel.selectedPrivateChatPeer.value
-        if (focus != privateChat) {
+        if (!isSameChat(privateChat, focus)) {
             Log.w(TAG, "Not sending: composer is for ${privateChat ?: "the public chat"}, upstream focus is ${focus ?: "the public chat"}")
-            result.success(false)
-            return
+            return result.error(ERROR_PRIVATE_CHAT_CHANGED, "the composer's chat is not the one upstream has in focus", null)
         }
         chatViewModel.sendMessage(trimmed) { accepted -> result.success(accepted) }
         // Upstream has run a command by the time sendMessage returns (the same `/` test it makes);
         // re-project what its block list hides, which no flow reports.
         if (trimmed.startsWith("/")) commandsRun.update { it + 1 }
+    }
+
+    /**
+     * Whether text typed in [composer]'s chat (null: the public one) is for upstream's [focus]:
+     * the same ID, or another of upstream's IDs for the same person — a mesh peer ID, its Noise key
+     * or its `contact_…` conversation, which upstream resolves to one conversation
+     * ([privateChatContact], `ContactDirectory`). Upstream re-keys a focused peer to its `contact_…`
+     * ID by itself, and Dart only learns the new ID with the next snapshot; without this a send in
+     * between was refused. Different people, and the public chat against any private one, never
+     * match. IDs are only resolved when they differ, which is what upstream's own private send does
+     * next anyway (`ChatViewModel.sendMessage` canonicalizes the focus on this thread too).
+     */
+    private fun isSameChat(composer: String?, focus: String?): Boolean = when {
+        composer == focus -> true
+        composer == null || focus == null -> false
+        else -> privateChatContact(composer).conversationID == privateChatContact(focus).conversationID
     }
 
     /**
@@ -452,7 +469,9 @@ class ChatBridge(
      *   chat. Upstream's private chat screen offers no `/` or `@` popups and leaves the shared
      *   suggestion state alone (an update would only leave a stale popup for the public composer);
      *   a `/` command typed there is still carried out when sent. The draft reaches Dart through
-     *   the next `chat_selected_private_peer`.
+     *   the next `chat_selected_private_peer`. The ID is passed as Dart has it: upstream keys drafts
+     *   by the canonical conversation (`ConversationListPreferences.setDraft`), so a mesh peer ID
+     *   upstream has since re-keyed to `contact_…` still writes that conversation's draft.
      */
     private fun updateInput(call: MethodCall, result: MethodChannel.Result) {
         val (text, privateChat) = call.composerInput() ?: return result.invalidArguments(call, ComposerInput.EXPECTS)
@@ -652,6 +671,12 @@ class ChatBridge(
 
         /** `chat_sendMessage` refused the join command: channels are not supported (see [ChatChannels]). */
         const val ERROR_CHANNELS_UNSUPPORTED = "CHANNELS_UNSUPPORTED"
+
+        /**
+         * `chat_sendMessage` refused text whose composer is not for the chat upstream has in focus
+         * (see [sendMessage]); Dart's focus catches up with the next snapshot, so sending again works.
+         */
+        const val ERROR_PRIVATE_CHAT_CHANGED = "PRIVATE_CHAT_CHANGED"
 
         private const val TAG = "ChatBridge"
 
