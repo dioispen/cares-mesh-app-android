@@ -14,6 +14,11 @@ import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.service.TransportBridgeService
 import com.bitchat.android.testsupport.FakeAndroidKeyStore
 import com.bitchat.android.testsupport.ResourcelessContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -30,8 +35,7 @@ import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * What a private message looks like on the air (#9, #55): the real [BluetoothMeshService]
@@ -42,8 +46,11 @@ import java.util.concurrent.TimeUnit
  * see `MessageRouterTest` for the queueing in between), so these tests pin the property #9 asks
  * for at the last hop: a private message is addressed to its recipient, never to the broadcast
  * address, and its payload is Noise ciphertext that only the recipient's session opens.
- * Mesh product code is not changed for this; the radio is swapped in by reflection.
+ * Mesh product code is not changed for this; the radio is swapped in by reflection, and so is the
+ * mesh's coroutine scope: its sends then run on a test scheduler, so a test runs a send to its end
+ * and reads everything it put on the air, instead of waiting on the clock for what may follow.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [Build.VERSION_CODES.P], manifest = Config.NONE)
 class PrivateMessageWireTest {
@@ -51,7 +58,8 @@ class PrivateMessageWireTest {
     private data class Identity(val privateKey: ByteArray, val publicKey: ByteArray, val peerID: String)
 
     private lateinit var mesh: BluetoothMeshService
-    private val onAir = LinkedBlockingQueue<BitchatPacket>()
+    private val sends = TestCoroutineScheduler()
+    private val onAir = ConcurrentLinkedQueue<BitchatPacket>()
     private val bob = identity()
     private val bobNoise = NoiseSessionManager(
         localStaticPrivateKey = bob.privateKey,
@@ -65,10 +73,11 @@ class PrivateMessageWireTest {
         mesh = BluetoothMeshService(ResourcelessContext(RuntimeEnvironment.getApplication()))
         val radio = mock<BluetoothConnectionManager>()
         whenever(radio.broadcastPacket(any())).thenAnswer { invocation ->
-            onAir.put((invocation.arguments[0] as RoutedPacket).packet)
+            onAir.add((invocation.arguments[0] as RoutedPacket).packet)
             true
         }
         replaceField(mesh, "connectionManager", radio)
+        replaceField(mesh, "serviceScope", CoroutineScope(StandardTestDispatcher(sends) + SupervisorJob()))
     }
 
     @After
@@ -83,6 +92,7 @@ class PrivateMessageWireTest {
         establishSessionWithBob()
 
         mesh.sendPrivateMessage(SECRET, bob.peerID, "bob", "msg-1")
+        sends.advanceUntilIdle()
 
         val packet = nextOnAir() ?: throw AssertionError("nothing was sent")
         assertEquals(MessageType.NOISE_ENCRYPTED.value, packet.type)
@@ -100,18 +110,19 @@ class PrivateMessageWireTest {
         val message = PrivateMessagePacket.decode(payload.data)
         assertEquals("msg-1", message?.messageID)
         assertEquals(SECRET, message?.content)
-        assertNull("nothing else was sent", nextOnAir(timeoutMs = 300))
+        assertNull("nothing else was sent", nextOnAir())
     }
 
     @Test
     fun `without a Noise session the text is not sent at all, only a handshake to the recipient`() {
         mesh.sendPrivateMessage(SECRET, bob.peerID, "bob", "msg-2")
+        sends.advanceUntilIdle()
 
         val packet = nextOnAir() ?: throw AssertionError("expected a handshake")
         assertEquals(MessageType.NOISE_HANDSHAKE.value, packet.type)
         assertArrayEquals(hex(bob.peerID), packet.recipientID)
         assertFalse(packet.payload.contains(SECRET.toByteArray()))
-        assertNull("the message itself is not sent before a session exists", nextOnAir(timeoutMs = 300))
+        assertNull("the message itself is not sent before a session exists", nextOnAir())
     }
 
     /** Noise XX between the mesh's own identity and Bob, driven through the mesh's public API. */
@@ -129,7 +140,8 @@ class PrivateMessageWireTest {
     private fun meshEncryption(): com.bitchat.android.crypto.EncryptionService =
         readField(mesh, "encryptionService")
 
-    private fun nextOnAir(timeoutMs: Long = 5_000): BitchatPacket? = onAir.poll(timeoutMs, TimeUnit.MILLISECONDS)
+    /** The next packet put on the air by what has run so far (sends run with [sends]); null if none. */
+    private fun nextOnAir(): BitchatPacket? = onAir.poll()
 
     private fun ByteArray.contains(needle: ByteArray): Boolean =
         (0..size - needle.size).any { start -> needle.indices.all { this[start + it] == needle[it] } }

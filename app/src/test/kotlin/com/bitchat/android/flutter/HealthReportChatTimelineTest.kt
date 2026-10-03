@@ -10,7 +10,7 @@ import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,6 +22,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.Date
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Pins the Health Report decision against the real producer: whatever line
@@ -37,7 +38,7 @@ class HealthReportChatTimelineTest {
     private val me = ChatSelf(peerID = "1111222233334444", nickname = "me")
 
     @Test
-    fun `health report delivered by MessageHandler is left out of the chat timeline`() = runBlocking {
+    fun `health report delivered by MessageHandler is left out of the chat timeline`() = runTest(timeout = 10.seconds) {
         val delegate = mock<MessageHandlerDelegate>()
         whenever(delegate.getPeerInfo(peerID)).thenReturn(verifiedPeer())
         val handler = MessageHandler(me.peerID, RuntimeEnvironment.getApplication())
