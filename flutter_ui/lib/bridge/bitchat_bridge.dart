@@ -14,6 +14,7 @@ abstract final class ChatMethods {
   static const startPrivateChat = 'chat_startPrivateChat';
   static const endPrivateChat = 'chat_endPrivateChat';
   static const openLatestUnreadPrivateChat = 'chat_openLatestUnreadPrivateChat';
+  static const takePendingNavigation = 'chat_takePendingNavigation';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -47,6 +48,11 @@ abstract final class ChatEvents {
   /// 未讀信封），以及每個有未讀的對話的未讀數（見 `models/chat_unread.dart`）。在線 peer 的未讀數也
   /// 在 [peers] 的列上。
   static const unread = 'chat_unread';
+
+  /// `{type, navigation: Map?}`：使用者點了聊天通知、Dart 還沒處理的目的地（#57），沒有時
+  /// `navigation` 為 null（見 `models/chat_navigation.dart`）。它只是提醒：要導航前一定先以
+  /// [ChatMethods.takePendingNavigation] 取走，照取到的去，每個點擊只處理一次。
+  static const pendingNavigation = 'chat_pending_navigation';
 }
 
 class BitchatBridge {
@@ -153,6 +159,12 @@ class BitchatBridge {
   /// 開私訊畫面（[startPrivateChat]）。bridge 錯誤會往上拋。
   static Future<String?> openLatestUnreadPrivateChat() =>
       _method.invokeMethod<String>(ChatMethods.openLatestUnreadPrivateChat);
+
+  /// 取走使用者點聊天通知要去的地方（#57）：`{target: privateChat, peerID, senderNickname}` 或
+  /// `{target: publicChat}`；沒有（或已被取走）時回傳 null。取走後原生不再持有它。只取、不開啟：
+  /// 私訊畫面照一般流程呼叫 [startPrivateChat]。bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> takePendingChatNavigation() =>
+      _method.invokeMethod<Map>(ChatMethods.takePendingNavigation);
 
   /// 設定 mesh 暱稱（原生 `ChatViewModel.setNickname`：儲存後立即重新 announce）。
   ///

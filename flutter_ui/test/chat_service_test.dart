@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/models/chat_message.dart';
+import 'package:flutter_ui/models/chat_navigation.dart';
 import 'package:flutter_ui/models/chat_suggestions.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 
@@ -37,6 +38,7 @@ void main() {
     Future<Object?> Function(String peerID)? startPrivateChat,
     Future<Object?> Function()? endPrivateChat,
     Future<String?> Function()? openLatestUnreadPrivateChat,
+    Future<Object?> Function()? takePendingNavigation,
   }) =>
       ChatService(
         events: () => events.stream,
@@ -82,6 +84,11 @@ void main() {
         openLatestUnreadPrivateChat: openLatestUnreadPrivateChat ??
             () async {
               calls.add('openLatestUnread');
+              return null;
+            },
+        takePendingNavigation: takePendingNavigation ??
+            () async {
+              calls.add('takePendingNavigation');
               return null;
             },
       );
@@ -439,6 +446,67 @@ void main() {
       service = buildService(openLatestUnreadPrivateChat: () async => throw MissingPluginException('no native side'));
 
       await expectLater(service.openLatestUnreadPrivateChat(), throwsA(isA<MissingPluginException>()));
+    });
+  });
+
+  group('notification taps (#57)', () {
+    const contact = 'contact_aaaa';
+    Map<String, dynamic> pending(Map<String, Object?>? navigation) =>
+        {'type': 'chat_pending_navigation', 'navigation': navigation};
+
+    test('nothing is pending until Kotlin reports a tap', () {
+      expect(service.pendingNavigation.value, isNull);
+    });
+
+    test('a pending snapshot tells where the tap goes, and a null one that it is gone', () async {
+      await service.start();
+
+      events.add(pending({'target': 'privateChat', 'peerID': contact, 'senderNickname': 'alice'}));
+      await pumpEventQueue();
+      final navigation = service.pendingNavigation.value;
+      expect(navigation, isA<OpenPrivateChat>());
+      expect((navigation as OpenPrivateChat).peerID, contact);
+
+      events.add(pending(null));
+      await pumpEventQueue();
+      expect(service.pendingNavigation.value, isNull);
+    });
+
+    test('a malformed or unknown pending request counts as none', () async {
+      await service.start();
+      events.add(pending({'target': 'publicChat'}));
+      await pumpEventQueue();
+
+      events.add(pending({'target': 'geohashChat'}));
+      await pumpEventQueue();
+
+      expect(service.pendingNavigation.value, isNull);
+    });
+
+    test('takePendingNavigation answers what Kotlin hands over and clears the pending one at once', () async {
+      service = buildService(takePendingNavigation: () async {
+        calls.add('takePendingNavigation');
+        return {'target': 'publicChat'};
+      });
+      await service.start();
+      events.add(pending({'target': 'publicChat'}));
+      await pumpEventQueue();
+
+      final taken = await service.takePendingNavigation();
+
+      expect(taken, isA<OpenPublicChat>());
+      expect(calls, contains('takePendingNavigation'));
+      expect(service.pendingNavigation.value, isNull, reason: 'Kotlin no longer holds it');
+    });
+
+    test('a tap someone else took already answers null', () async {
+      expect(await service.takePendingNavigation(), isNull);
+    });
+
+    test('a bridge error from takePendingNavigation is surfaced', () async {
+      service = buildService(takePendingNavigation: () async => throw MissingPluginException('no native side'));
+
+      await expectLater(service.takePendingNavigation(), throwsA(isA<MissingPluginException>()));
     });
   });
 

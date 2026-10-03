@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../bridge/bitchat_bridge.dart';
 import '../models/chat_message.dart';
+import '../models/chat_navigation.dart';
 import '../models/chat_peer.dart';
 import '../models/chat_suggestions.dart';
 import '../models/chat_unread.dart';
@@ -31,6 +32,7 @@ class ChatService {
     Future<Object?> Function(String peerID)? startPrivateChat,
     Future<Object?> Function()? endPrivateChat,
     Future<String?> Function()? openLatestUnreadPrivateChat,
+    Future<Object?> Function()? takePendingNavigation,
   })  : _events = events ?? BitchatBridge.events,
         _requestSnapshot = requestSnapshot ?? BitchatBridge.requestChatSnapshot,
         _send = sendMessage ?? ((text, privateChat) => BitchatBridge.sendMessage(text, privateChat: privateChat)),
@@ -42,7 +44,8 @@ class ChatService {
         _clearSuggestions = clearSuggestions ?? BitchatBridge.clearChatSuggestions,
         _startPrivateChat = startPrivateChat ?? BitchatBridge.startPrivateChat,
         _endPrivateChat = endPrivateChat ?? BitchatBridge.endPrivateChat,
-        _openLatestUnread = openLatestUnreadPrivateChat ?? BitchatBridge.openLatestUnreadPrivateChat;
+        _openLatestUnread = openLatestUnreadPrivateChat ?? BitchatBridge.openLatestUnreadPrivateChat,
+        _takePendingNavigation = takePendingNavigation ?? BitchatBridge.takePendingChatNavigation;
 
   static final ChatService instance = ChatService();
 
@@ -57,6 +60,7 @@ class ChatService {
   final Future<Object?> Function(String peerID) _startPrivateChat;
   final Future<Object?> Function() _endPrivateChat;
   final Future<String?> Function() _openLatestUnread;
+  final Future<Object?> Function() _takePendingNavigation;
 
   final ValueNotifier<List<ChatMessage>> _publicMessages =
       ValueNotifier<List<ChatMessage>>(const []);
@@ -67,6 +71,7 @@ class ChatService {
   final ValueNotifier<Map<String, List<ChatMessage>>> _privateChats =
       ValueNotifier<Map<String, List<ChatMessage>>>(const {});
   final ValueNotifier<ChatUnread> _unread = ValueNotifier<ChatUnread>(ChatUnread.none);
+  final ValueNotifier<ChatNavigation?> _pendingNavigation = ValueNotifier<ChatNavigation?>(null);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
@@ -104,6 +109,11 @@ class ChatService {
   /// [ChatUnread.none]。只隨快照更新——開啟對話時由原生清除，這裡不自行歸零。
   /// 在線 peer 的未讀數也在 [peerList] 的列上。
   ValueListenable<ChatUnread> get unread => _unread;
+
+  /// 使用者點了聊天通知、還沒處理的目的地（#57，原生 `PendingChatNavigation` 的投影）；沒有時 null。
+  /// App 被通知冷啟動時，它在 Dart 走完 setup／登入前就會出現，等可以導航的畫面（`ChatNavigationHost`）
+  /// 來處理。只是提醒：導航前一定先 [takePendingNavigation]，照取到的去。
+  ValueListenable<ChatNavigation?> get pendingNavigation => _pendingNavigation;
 
   /// 開始接收聊天快照。可重複呼叫，只有第一次有效。
   ///
@@ -143,6 +153,14 @@ class ChatService {
   /// 只挑、不開啟：拿到 ID 後照一般流程開私訊畫面（畫面會呼叫 [startPrivateChat]，由原生清除未讀）。
   /// bridge 錯誤會往上拋。
   Future<String?> openLatestUnreadPrivateChat() => _openLatestUnread();
+
+  /// 取走使用者點聊天通知要去的地方（原生同時不再持有它），沒有或已被取走時回傳 null；
+  /// [pendingNavigation] 隨即清為 null。只取、不導航。bridge 錯誤會往上拋。
+  Future<ChatNavigation?> takePendingNavigation() async {
+    final taken = ChatNavigation.fromMap(await _takePendingNavigation());
+    _pendingNavigation.value = null;
+    return taken;
+  }
 
   void _applySelection(Object? raw) {
     final selection = PrivateChatSelection.fromEvent(raw);
@@ -222,6 +240,13 @@ class ChatService {
           return;
         }
         _unread.value = unread;
+      case ChatEvents.pendingNavigation:
+        if (!event.containsKey('navigation')) {
+          debugPrint('ChatService: ignoring malformed ${ChatEvents.pendingNavigation} event');
+          return;
+        }
+        // 這個 app 不認得的目的地當作沒有：它留在原生，等下一次點擊取代。
+        _pendingNavigation.value = ChatNavigation.fromMap(event['navigation']);
     }
   }
 
@@ -236,5 +261,6 @@ class ChatService {
     _selectedPrivateChat.dispose();
     _privateChats.dispose();
     _unread.dispose();
+    _pendingNavigation.dispose();
   }
 }

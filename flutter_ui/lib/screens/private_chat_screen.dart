@@ -32,6 +32,10 @@ class PrivateChatScreen extends StatefulWidget {
   /// 測試用；預設為 app 層級的 [ChatService.instance]。
   final ChatService? chatService;
 
+  /// 私訊畫面的 route 名稱（只由 `ChatScreen` 開啟，所以它下面一定是聊天室）：點通知時
+  /// （`ChatNavigationHost`）靠它認出私訊畫面開著。
+  static const routeName = '/chat/private';
+
   @override
   State<PrivateChatScreen> createState() => _PrivateChatScreenState();
 }
