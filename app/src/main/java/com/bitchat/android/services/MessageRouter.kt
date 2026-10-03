@@ -189,8 +189,13 @@ class MessageRouter private constructor(
             val content = FavoriteControlMessage.encode(isFavorite, myNpub)
             val nickname = mesh.getPeerNicknames()[meshTarget] ?: meshTarget
             mesh.sendPrivateMessage(content, meshTarget, nickname, null)
-        } else {
+        } else if (AppConstants.Nostr.ENABLED) {
             nostr.sendFavoriteNotification(resolution.noiseKeyHex ?: toPeerID, isFavorite)
+        } else {
+            // CARES runs mesh-only (see canSendViaNostr): with no relay ever connected, the notice
+            // would only wait in NostrRelayManager's queue. The peer learns of the change the next
+            // time it is toggled while they are on the mesh.
+            Log.d(TAG, "Favorite notification for ${toPeerID.take(16)}… not sent: no mesh session, Nostr disabled")
         }
     }
 

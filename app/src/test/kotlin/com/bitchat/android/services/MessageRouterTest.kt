@@ -6,6 +6,7 @@ import com.bitchat.android.favorites.FavoritesPersistenceService
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.mesh.PeerInfo
+import com.bitchat.android.nostr.NostrTransport
 import com.bitchat.android.testing.FakeAndroidKeyStore
 import com.bitchat.android.util.AppConstants
 import org.junit.After
@@ -17,8 +18,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.clearInvocations
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
@@ -198,6 +201,44 @@ class MessageRouterTest {
     }
 
     @Test
+    fun `a favourite notification for a peer off the mesh is not handed to Nostr while it is disabled`() {
+        // Same gate as above, for ChatViewModel.toggleFavorite's notice to the peer (#58). With no
+        // relay ever connected it could only sit in NostrRelayManager's pending queue.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        withNostrTransport { nostr ->
+            // A mutual favourite that told us its Nostr key: the one peer a relay could reach.
+            peerOffline()
+            withMutualNostrFavorite {
+                listOf(::peerOffline, ::peerConnectedNoSession).forEach { state ->
+                    state()
+
+                    router.sendFavoriteNotification(peerID, isFavorite = true)
+
+                    verify(nostr, never()).sendFavoriteNotification(any(), any())
+                    verify(mesh, never()).sendPrivateMessage(any(), any(), any(), anyOrNull())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `a favourite notification still goes over the mesh to a peer with a session`() {
+        withNostrTransport { nostr ->
+            peerReady()
+
+            router.sendFavoriteNotification(peerID, isFavorite = false)
+
+            verify(mesh, times(1)).sendPrivateMessage(
+                argThat { startsWith("[UNFAVORITED]") },
+                eq(peerID),
+                eq("peer"),
+                isNull()
+            )
+            verify(nostr, never()).sendFavoriteNotification(any(), any())
+        }
+    }
+
+    @Test
     fun `scheduler stops with the mesh service and restarts on rebind`() {
         MessageRouter.disableSchedulerForTesting = false
         MessageRouter.resetForTesting()
@@ -236,6 +277,25 @@ class MessageRouterTest {
                 .apply { isAccessible = true }
                 .set(null, null)
             FakeAndroidKeyStore.uninstall()
+        }
+    }
+
+    /**
+     * Runs [block] with a router built on a mock [NostrTransport] — the process-wide instance the
+     * router takes when it is created — then restores the real one.
+     */
+    private fun withNostrTransport(block: (NostrTransport) -> Unit) {
+        val field = NostrTransport::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }
+        val previous = field.get(null)
+        val nostr = mock<NostrTransport>()
+        field.set(null, nostr)
+        try {
+            MessageRouter.resetForTesting()
+            router = MessageRouter.getInstance(RuntimeEnvironment.getApplication(), mesh)
+            block(nostr)
+        } finally {
+            field.set(null, previous)
+            MessageRouter.resetForTesting()
         }
     }
 
