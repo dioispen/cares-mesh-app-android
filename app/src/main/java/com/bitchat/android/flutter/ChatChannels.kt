@@ -19,12 +19,16 @@ import com.bitchat.android.ui.CommandSuggestion
  *
  * No other command enters a channel in this upstream version: `/channels` only lists the joined
  * ones; `/pass`, `/save` and `/transfer` work inside a channel and are offered only there; there is
- * no `/leave`.
+ * no `/leave`. `/channels` is still handed to upstream when typed, but not offered either, so the
+ * composer does not suggest a channel feature the Flutter chat lacks.
  */
 object ChatChannels {
 
     /** Upstream's join command and its alias, as `CommandProcessor.processCommand` matches them. */
     val JOIN_COMMANDS: Set<String> = setOf("/j", "/join")
+
+    /** Commands the composer never offers: the join command, and `/channels`, which only lists them. */
+    private val NOT_OFFERED: Set<String> = JOIN_COMMANDS + "/channels"
 
     /**
      * Whether upstream would run [text] (the text it is handed, already trimmed) as its join
@@ -33,7 +37,7 @@ object ChatChannels {
     fun isJoinCommand(text: String): Boolean =
         text.startsWith("/") && text.split(" ").first().lowercase() in JOIN_COMMANDS
 
-    /** Whether the composer may offer [suggestion]: any upstream offers, except the join command. */
+    /** Whether the composer may offer [suggestion]: any upstream offers, except the channel commands. */
     fun isOffered(suggestion: CommandSuggestion): Boolean =
-        suggestion.command !in JOIN_COMMANDS && suggestion.aliases.none { it in JOIN_COMMANDS }
+        suggestion.command !in NOT_OFFERED && suggestion.aliases.none { it in NOT_OFFERED }
 }

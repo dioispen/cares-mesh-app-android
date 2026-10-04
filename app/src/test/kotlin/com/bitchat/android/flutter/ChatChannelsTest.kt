@@ -24,7 +24,7 @@ class ChatChannelsTest {
     }
 
     @Test
-    fun `every suggestion upstream offers is offered, except the join command`() {
+    fun `every suggestion upstream offers is offered, except the channel commands`() {
         val suggestions = listOf(
             CommandSuggestion("/block", emptyList(), "[nickname]", "block or list blocked peers"),
             CommandSuggestion("/channels", emptyList(), null, "show all discovered channels"),
@@ -33,6 +33,11 @@ class ChatChannelsTest {
             CommandSuggestion("/join", emptyList(), "<channel>", "an alias listed on its own")
         )
 
-        assertEquals(listOf("/block", "/channels", "/m"), suggestions.filter(ChatChannels::isOffered).map { it.command })
+        assertEquals(listOf("/block", "/m"), suggestions.filter(ChatChannels::isOffered).map { it.command })
+    }
+
+    @Test
+    fun `channels is not the join command, so typing it still reaches upstream`() {
+        assertFalse(ChatChannels.isJoinCommand("/channels"))
     }
 }
