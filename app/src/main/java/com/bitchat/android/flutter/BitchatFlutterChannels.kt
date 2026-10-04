@@ -10,12 +10,11 @@ import android.location.LocationManager
 import android.util.Log
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.InboundPacketBridge
+import com.bitchat.android.service.HealthReportBroadcast
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
-import com.bitchat.android.protocol.BroadcastContentTag
-import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.util.toHexString
 import com.google.gson.Gson
@@ -253,27 +252,15 @@ class BitchatFlutterChannels(
      * @return 如果發送成功返回 true，否則返回 false
      */
     private fun sendHealthReportPacket(payload: ByteArray): Boolean {
-        val service = MeshServiceHolder.meshService
-        return if (service != null) {
-            val senderIdHex = service.myPeerID
-            
-            val taggedPayload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload
-            val packet = BitchatPacket(
-                type = MessageType.HEALTH_REPORT.value,
-                ttl = 3u,
-                senderID = senderIdHex,
-                payload = taggedPayload
-            )
-            Log.d("BitchatBridge", "🔄 正在發送 HEALTH_REPORT 封包，大小: ${payload.size}，類型: ${packet.type}, TTL: 3")
-            
-            // 通過 BluetoothMeshService 廣播 HEALTH_REPORT 封包
-            service.sendBroadcastPacket(packet)
+        Log.d("BitchatBridge", "🔄 正在發送 HEALTH_REPORT 封包，大小: ${payload.size}，TTL: ${HealthReportBroadcast.DEFAULT_TTL}")
+        // 通過 BluetoothMeshService 廣播 HEALTH_REPORT 封包
+        val sent = HealthReportBroadcast.send(MeshServiceHolder.meshService, payload)
+        if (sent) {
             Log.d("BitchatBridge", "📤 HEALTH_REPORT 已提交給網格服務")
-            true
         } else {
             Log.e("BitchatBridge", "❌ Mesh 服務未啟動，無法發送 HEALTH_REPORT")
-            false
         }
+        return sent
     }
 
     /**
