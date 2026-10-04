@@ -59,14 +59,21 @@ object ChatFavorites {
     )
 
     /**
-     * A peer's star, the rule `PeopleSection` (`peerFavoriteStates`, `peerTheyFavoritedUsStates`)
-     * and `PrivateChatSheet` (`isFavorite`, `theyFavoritedUs`) share:
+     * A record of upstream's favourites store (`FavoritesPersistenceService.getFavoriteStatus`), as a
+     * conversation row's star reads it (#73, `ConversationSwipeItem`'s `favoriteRelationship`): the
+     * fingerprint of its Noise key, and whether they favourited us.
+     */
+    data class Relationship(val fingerprint: String, val theyFavoritedUs: Boolean)
+
+    /**
+     * A peer's star, the rule `PeopleSection` (`peerFavoriteStates`, `peerTheyFavoritedUsStates`),
+     * `PrivateChatSheet` (`isFavorite`, `theyFavoritedUs`) and `ConversationSwipeItem` share:
      * - favourite: with a [fingerprint], whether `favoritePeers` has it — and only that; without
      *   one, upstream asks `isFavorite` by the ID.
      * - favourited us: `peerFavoritedUs` has the fingerprint, or the favourites store says so for
      *   the ID.
-     * They differ only in where the fingerprint comes from (see [ChatPeerList] and
-     * [ChatPrivateChat.fingerprint]).
+     * They differ only in where the fingerprint comes from (see [ChatPeerList],
+     * [ChatPrivateChat.fingerprint] and [ChatConversations]).
      */
     fun status(
         peerID: String,

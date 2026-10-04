@@ -1,6 +1,7 @@
 package com.bitchat.android.flutter
 
 import com.bitchat.android.model.BitchatMessage
+import com.bitchat.android.ui.ConversationSummary
 import com.bitchat.android.ui.isFromSelf
 
 /**
@@ -25,6 +26,10 @@ import com.bitchat.android.ui.isFromSelf
  *   the peer every incoming message in it came from — and it is one lookup per conversation.
  * - unread: a blocked peer's conversation counts as nothing unread (all its unread messages are
  *   hidden), so neither the envelope nor a badge points at messages that are not shown.
+ * - conversation list (#73): a blocked peer's conversation is not listed at all — its preview, name
+ *   and badge come from the messages that are hidden. The peer is then shown among the people like
+ *   any peer without a conversation (upstream lists blocked peers there too), and opening its chat
+ *   is refused by upstream as before.
  *
  * Because the projection filters, it hides what came before the block too, and `/unblock` brings
  * everything back — received while blocked included: upstream still holds it all.
@@ -64,6 +69,12 @@ object ChatBlocking {
     /** `ChatViewModel.unreadPrivateMessages` without blocked peers' conversations. */
     fun visibleUnread(unreadConversationIDs: Set<String>, isBlocked: (String) -> Boolean): Set<String> =
         unreadConversationIDs.filterNotTo(LinkedHashSet()) { isBlocked(it) }
+
+    /** Upstream's conversation list (`ChatViewModel.conversations`) without blocked peers' conversations. */
+    internal fun visibleSummaries(
+        conversations: List<ConversationSummary>,
+        isBlocked: (String) -> Boolean
+    ): List<ConversationSummary> = conversations.filterNot { isBlocked(it.conversationID) }
 
     /** Unread conversation badges without blocked peers' conversations. */
     fun visibleConversations(

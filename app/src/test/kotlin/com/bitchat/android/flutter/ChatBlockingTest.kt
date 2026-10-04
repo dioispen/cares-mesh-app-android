@@ -1,6 +1,9 @@
 package com.bitchat.android.flutter
 
 import com.bitchat.android.model.BitchatMessage
+import com.bitchat.android.model.BitchatMessageType
+import com.bitchat.android.ui.ConversationSummary
+import com.bitchat.android.ui.DirectMessageTransport
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.util.Date
@@ -119,6 +122,34 @@ class ChatBlockingTest {
         )
     }
 
+    // --- conversation list (#73) -------------------------------------------------------------
+
+    @Test
+    fun `a blocked peer's conversation is not listed, the others keep upstream's order`() {
+        blocked += MALLORY_CONTACT
+
+        val listed = ChatBlocking.visibleSummaries(
+            listOf(summary(MALLORY_CONTACT), summary(ALICE_CONTACT), summary(BOB)),
+            isBlocked
+        )
+
+        assertEquals(listOf(ALICE_CONTACT, BOB), listed.map { it.conversationID })
+        assertEquals("one lookup per conversation", listOf(MALLORY_CONTACT, ALICE_CONTACT, BOB), lookups)
+    }
+
+    private fun summary(conversationID: String) = ConversationSummary(
+        conversationID = conversationID,
+        displayName = conversationID.take(8),
+        unreadCount = 0,
+        latestMessageAt = 1_700_000_000_000L,
+        latestActivityOrder = 1L,
+        latestMessageType = BitchatMessageType.Message,
+        latestMessagePreview = "hi",
+        transport = DirectMessageTransport.MESH,
+        nostrPubkey = null,
+        identityAliases = setOf(conversationID)
+    )
+
     private fun message(
         id: String,
         sender: String = "alice",
@@ -137,6 +168,7 @@ class ChatBlockingTest {
         const val ME = "a1b2c3d4e5f60718"
         const val ALICE = "1111111111111111"
         const val MALLORY = "6666666666666666"
+        const val BOB = "2222222222222222"
         val ALICE_CONTACT = "contact_" + "a".repeat(64)
         val MALLORY_CONTACT = "contact_" + "6".repeat(64)
     }

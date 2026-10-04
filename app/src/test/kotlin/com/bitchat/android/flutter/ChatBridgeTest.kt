@@ -4,6 +4,7 @@ import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.BitchatMessageType
 import com.bitchat.android.model.DeliveryStatus
+import com.bitchat.android.services.ConversationStoreState
 import com.bitchat.android.testsupport.ManualPoster
 import com.bitchat.android.testsupport.RecordingResult
 import com.bitchat.android.testsupport.RecordingSink
@@ -82,6 +83,7 @@ class ChatBridgeTest {
     private val peerFavoritedUs = MutableStateFlow<Set<String>>(emptySet())
     private val peerFingerprints = MutableStateFlow<Map<String, String>>(emptyMap())
     private val currentChannel = MutableStateFlow<String?>(null)
+    private val conversationStoreState = MutableStateFlow<ConversationStoreState>(ConversationStoreState.Ready)
     private val drafts = mutableMapOf<String, String>()
 
     /** Upstream's favourites store and block list, as ChatBridge reads them. */
@@ -114,6 +116,7 @@ class ChatBridgeTest {
         whenever(vm.peerFavoritedUs).thenAnswer { peerFavoritedUs }
         whenever(vm.peerFingerprints).thenAnswer { peerFingerprints }
         whenever(vm.currentChannel).thenAnswer { currentChannel }
+        whenever(vm.conversationStoreState).thenAnswer { conversationStoreState }
         whenever(vm.conversationDraft(anyOrNull())).thenAnswer { drafts[it.arguments[0]] ?: "" }
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
@@ -1561,6 +1564,138 @@ class ChatBridgeTest {
         assertEquals(emptyList<String>(), records.blockLookups)
     }
 
+    // --- conversations (#73) -------------------------------------------------------------------
+
+    @Test
+    fun `Dart subscribing receives every conversation upstream keeps, online and offline, in its order`() {
+        conversations.value = listOf(
+            summary(CONTACT, unreadCount = 0, connectedPeerID = ALICE, displayName = "alice"),
+            summary(BOB_CONTACT, unreadCount = 2, connectedPeerID = null, displayName = "bob")
+        )
+
+        events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+
+        assertEquals(
+            listOf(listOf(Triple(CONTACT, "alice", true), Triple(BOB_CONTACT, "bob", false))),
+            conversationRows().map { rows -> rows.map { Triple(it["conversationID"], it["displayName"], it["isOnline"]) } }
+        )
+        assertEquals(listOf("ready"), conversationEvents().map { it["state"] })
+    }
+
+    @Test
+    fun `a conversation's badge follows upstream, down to zero once it is opened`() {
+        conversations.value = listOf(summary(BOB_CONTACT, unreadCount = 2, connectedPeerID = null))
+        settleAndClear()
+
+        // Opening it: upstream's startPrivateChat clears its unread state; the summary follows.
+        conversations.value = listOf(summary(BOB_CONTACT, unreadCount = 0, connectedPeerID = null))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(0)), conversationRows().map { rows -> rows.map { it["unreadCount"] } })
+    }
+
+    @Test
+    fun `an offline conversation is opened with its conversation ID, as upstream's sheet opens it`() {
+        // The native row runs showPrivateChatSheet(conversationID), whose sheet then runs
+        // startPrivateChat with that canonical ID; Dart's private chat screen does the start itself.
+        conversations.value = listOf(summary(BOB_CONTACT, unreadCount = 0, connectedPeerID = null))
+
+        bridge.handle(startPrivateChatCall(BOB_CONTACT), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verifyBlocking(viewModel) { startPrivateChat(BOB_CONTACT) }
+        verify(viewModel, never()).showPrivateChatSheet(any())
+    }
+
+    @Test
+    fun `a connected peer with a conversation is listed there, not among the people`() {
+        connectedPeers.value = listOf(ALICE, BOB)
+        peerNicknames.value = mapOf(ALICE to "alice", BOB to "bob")
+        records.aliases[ALICE] = setOf(ALICE, CONTACT)
+        conversations.value = listOf(summary(CONTACT, unreadCount = 1, connectedPeerID = ALICE))
+
+        events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(CONTACT)), conversationIDs())
+        assertEquals(listOf(listOf(BOB)), peerRows().map { rows -> rows.map { it["peerID"] } })
+        assertEquals(listOf(2 to 1), peerEvents().map { it["onlineCount"] to it["peopleCount"] })
+    }
+
+    @Test
+    fun `a peer moves to the conversations section once it has a conversation`() {
+        connectedPeers.value = listOf(ALICE)
+        peerNicknames.value = mapOf(ALICE to "alice")
+        records.aliases[ALICE] = setOf(ALICE, CONTACT)
+        settleAndClear()
+
+        // The first private message: upstream's conversation list gains a row.
+        conversations.value = listOf(summary(CONTACT, unreadCount = 1, connectedPeerID = ALICE))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(CONTACT)), conversationIDs())
+        assertEquals(listOf(emptyList<Any?>()), peerRows().map { rows -> rows.map { it["peerID"] } })
+    }
+
+    @Test
+    fun `a blocked peer's conversation is not listed, and the peer is back among the people until unblocked`() {
+        connectedPeers.value = listOf(ALICE)
+        peerNicknames.value = mapOf(ALICE to "alice")
+        records.aliases[ALICE] = setOf(ALICE, CONTACT)
+        records.blocked += CONTACT
+        conversations.value = listOf(summary(CONTACT, unreadCount = 1, connectedPeerID = ALICE))
+
+        events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+
+        assertEquals(listOf(emptyList<Any?>()), conversationIDs())
+        assertEquals(listOf(listOf(ALICE)), peerRows().map { rows -> rows.map { it["peerID"] } })
+
+        // /unblock: upstream's block list changes outside any flow; every command re-projects.
+        sink.events.clear()
+        records.blocked.clear()
+        acceptSends(true)
+        bridge.handle(sendCall("/unblock alice"), RecordingResult())
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(CONTACT)), conversationIDs())
+        assertEquals(listOf(emptyList<Any?>()), peerRows().map { rows -> rows.map { it["peerID"] } })
+    }
+
+    @Test
+    fun `the conversation store's state is pushed as it changes`() {
+        conversationStoreState.value = ConversationStoreState.Loading
+        events.onListen(null, sink)
+        dispatcher.scheduler.runCurrent()
+        poster.runAll()
+
+        conversationStoreState.value = ConversationStoreState.Error("could not open the database")
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf("loading", "error"), conversationEvents().map { it["state"] })
+    }
+
+    @Test
+    fun `a conversation's star follows the favourites flows`() {
+        conversations.value = listOf(summary(BOB_CONTACT, unreadCount = 0, connectedPeerID = null))
+        settleAndClear()
+
+        // Starred from the private chat header: upstream adds the contact's fingerprint.
+        favoritePeers.value = setOf(BOB_CONTACT.removePrefix("contact_"))
+        dispatcher.scheduler.advanceUntilIdle()
+        poster.runAll()
+
+        assertEquals(listOf(listOf(true)), conversationRows().map { rows -> rows.map { it["isFavorite"] } })
+    }
+
     // --- snapshot projection -----------------------------------------------------------------
 
     @Test
@@ -1573,6 +1708,8 @@ class ChatBridgeTest {
         messages.value = listOf(message("M1", senderPeerID = MALLORY))
         // No fingerprint known for the chat: its star asks upstream by ID.
         selectedPrivateChatPeer.value = BOB
+        // A conversation (#73): its star reads the favourites store, the peer list its peer's aliases.
+        conversations.value = listOf(summary(CONTACT, unreadCount = 0, connectedPeerID = ALICE))
         val upstreamLookups = mutableListOf<Boolean>()
         whenever(viewModel.getMeshPeerInfo(any())).thenAnswer {
             upstreamLookups += snapshotWork.running
@@ -1595,7 +1732,10 @@ class ChatBridgeTest {
 
         assertTrue(sink.events.isNotEmpty())
         assertEquals(
-            setOf("ourFavorites", "theyFavoritedUs", "nostrPubkeyHex", "cachedNoiseKeyHex", "hasBlockedPeers", "isPeerBlocked"),
+            setOf(
+                "ourFavorites", "theyFavoritedUs", "nostrPubkeyHex", "cachedNoiseKeyHex", "hasBlockedPeers", "isPeerBlocked",
+                "conversationAliases", "favoriteRelationship"
+            ),
             records.reads.toSet()
         )
         assertEquals(emptyList<String>(), records.readsOutsideSnapshotWork)
@@ -1629,6 +1769,8 @@ class ChatBridgeTest {
             override fun addFavoritesListener(onChange: () -> Unit): () -> Unit = {}
             override fun hasBlockedPeers() = false
             override fun isPeerBlocked(peerID: String) = false
+            override fun conversationAliases(peerID: String) = setOf(peerID)
+            override fun favoriteRelationship(alias: String): ChatFavorites.Relationship? = null
         }
         val delivered = CopyOnWriteArrayList<List<Any?>>()
         val peerSink = object : EventChannel.EventSink {
@@ -1888,9 +2030,14 @@ class ChatBridgeTest {
     )
 
     /** A row of upstream's conversation list (`ChatViewModel.conversations`). */
-    private fun summary(conversationID: String, unreadCount: Int, connectedPeerID: String?) = ConversationSummary(
+    private fun summary(
+        conversationID: String,
+        unreadCount: Int,
+        connectedPeerID: String?,
+        displayName: String = "alice"
+    ) = ConversationSummary(
         conversationID = conversationID,
-        displayName = "alice",
+        displayName = displayName,
         unreadCount = unreadCount,
         latestMessageAt = 1_700_000_000_000L,
         latestActivityOrder = 1L,
@@ -1976,6 +2123,18 @@ class ChatBridgeTest {
         .filter { it["type"] == ChatSerialization.EVENT_PENDING_NAVIGATION }
         .map { it["navigation"] }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun conversationEvents(): List<Map<String, Any?>> = sink.events
+        .map { it as Map<String, Any?> }
+        .filter { it["type"] == ChatSerialization.EVENT_CONVERSATIONS }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun conversationRows(): List<List<Map<String, Any?>>> =
+        conversationEvents().map { it["conversations"] as List<Map<String, Any?>> }
+
+    /** Each pushed conversations snapshot as its conversation IDs, in list order. */
+    private fun conversationIDs(): List<List<Any?>> = conversationRows().map { rows -> rows.map { it["conversationID"] } }
+
     /** Subscribes, lets the initial projections run, and forgets what they pushed. */
     private fun settleAndClear() {
         events.onListen(null, sink)
@@ -2006,6 +2165,8 @@ class ChatBridgeTest {
         val cachedNoiseKeys = mutableMapOf<String, String>()
         val blocked = mutableSetOf<String>()
         val blockLookups = mutableListOf<String>()
+        val aliases = mutableMapOf<String, Set<String>>()
+        val relationships = mutableMapOf<String, ChatFavorites.Relationship>()
         val reads = mutableListOf<String>()
         val readsOutsideSnapshotWork = mutableListOf<String>()
         private var listener: (() -> Unit)? = null
@@ -2035,6 +2196,8 @@ class ChatBridgeTest {
             blockLookups += peerID
             peerID in blocked
         }
+        override fun conversationAliases(peerID: String) = read("conversationAliases") { aliases[peerID] ?: setOf(peerID) }
+        override fun favoriteRelationship(alias: String) = read("favoriteRelationship") { relationships[alias] }
     }
 
     /** Runs every task on a new thread of its own, and can wait for them to finish. */
