@@ -63,6 +63,9 @@ class _HealthScreenState extends State<HealthScreen>
   /// 第一批任務資料還沒到 vs. 真的沒有任務——這兩件事要分開講，
   /// 否則載入中的空畫面會寫著「附近目前無求助任務」。
   bool _tasksLoaded = false;
+
+  /// 互救任務目前顯示哪一個分頁。
+  TaskStatus _taskFilter = TaskStatus.waiting;
   String? _tasksError;
 
   /// 回報送出中：擋住連點造成的重複廣播與互相覆蓋的寫入。
@@ -970,25 +973,49 @@ class _HealthScreenState extends State<HealthScreen>
             ),
           ),
 
-          if (waiting.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionLabel('待救援', waiting.length, _red),
-            const SizedBox(height: 8),
-            ...waiting.map((t) => _taskCard(t)),
-          ],
-
-          if (accepted.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionLabel('進行中', accepted.length, _purple),
-            const SizedBox(height: 8),
-            ...accepted.map((t) => _taskCard(t)),
-          ],
-
-          if (done.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionLabel('已完成', done.length, _green),
-            const SizedBox(height: 8),
-            ...done.map((t) => _taskCard(t)),
+          if (tasks.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                _taskFilterTab(TaskStatus.waiting, '待救援', waiting.length, Icons.emergency_rounded, _red),
+                const SizedBox(width: 8),
+                _taskFilterTab(TaskStatus.accepted, '進行中', accepted.length, Icons.directions_run_rounded, _purple),
+                const SizedBox(width: 8),
+                _taskFilterTab(TaskStatus.done, '已完成', done.length, Icons.task_alt_rounded, _green),
+              ],
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              child: switch (_taskFilter) {
+                TaskStatus.waiting => _taskSection(
+                    key: const ValueKey(TaskStatus.waiting),
+                    label: '待救援',
+                    hint: '尚無人前往，等待協助',
+                    empty: '目前沒有待救援的求助',
+                    icon: Icons.emergency_rounded,
+                    color: _red,
+                    tasks: waiting,
+                  ),
+                TaskStatus.accepted => _taskSection(
+                    key: const ValueKey(TaskStatus.accepted),
+                    label: '進行中',
+                    hint: '已有夥伴前往協助',
+                    empty: '目前沒有進行中的任務',
+                    icon: Icons.directions_run_rounded,
+                    color: _purple,
+                    tasks: accepted,
+                  ),
+                TaskStatus.done => _taskSection(
+                    key: const ValueKey(TaskStatus.done),
+                    label: '已完成',
+                    hint: '協助已結束',
+                    empty: '還沒有完成的任務',
+                    icon: Icons.task_alt_rounded,
+                    color: _green,
+                    tasks: done,
+                  ),
+              },
+            ),
           ],
 
           if (tasks.isEmpty)
@@ -1032,23 +1059,128 @@ class _HealthScreenState extends State<HealthScreen>
     return const Text('附近目前無求助任務', style: TextStyle(color: _textSecondary));
   }
 
-  Widget _sectionLabel(String label, int count, Color color) {
-    return Row(
-      children: [
-        Container(
-          width: 3,
-          height: 14,
-          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
+  /// 頂端的三個分頁：選到的那頁實心上色，其餘淡色；數字讓沒選到的分頁也看得出有幾筆。
+  Widget _taskFilterTab(TaskStatus status, String label, int count, IconData icon, Color color) {
+    final selected = _taskFilter == status;
+    final fg = selected ? Colors.white : (count > 0 ? color : _textSecondary);
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _taskFilter = status),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? color : (count > 0 ? color.withValues(alpha: 0.1) : _card),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? color : (count > 0 ? color.withValues(alpha: 0.3) : const Color(0xFFE8E0D5)),
+            ),
+            boxShadow: [
+              if (selected)
+                BoxShadow(color: color.withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4)),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 14, color: fg),
+                  const SizedBox(width: 4),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: selected || count > 0 ? fg : _textSecondary.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(width: 8),
-        Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color, letterSpacing: 1)),
-        const SizedBox(width: 6),
-        Text('$count 筆', style: TextStyle(fontSize: 12, color: color.withValues(alpha: 0.7))),
-      ],
+      ),
     );
   }
 
-  Widget _taskCard(MutualAidTask task) {
+  /// 一個狀態一塊底色區：待救援是紅、進行中是紫、已完成是綠，
+  /// 區塊本身就說明了狀態，不用逐張卡片讀標籤。
+  Widget _taskSection({
+    Key? key,
+    required String label,
+    required String hint,
+    required String empty,
+    required IconData icon,
+    required Color color,
+    required List<MutualAidTask> tasks,
+  }) {
+    return Container(
+      key: key,
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(9)),
+                child: Icon(icon, size: 16, color: Colors.white),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color, letterSpacing: 1),
+                    ),
+                    Text(hint, style: TextStyle(fontSize: 11, color: color.withValues(alpha: 0.75))),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
+                child: Text(
+                  '${tasks.length} 筆',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...tasks.map((t) => _taskCard(t, color)),
+          if (tasks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 14, 0, 24),
+              child: Center(
+                child: Text(empty, style: TextStyle(fontSize: 13, color: color.withValues(alpha: 0.8))),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskCard(MutualAidTask task, Color sectionColor) {
     final color = _injuryColor(task.injury);
     final isDone = task.status == TaskStatus.done;
     final isAccepted = task.status == TaskStatus.accepted;
@@ -1058,125 +1190,135 @@ class _HealthScreenState extends State<HealthScreen>
       child: GestureDetector(
         onTap: isDone ? null : () => _showTaskDetail(task),
         child: Container(
-          padding: const EdgeInsets.all(14),
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: isDone ? _bg : _card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isAccepted ? _purple.withValues(alpha: 0.4) : const Color(0xFFE8E0D5),
-              width: isAccepted ? 1.5 : 1,
-            ),
+            borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
+                color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
             ],
           ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(9),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: isDone ? 0.06 : 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(_injuryIcon(task.injury), color: color.withValues(alpha: isDone ? 0.4 : 1), size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 左側色條：與所屬區塊同色
+                Container(width: 5, color: sectionColor.withValues(alpha: isDone ? 0.4 : 1)),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
                       children: [
-                        Text(
-                          task.name,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: isDone ? _textSecondary : _textPrimary,
+                        Container(
+                          padding: const EdgeInsets.all(9),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: isDone ? 0.06 : 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(_injuryIcon(task.injury), color: color.withValues(alpha: isDone ? 0.4 : 1), size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    task.name,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: isDone ? _textSecondary : _textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: color.withValues(alpha: isDone ? 0.06 : 0.1),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      task.injury,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: color.withValues(alpha: isDone ? 0.5 : 1),
+                                      ),
+                                    ),
+                                  ),
+                                  if (isAccepted) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _purple,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Text(
+                                        '協助中',
+                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                                      ),
+                                    ),
+                                  ],
+                                  if (task.isBle) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(Icons.bluetooth_audio_rounded, size: 14, color: Colors.blue),
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
+                                  const SizedBox(width: 3),
+                                  Expanded(
+                                    child: Text(
+                                      task.location,
+                                      style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.8)),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: isDone ? 0.06 : 0.1),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            task.injury,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: color.withValues(alpha: isDone ? 0.5 : 1),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              task.distanceLabel,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isDone ? _textSecondary : _textPrimary,
+                              ),
                             ),
-                          ),
-                        ),
-                        if (isAccepted) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _purple.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Text(
-                              '協助中',
-                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _purple),
-                            ),
-                          ),
-                        ],
-                        if (task.isBle) ...[
-                          const SizedBox(width: 6),
-                          const Icon(Icons.bluetooth_audio_rounded, size: 14, color: Colors.blue),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
-                        const SizedBox(width: 3),
-                        Expanded(
-                          child: Text(
-                            task.location,
-                            style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.8)),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                            if (!isDone)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Icon(Icons.chevron_right_rounded, color: _textSecondary, size: 18),
+                              ),
+                            if (isDone)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Icon(Icons.check_circle_rounded, color: _green.withValues(alpha: 0.5), size: 18),
+                              ),
+                          ],
                         ),
                       ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    task.distanceLabel,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isDone ? _textSecondary : _textPrimary,
                     ),
                   ),
-                  if (!isDone)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Icon(Icons.chevron_right_rounded, color: _textSecondary, size: 18),
-                    ),
-                  if (isDone)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Icon(Icons.check_circle_rounded, color: _green.withValues(alpha: 0.5), size: 18),
-                    ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
