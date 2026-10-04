@@ -6,6 +6,8 @@ import com.bitchat.android.favorites.FavoritesPersistenceService
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.mesh.PeerInfo
+import com.bitchat.android.model.ReadReceipt
+import com.bitchat.android.nostr.GeohashAliasRegistry
 import com.bitchat.android.nostr.NostrTransport
 import com.bitchat.android.testsupport.FakeAndroidKeyStore
 import com.bitchat.android.util.AppConstants
@@ -235,6 +237,57 @@ class MessageRouterTest {
                 isNull()
             )
             verify(nostr, never()).sendFavoriteNotification(any(), any())
+        }
+    }
+
+    @Test
+    fun `a read receipt for a peer off the mesh is not handed to Nostr while it is disabled`() {
+        // Same gate as the favourite notification: upstream falls back to Nostr for any peer
+        // without a mesh session, and with no relay ever connected the receipt would only queue.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        withNostrTransport { nostr ->
+            listOf(::peerOffline, ::peerConnectedNoSession).forEach { state ->
+                state()
+
+                router.sendReadReceipt(ReadReceipt("msg-1", myPeerID), peerID)
+
+                verify(nostr, never()).sendReadReceipt(any(), any())
+                verify(mesh, never()).sendReadReceipt(any(), any(), any())
+            }
+        }
+    }
+
+    @Test
+    fun `a read receipt still goes over the mesh to a peer with a session`() {
+        withNostrTransport { nostr ->
+            peerReady()
+
+            router.sendReadReceipt(ReadReceipt("msg-1", myPeerID), peerID)
+
+            verify(mesh, times(1)).sendReadReceipt(eq("msg-1"), eq(peerID), eq("peer"))
+            verify(nostr, never()).sendReadReceipt(any(), any())
+        }
+    }
+
+    @Test
+    fun `a delivery ACK is never handed to Nostr while it is disabled`() {
+        // The router only sends ACKs over Nostr (mesh ACKs come from MessageHandler), for a peer
+        // off the mesh and for a geohash alias alike.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        val alias = "nostr_${"cd".repeat(8)}"
+        GeohashAliasRegistry.put(alias, "ef".repeat(32))
+        try {
+            withNostrTransport { nostr ->
+                peerOffline()
+
+                router.sendDeliveryAck("msg-1", peerID)
+                router.sendDeliveryAck("msg-2", alias)
+
+                verify(nostr, never()).sendDeliveryAck(any(), any())
+                verify(nostr, never()).sendDeliveryAckGeohash(any(), any(), any())
+            }
+        } finally {
+            GeohashAliasRegistry.clear()
         }
     }
 

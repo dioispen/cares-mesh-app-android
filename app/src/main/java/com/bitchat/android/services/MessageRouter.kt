@@ -158,15 +158,26 @@ class MessageRouter private constructor(
         if (meshTarget != null && isReady(mesh, meshTarget)) {
             Log.d(TAG, "Routing READ via mesh to ${meshTarget.take(8)}… id=${receipt.originalMessageID.take(8)}…")
             mesh.sendReadReceipt(receipt.originalMessageID, meshTarget, mesh.getPeerNicknames()[meshTarget] ?: mesh.myPeerID)
-        } else {
+        } else if (AppConstants.Nostr.ENABLED) {
             Log.d(TAG, "Routing READ via Nostr to ${toPeerID.take(8)}… id=${receipt.originalMessageID.take(8)}…")
             nostr.sendReadReceipt(receipt, nostrTarget)
+        } else {
+            // CARES runs mesh-only (see canSendViaNostr): with no relay ever connected, the receipt
+            // would only wait in NostrRelayManager's queue. Upstream does not queue receipts for the
+            // mesh either, so the peer keeps seeing the message as delivered, not read.
+            Log.d(TAG, "Read receipt for ${toPeerID.take(8)}… not sent: no mesh session, Nostr disabled")
         }
     }
 
     fun sendDeliveryAck(messageID: String, toPeerID: String) {
         // Mesh delivery ACKs are sent by the receiver automatically.
         // Only route via Nostr when mesh path isn't available or when this is a geohash alias
+        if (!AppConstants.Nostr.ENABLED) {
+            // CARES runs mesh-only (see canSendViaNostr): every path below is Nostr, and with no
+            // relay ever connected the ACK would only wait in NostrRelayManager's queue.
+            Log.d(TAG, "Delivery ACK for ${toPeerID.take(8)}… not sent: Nostr disabled")
+            return
+        }
         if (com.bitchat.android.nostr.GeohashAliasRegistry.contains(toPeerID)) {
             val recipientHex = com.bitchat.android.nostr.GeohashAliasRegistry.get(toPeerID)
             if (recipientHex != null) {
