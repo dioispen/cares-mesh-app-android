@@ -94,6 +94,33 @@ void main() {
     });
   });
 
+  group('Dart takes every chat snapshot Kotlin pushes', () {
+    // Kotlin names each `chat_*` event in ChatSerialization's EVENT_* constants; ChatService only
+    // keeps the types it has a `case ChatEvents.x` for and ignores the rest.
+    Set<String> kotlinEvents() => {
+          for (final m in RegExp(r'const val EVENT_\w+ = "(\w+)"').allMatches(_read('$_kotlinBridgeDir/ChatSerialization.kt')))
+            m.group(1)!,
+        };
+
+    Map<String, String> dartEvents() {
+      final block = RegExp(r'abstract final class ChatEvents \{(.*?)\n\}', dotAll: true).firstMatch(_read(_dartBridge))?.group(1) ??
+          fail('ChatEvents not found in $_dartBridge');
+      return {for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(block)) m.group(1)!: m.group(2)!};
+    }
+
+    test('the two sides name the same events', () {
+      expect(kotlinEvents(), containsAll(['chat_public_messages', 'chat_conversations']));
+      expect(dartEvents().values.toSet(), kotlinEvents());
+    });
+
+    test('ChatService handles each of them', () {
+      final service = _read('lib/services/chat_service.dart');
+      final handled = {for (final m in RegExp(r'case ChatEvents\.(\w+):').allMatches(service)) m.group(1)!};
+
+      expect(handled, dartEvents().keys.toSet());
+    });
+  });
+
   group('Dart knows every error code the chat bridge refuses with', () {
     Map<String, String> kotlinCodes() => {
           for (final m in RegExp(r'const val (ERROR_\w+) = "(\w+)"').allMatches(_read('$_kotlinBridgeDir/ChatBridge.kt')))

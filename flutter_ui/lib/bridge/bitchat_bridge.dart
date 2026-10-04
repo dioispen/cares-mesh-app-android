@@ -51,9 +51,10 @@ abstract final class ChatEvents {
   /// `{type, nickname: String}`：自己的 mesh 暱稱（原生 `ChatViewModel.nickname`），原樣、可能是空字串。
   static const nickname = 'chat_nickname';
 
-  /// `{type, onlineCount: int, peers: List<Map>}`：線上人數與 mesh peer 列表的完整快照，
+  /// `{type, onlineCount: int, peopleCount: int, peers: List<Map>}`：線上人數與 mesh peer 列表的完整快照，
   /// 依原生列表的顯示順序：在線 peer，再接離線的我的最愛（`connection: offline`，#58）；每列帶
-  /// 我的最愛星號的兩個方向 `isFavorite`、`theyFavoritedUs`（見 `models/chat_peer.dart`）。
+  /// 我的最愛星號的兩個方向 `isFavorite`、`theyFavoritedUs`（見 `models/chat_peer.dart`）。已有對話的
+  /// peer 列在 [conversations]，不在這裡；`peopleCount` 不算他們，`onlineCount`（標頭的人數）照算（#73）。
   static const peers = 'chat_peers';
 
   /// `{type, showCommands: bool, commands: List<Map>, showMentions: bool, mentions: List<String>}`：
@@ -81,6 +82,12 @@ abstract final class ChatEvents {
   /// `navigation` 為 null（見 `models/chat_navigation.dart`）。它只是提醒：要導航前一定先以
   /// [ChatMethods.takePendingNavigation] 取走，照取到的去，每個點擊只處理一次。
   static const pendingNavigation = 'chat_pending_navigation';
+
+  /// `{type, state: loading|ready|error, conversations: List<Map>}`：原生持有的所有私訊對話（#73），
+  /// 對方在線與離線在同一份清單、依原生順序；每列帶名稱、最後一則預覽與時間、未讀數、是否在線
+  /// （見 `models/chat_conversation.dart`）。peer 列表上方的「對話」區段就是它，點一列以
+  /// `conversationID` 開啟私訊（[ChatMethods.startPrivateChat]）。
+  static const conversations = 'chat_conversations';
 }
 
 class BitchatBridge {

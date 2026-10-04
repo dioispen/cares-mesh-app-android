@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/chat_conversation.dart';
 import '../models/chat_message.dart';
 import '../models/chat_peer.dart';
 import '../models/chat_unread.dart';
@@ -17,8 +18,9 @@ import 'private_chat_screen.dart';
 ///
 /// 私訊（#55）：原生聊天核心有「目前選定的私訊」時，它的輸入框文字會送成私訊，所以這個畫面
 /// 依 [ChatService.selectedPrivateChat] 開關 [PrivateChatScreen]，不自行判斷：
-/// - 從 peer 列表點一個 peer：關掉列表、立刻開啟私訊畫面，由私訊畫面向原生開啟對話
-///   （與原生相同：先開畫面，畫面再呼叫 `startPrivateChat`）。
+/// - 從 peer 列表點一個 peer，或點列表上方「對話」區段的一段對話（#73，對方離線也可以）：關掉列表、
+///   立刻開啟私訊畫面，由私訊畫面向原生開啟對話（與原生相同：先開畫面，畫面再呼叫
+///   `startPrivateChat`；對話以它的對話 ID 開啟，原生會載入完整紀錄）。
 /// - 原生自己選定了私訊（公開聊天室輸入 `/m 暱稱`；點私訊通知時 `ChatNavigationHost` 也經由它）
 ///   而私訊畫面沒開：開啟它。
 ///   Activity 重建時私訊畫面隨 engine 消失、Dart 從第一個畫面重來，原生端會一併結束私訊
@@ -27,8 +29,8 @@ import 'private_chat_screen.dart';
 ///   [ChatService.endPrivateChat]；原生確認結束前不再依舊快照重開私訊畫面。
 ///
 /// 未讀私訊（#56）照原生標頭：有未讀時 AppBar 最左側出現橘色信封，點了由原生挑出最新的未讀
-/// 對話（`openLatestUnreadPrivateChat`）並開啟它；各 peer 的未讀數在 peer 列表上。開啟對話後由原生
-/// 清除未讀，這裡只跟著快照。
+/// 對話（`openLatestUnreadPrivateChat`）並開啟它；各對話的未讀數在列表上方的「對話」區段（#73）。
+/// 開啟對話後由原生清除未讀，這裡只跟著快照。
 ///
 /// 私訊畫面開著時公開輸入框在它下面、看不到；就算原生的選定私訊與畫面暫時不一致，
 /// 原生端也只在選定私訊與輸入框相符時才送出（見 `BitchatBridge.sendMessage`），
@@ -164,6 +166,13 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
     _openPrivateChat(peer.peerID, title: peer.displayName);
   }
 
+  /// 對話區段點了某段對話（#73）：關掉列表，以它的對話 ID 開啟私訊——原生對話列也是以對話 ID
+  /// 開啟（`showPrivateChatSheet` → `startPrivateChat`）。對方離線時一樣能開，送出的訊息由原生排隊。
+  void _onConversationTap(BuildContext sheetContext, ChatConversation conversation) {
+    Navigator.of(sheetContext).pop();
+    _openPrivateChat(conversation.conversationID, title: conversation.displayName);
+  }
+
   /// 未讀信封：原生挑出最新收到未讀私訊的對話（離線的對話也算），開啟它。
   Future<void> _openLatestUnread() async {
     if (_privateChatOpen) return;
@@ -231,14 +240,16 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         },
       );
 
-  /// 打開「附近的人」；列表隨 [ChatService.peerList] 即時更新，點一個人開啟私訊（離線的我的最愛
-  /// 也可以，訊息由原生排隊），按尾端星號切換我的最愛（#58）。
+  /// 打開「對話」與「附近的人」；列表隨 [ChatService.conversations]、[ChatService.peerList] 即時更新。
+  /// 點一段對話或一個人開啟私訊（對方離線也可以，訊息由原生排隊），按 peer 列尾端星號切換我的最愛（#58）。
   Future<void> _showPeerList() => showModalBottomSheet<void>(
         context: context,
         backgroundColor: Colors.transparent,
         isScrollControlled: true,
         builder: (sheetContext) => PeerListSheet(
           peerList: _chat.peerList,
+          conversations: _chat.conversations,
+          onConversationTap: (conversation) => _onConversationTap(sheetContext, conversation),
           onPeerTap: (peer) => _onPeerTap(sheetContext, peer),
           // 列表保持開著，失敗的提示也出現在列表上。
           onFavoriteToggle: (peer) => toggleFavoriteOrNotify(sheetContext, _chat, peer.peerID, logTag: 'ChatScreen'),
