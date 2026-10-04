@@ -291,7 +291,7 @@ class _SosHeroCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 7),
                   Text(
-                    '一鍵傳送 GPS 位置・即刻求援',
+                    '長按 3 秒・傳送 GPS 位置求援',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.85),
                       fontSize: 13,

@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
@@ -13,8 +16,26 @@ class SOSScreen extends StatefulWidget {
   State<SOSScreen> createState() => _SOSScreenState();
 }
 
-class _SOSScreenState extends State<SOSScreen> {
+class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   final SOSService _sosService = SOSService();
+
+  /// 要持續按住多久才算送出。一碰就送很容易在口袋裡或慌亂中誤觸。
+  static const _holdDuration = Duration(seconds: 3);
+
+  /// 待機時的心跳式跳動，提示這顆按鈕可以按。
+  late final AnimationController _pulseController;
+
+  /// 按住的進度（0 → 1），驅動外圈進度環與按鈕由小變大。
+  late final AnimationController _holdController;
+
+  /// 按下瞬間的「往下壓」：按鈕縮小、下沉、陰影變淺。
+  late final AnimationController _pressController;
+
+  final AudioPlayer _chargePlayer = AudioPlayer();
+  final AudioPlayer _alertPlayer = AudioPlayer();
+
+  /// 上一次觸發震動時已經過的整秒數，用來每滿一秒震一下。
+  int _lastHapticSecond = 0;
 
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
@@ -35,8 +56,77 @@ class _SOSScreenState extends State<SOSScreen> {
   @override
   void initState() {
     super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat();
+    _holdController = AnimationController(
+      vsync: this,
+      duration: _holdDuration,
+      reverseDuration: const Duration(milliseconds: 300),
+    )
+      ..addListener(_onHoldTick)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) _onHoldComplete();
+      });
+    _pressController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 120),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
     _loadUser();
     _fetchLocation();
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _holdController.dispose();
+    _pressController.dispose();
+    _chargePlayer.dispose();
+    _alertPlayer.dispose();
+    super.dispose();
+  }
+
+  bool get _canHold => !_sosSent && !_isSending;
+
+  void _onHoldStart() {
+    if (!_canHold) return;
+    _lastHapticSecond = 0;
+    HapticFeedback.mediumImpact();
+    _pressController.forward();
+    _holdController.forward(from: 0);
+    _chargePlayer.play(AssetSource('sounds/sos_charge.wav'));
+  }
+
+  void _onHoldEnd() {
+    _pressController.reverse();
+    if (_holdController.status != AnimationStatus.forward) return;
+    _holdController.reverse();
+    _chargePlayer.stop();
+    _showMessage('請持續按住 3 秒才會送出求救', _sosRed);
+  }
+
+  /// 每滿一秒震一下，讓人不看螢幕也知道還要按多久。
+  void _onHoldTick() {
+    if (_holdController.status != AnimationStatus.forward) return;
+    final second = (_holdController.value * _holdDuration.inSeconds).floor();
+    if (second > _lastHapticSecond) {
+      _lastHapticSecond = second;
+      HapticFeedback.mediumImpact();
+    }
+  }
+
+  void _onHoldComplete() {
+    HapticFeedback.heavyImpact();
+    _chargePlayer.stop();
+    // 沒有個人資料時送不出去（_sendSOS 會提示原因），不能播「成功」音誤導人。
+    if (_currentUser != null) {
+      _alertPlayer.play(AssetSource('sounds/sos_success.wav'));
+    }
+    _pressController.reverse();
+    _holdController.value = 0;
+    _sendSOS();
   }
 
   Future<void> _loadUser() async {
@@ -160,7 +250,7 @@ class _SOSScreenState extends State<SOSScreen> {
   /// 上方橫幅的文字。送出之後要照實說明狀況：離線暫存、以及有沒有附上位置，
   /// 都直接影響求救的人接下來該怎麼做。
   String get _statusMessage {
-    if (!_sosSent) return '點擊下方按鈕發出求救訊號';
+    if (!_sosSent) return '長按下方按鈕 3 秒發出求救訊號';
     if (_queuedOffline) return '目前離線，求救已暫存，恢復連線後會自動送出。';
     if (_position == null) return 'SOS 已發送，但沒有附上位置，請設法告知所在地。';
     return 'SOS 已發送，請保持冷靜等待救援。';
@@ -233,67 +323,28 @@ class _SOSScreenState extends State<SOSScreen> {
 
               const Spacer(),
 
-              // SOS 大圓按鈕
-              GestureDetector(
-                onTap: _sosSent || _isSending ? null : _sendSOS,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 400),
-                  width: 200,
-                  height: 200,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _sosSent ? const Color(0xFF9E9690) : _sosRed,
-                    boxShadow: [
-                      BoxShadow(
-                        color: (_sosSent ? const Color(0xFF9E9690) : _sosRed)
-                            .withValues(alpha: 0.35),
-                        blurRadius: 36,
-                        spreadRadius: 6,
-                      ),
-                    ],
-                  ),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Container(
-                        width: 180,
-                        height: 180,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            width: 1.5,
-                          ),
-                        ),
-                      ),
-                      _isSending
-                          ? const CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 3,
-                            )
-                          : Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  _sosSent
-                                      ? Icons.check_rounded
-                                      : Icons.sos_rounded,
-                                  color: Colors.white,
-                                  size: 52,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _sosSent ? '已發送' : 'SOS',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                    ],
+              // SOS 大圓按鈕：長按 3 秒才送出，避免誤觸
+              Semantics(
+                button: true,
+                label: _sosSent ? 'SOS 已發送' : 'SOS 緊急求救，長按 3 秒送出',
+                // 讀螢幕軟體沒有「按住 3 秒」的手勢，改用長按動作直接送出。
+                onLongPress: _canHold ? _sendSOS : null,
+                excludeSemantics: true,
+                child: Listener(
+                  onPointerDown: (_) => _onHoldStart(),
+                  onPointerUp: (_) => _onHoldEnd(),
+                  onPointerCancel: (_) => _onHoldEnd(),
+                  child: SizedBox(
+                    width: 280,
+                    height: 280,
+                    child: AnimatedBuilder(
+                      animation: Listenable.merge([
+                        _pulseController,
+                        _holdController,
+                        _pressController,
+                      ]),
+                      builder: (context, _) => _buildSosButton(),
+                    ),
                   ),
                 ),
               ),
@@ -368,6 +419,161 @@ class _SOSScreenState extends State<SOSScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 以 [center] 為中心的一個凸起（0 → 1 → 0），組成心跳的兩下。
+  static double _bump(double t, double center) {
+    final d = (t - center) / 0.07;
+    return math.exp(-d * d);
+  }
+
+  Widget _buildSosButton() {
+    final hold = _holdController.value;
+    final holdEased = Curves.easeOut.transform(hold);
+    final press = _pressController.value;
+    final holding = _holdController.status == AnimationStatus.forward;
+    final idle = _canHold && hold == 0 && press == 0;
+
+    // 待機：心跳式的「咚、咚」兩下
+    final t = _pulseController.value;
+    final beat = idle ? math.max(_bump(t, 0.15), 0.6 * _bump(t, 0.4)) : 0.0;
+
+    // 按下先往下壓縮小，按住期間再一路由小變大
+    final scale = (1 + 0.06 * beat) * (1 - 0.12 * press) * (1 + 0.3 * holdEased);
+    final sink = 6 * press;
+
+    final baseColor = _sosSent ? const Color(0xFF9E9690) : _sosRed;
+    final color = Color.lerp(baseColor, const Color(0xFFA2361F), holdEased)!;
+    final remaining =
+        (_holdDuration.inSeconds - (hold * _holdDuration.inSeconds).floor())
+            .clamp(1, _holdDuration.inSeconds);
+
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // 待機時向外擴散的波紋
+        if (idle)
+          for (final offset in const [0.0, 0.5])
+            Builder(builder: (context) {
+              final p = (t + offset) % 1.0;
+              return Container(
+                width: 200 + 80 * p,
+                height: 200 + 80 * p,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: _sosRed.withValues(alpha: 0.35 * (1 - p)),
+                    width: 2,
+                  ),
+                ),
+              );
+            }),
+
+        // 按住時的進度環
+        if (hold > 0)
+          SizedBox(
+            width: 266,
+            height: 266,
+            child: CircularProgressIndicator(
+              value: hold,
+              strokeWidth: 6,
+              strokeCap: StrokeCap.round,
+              color: _sosRed,
+              backgroundColor: _sosRed.withValues(alpha: 0.15),
+            ),
+          ),
+
+        Transform.translate(
+          offset: Offset(0, sink),
+          child: Transform.scale(
+            scale: scale,
+            child: Container(
+              width: 200,
+              height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color,
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.35 + 0.2 * holdEased),
+                    blurRadius: 36 - 24 * press + 20 * holdEased,
+                    spreadRadius: 6 - 4 * press + 8 * holdEased,
+                    offset: Offset(0, 8 - 6 * press),
+                  ),
+                ],
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 180,
+                    height: 180,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                  if (_isSending)
+                    const CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 3,
+                    )
+                  else if (holding)
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          '$remaining',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 56,
+                            fontWeight: FontWeight.w800,
+                            height: 1,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          '持續按住',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _sosSent ? Icons.check_rounded : Icons.sos_rounded,
+                          color: Colors.white,
+                          size: 52,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _sosSent ? '已發送' : '長按 3 秒',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
