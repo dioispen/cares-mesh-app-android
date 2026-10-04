@@ -49,6 +49,8 @@ class BitchatFlutterChannels(
     private val activity: Activity? = null,
     private val events: BridgeEventEmitter = BridgeEventEmitter(),
     additionalMethodHandlers: List<BridgeMethodHandler> = emptyList(),
+    /** `pickAvatarPhoto` 的實作；沒有 Activity（例如背景 engine）時為 null。 */
+    private val avatarPhotoPicker: AvatarPhotoPicker? = null,
     /** 回覆 method 的執行緒（主執行緒）；[destroy] 時取消。 */
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     /** 讀加密身分儲存區（keystore 與磁碟）的地方，不在主執行緒。 */
@@ -172,6 +174,15 @@ class BitchatFlutterChannels(
                     result.success(true)
                 } catch (e: Exception) {
                     result.error("START_FAILED", e.message, null)
+                }
+            }
+
+            "pickAvatarPhoto" -> {
+                val picker = avatarPhotoPicker
+                if (picker == null) {
+                    result.error("NO_ACTIVITY", "Cannot open the photo picker without an activity", null)
+                } else {
+                    picker.pick(result)
                 }
             }
 

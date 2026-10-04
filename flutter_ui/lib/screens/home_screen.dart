@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/mascot_service.dart';
 import '../widgets/chat_navigation_host.dart';
+import '../widgets/user_avatar.dart';
 import 'knowledge_screen.dart';
 import 'shelter_screen.dart';
 import 'sos_screen.dart';
@@ -67,6 +70,26 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  /// 換大頭貼：本機先更新讓畫面立刻反映，Firestore 在背景寫入。
+  /// 離線時寫入會留在佇列，恢復連線再送出，所以不等它完成。
+  /// 選回預設頭像時 [photo] 為 null，雲端的舊照片會一併刪除。
+  Future<void> _changeAvatar(String avatarId, String? photo) async {
+    final user = _user;
+    if (user == null) return;
+    final updated = user.withAvatar(avatarId, avatarPhoto: photo);
+    setState(() => _user = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKeyUser, jsonEncode(updated.toJson()));
+    unawaited(FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.id)
+        .set({
+          'avatar': avatarId,
+          'avatarPhoto': photo ?? FieldValue.delete(),
+        }, SetOptions(merge: true))
+        .catchError((Object e) => debugPrint('update avatar failed: $e')));
+  }
+
   void _showProfile() {
     if (_user == null) return;
     mascotOptionsNotifier.value = const [];
@@ -74,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _ProfileSheet(user: _user!),
+      builder: (_) => _ProfileSheet(user: _user!, onAvatarChanged: _changeAvatar),
     ).whenComplete(() {
       mascotOptionsNotifier.value = homeOptions;
     });
@@ -490,38 +513,14 @@ class _UserAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const brown = Color(0xFF5C3D2E);
-    final initials = user != null && user!.name.isNotEmpty
-        ? user!.name.characters.first.toUpperCase()
-        : '?';
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-            color: brown,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: brown.withValues(alpha: 0.25),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Center(
-            child: Text(
-              initials,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
+        UserAvatarCircle(
+          avatarId: user?.avatar,
+          photo: user?.avatarPhoto,
+          name: user?.name,
+          size: 46,
         ),
         if (user != null)
           Padding(
@@ -541,19 +540,74 @@ class _UserAvatar extends StatelessWidget {
 }
 
 // ── 個人資料底部面板 ──────────────────────────────────────
-class _ProfileSheet extends StatelessWidget {
+class _ProfileSheet extends StatefulWidget {
   final AppUser user;
-  const _ProfileSheet({required this.user});
+  final void Function(String avatarId, String? photo) onAvatarChanged;
+  const _ProfileSheet({required this.user, required this.onAvatarChanged});
+
+  @override
+  State<_ProfileSheet> createState() => _ProfileSheetState();
+}
+
+class _ProfileSheetState extends State<_ProfileSheet> {
+  late String? _avatar = widget.user.avatar;
+  late String? _photo = widget.user.avatarPhoto;
+
+  void _pickAvatar() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        decoration: const BoxDecoration(
+          color: Color(0xFFFEFDF9),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(height: 18),
+            const Text('更換大頭貼',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF3D2C1E))),
+            const SizedBox(height: 18),
+            AvatarPicker(
+              selectedId: _avatar,
+              photo: _photo,
+              onSelected: (id) {
+                setState(() {
+                  _avatar = id;
+                  _photo = null;
+                });
+                widget.onAvatarChanged(id, null);
+                Navigator.pop(sheetContext);
+              },
+              onPickPhoto: () async {
+                final photo = await pickAvatarPhoto(sheetContext);
+                if (photo == null || !mounted) return;
+                setState(() {
+                  _avatar = photoAvatarId;
+                  _photo = photo;
+                });
+                widget.onAvatarChanged(photoAvatarId, photo);
+                if (sheetContext.mounted) Navigator.pop(sheetContext);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     const brown = Color(0xFF5C3D2E);
     const green = Color(0xFF7AA67A);
     const textPrimary = Color(0xFF3D2C1E);
-
-    final initials = user.name.isNotEmpty
-        ? user.name.characters.first.toUpperCase()
-        : '?';
+    final user = widget.user;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
@@ -572,17 +626,26 @@ class _ProfileSheet extends StatelessWidget {
           const SizedBox(height: 24),
 
           // 頭像 + 姓名 + ID
-          Container(
-            width: 68,
-            height: 68,
-            decoration: BoxDecoration(
-              color: brown,
-              shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: brown.withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4))],
-            ),
-            child: Center(
-              child: Text(initials,
-                  style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800)),
+          GestureDetector(
+            onTap: _pickAvatar,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                UserAvatarCircle(avatarId: _avatar, photo: _photo, name: user.name, size: 76),
+                Positioned(
+                  right: -2,
+                  bottom: -2,
+                  child: Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: brown,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    child: const Icon(Icons.edit_rounded, size: 13, color: Colors.white),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 12),

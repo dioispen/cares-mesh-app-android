@@ -120,6 +120,12 @@ class BitchatBridge {
     }
   }
 
+  /// 從裝置相簿挑一張照片當大頭貼。回傳已在原生端裁成正方形、縮成小圖的 JPEG；
+  /// 使用者取消時為 null。沒有原生實作的平台（例如 iOS 開發用模擬機）會丟
+  /// [MissingPluginException]，呼叫端要自行處理。
+  static Future<Uint8List?> pickAvatarPhoto() =>
+      _method.invokeMethod<Uint8List>('pickAvatarPhoto');
+
   /// 檢查權限是否已開啟 (通知、藍牙、位置)
   static Future<bool> checkPermissions() async {
     try {
