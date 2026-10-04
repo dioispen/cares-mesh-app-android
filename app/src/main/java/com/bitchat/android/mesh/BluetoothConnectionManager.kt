@@ -3,6 +3,7 @@ package com.bitchat.android.mesh
 import android.bluetooth.*
 import android.content.Context
 import android.util.Log
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import kotlinx.coroutines.*
@@ -17,7 +18,8 @@ import kotlinx.coroutines.flow.combine
 class BluetoothConnectionManager(
     private val context: Context, 
     private val myPeerID: String,
-    private val fragmentManager: FragmentManager? = null
+    private val fragmentManager: FragmentManager? = null,
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
 ) {
     
     companion object {
@@ -37,8 +39,8 @@ class BluetoothConnectionManager(
     
     // Component managers
     private val permissionManager = BluetoothPermissionManager(context)
-    private val connectionTracker = BluetoothConnectionTracker(connectionScope, powerManager)
-    private val packetBroadcaster = BluetoothPacketBroadcaster(connectionScope, connectionTracker, fragmentManager, myPeerID)
+    private val connectionTracker = BluetoothConnectionTracker(connectionScope, powerManager, experimentRecorder)
+    private val packetBroadcaster = BluetoothPacketBroadcaster(connectionScope, connectionTracker, fragmentManager, myPeerID, experimentRecorder)
     
     // Delegate for component managers to call back to main manager
     private val componentDelegate = object : BluetoothConnectionManagerDelegate {

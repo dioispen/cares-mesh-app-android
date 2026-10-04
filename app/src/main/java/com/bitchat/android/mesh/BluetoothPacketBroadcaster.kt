@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothStatusCodes
 import android.os.Build
 import android.util.Log
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.MessageType
@@ -46,7 +47,9 @@ class BluetoothPacketBroadcaster(
     private val connectionScope: CoroutineScope,
     private val connectionTracker: BluetoothConnectionTracker,
     private val fragmentManager: FragmentManager?,
-    private val myPeerID: String
+    private val myPeerID: String,
+    /** Field-experiment TX / RELAY and QFULL hook (#70): only here is a packet's real fanout known. */
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
 ) {
     
     companion object {
@@ -348,6 +351,19 @@ class BluetoothPacketBroadcaster(
         // iOS-compatible: Use selective padding policy for BLE
         val padForBLE = BLEPacketPaddingPolicy.shouldPadForBLE(packet.type)
         val data = packet.toBinaryData(padding = padForBLE) ?: return false
+        val fanout = writeToLinks(routed, data, gattServer, characteristic)
+        experimentRecorder.onBroadcastWritten(packet, data.size, fanout)
+        return fanout > 0
+    }
+
+    /** Hands [data] to the links [routed] should go out on; returns how many accepted it. */
+    private fun writeToLinks(
+        routed: RoutedPacket,
+        data: ByteArray,
+        gattServer: BluetoothGattServer?,
+        characteristic: BluetoothGattCharacteristic?
+    ): Int {
+        val packet = routed.packet
         val typeName = MessageType.fromValue(packet.type)?.name ?: packet.type.toString()
         val senderPeerID = routed.peerID ?: packet.senderID.toHexString()
         val incomingAddr = routed.relayAddress
@@ -389,7 +405,7 @@ class BluetoothPacketBroadcaster(
                 }
             }
 
-            if (sent) return true
+            if (sent) return 1
 
             Log.d(TAG, "Source Routing: First hop $firstHop not connected. Falling back to standard broadcast logic.")
         }
@@ -406,7 +422,7 @@ class BluetoothPacketBroadcaster(
                 if (notifyDevice(targetDevice, data, gattServer, characteristic)) {
                     val toPeer = connectionTracker.addressPeerMap[targetDevice.address]
                     logPacketRelay(typeName, senderPeerID, senderNick, incomingPeer, incomingAddr, toPeer, targetDevice.address, packet.ttl, packet.version, routeInfo)
-                    return true
+                    return 1
                 }
             }
 
@@ -419,7 +435,7 @@ class BluetoothPacketBroadcaster(
                 if (writeToDeviceConn(targetDeviceConn, data)) {
                     val toPeer = connectionTracker.addressPeerMap[targetDeviceConn.device.address]
                     logPacketRelay(typeName, senderPeerID, senderNick, incomingPeer, incomingAddr, toPeer, targetDeviceConn.device.address, packet.ttl, packet.version, routeInfo)
-                    return true
+                    return 1
                 }
             }
         }
@@ -429,7 +445,7 @@ class BluetoothPacketBroadcaster(
         val connectedDevices = connectionTracker.getConnectedDevices()
 
         val senderID = packet.senderID.toHexString()
-        var accepted = false
+        var fanout = 0
 
         // Send to server connections (devices connected to our GATT server)
         subscribedDevices.forEach { device ->
@@ -441,7 +457,7 @@ class BluetoothPacketBroadcaster(
             }
             val sent = notifyDevice(device, data, gattServer, characteristic)
             if (sent) {
-                accepted = true
+                fanout++
                 val toPeer = connectionTracker.addressPeerMap[device.address]
                 logPacketRelay(typeName, senderPeerID, senderNick, incomingPeer, incomingAddr, toPeer, device.address, packet.ttl, packet.version, routeInfo)
             }
@@ -458,13 +474,13 @@ class BluetoothPacketBroadcaster(
                 }
                 val sent = writeToDeviceConn(deviceConn, data)
                 if (sent) {
-                    accepted = true
+                    fanout++
                     val toPeer = connectionTracker.addressPeerMap[deviceConn.device.address]
                     logPacketRelay(typeName, senderPeerID, senderNick, incomingPeer, incomingAddr, toPeer, deviceConn.device.address, packet.ttl, packet.version, routeInfo)
                 }
             }
         }
-        return accepted
+        return fanout
     }
     
     /**
@@ -509,6 +525,7 @@ class BluetoothPacketBroadcaster(
      * that the controller has not completed yet.
      */
     private fun enqueueSend(key: SendKey, request: PendingSend): Boolean {
+        var queueFull = false
         val startNow = synchronized(sendLock) {
             val state = sendStates.getOrPut(key, ::LinkSendState)
             if (
@@ -516,7 +533,8 @@ class BluetoothPacketBroadcaster(
                 state.pendingBytes + request.data.size > MAX_PENDING_BYTES_PER_LINK
             ) {
                 Log.w(TAG, "BLE send queue full for ${key.direction}; rejecting ${request.data.size} bytes")
-                return false
+                queueFull = true
+                return@synchronized false
             }
             state.pending.addLast(request)
             state.pendingBytes += request.data.size
@@ -526,6 +544,10 @@ class BluetoothPacketBroadcaster(
             } else {
                 false
             }
+        }
+        if (queueFull) {
+            experimentRecorder.onSendQueueFull(key.deviceAddress, request.data)
+            return false
         }
         if (startNow) startHead(key)
         return true

@@ -2,6 +2,7 @@ package com.bitchat.android.mesh
 
 import android.util.Log
 import com.bitchat.android.crypto.EncryptionService
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.sync.PacketIdUtil
 import com.bitchat.android.protocol.MessageType
@@ -18,7 +19,12 @@ import kotlin.collections.mutableSetOf
  * replay attack protection, and key exchange handling
  * Extracted from BluetoothMeshService for better separation of concerns
  */
-class SecurityManager(private val encryptionService: EncryptionService, private val myPeerID: String) {
+class SecurityManager(
+    private val encryptionService: EncryptionService,
+    private val myPeerID: String,
+    /** Field-experiment RX / DUP hook (#70); only the BLE mesh passes a recording one. */
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+) {
     
     companion object {
         private const val TAG = "SecurityManager"
@@ -47,8 +53,11 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
     
     /**
      * Validate packet security (timestamp, replay attacks, duplicates, signatures)
+     *
+     * [ingressAddress] is the link the packet arrived on; it is only passed on to the
+     * experiment recorder.
      */
-    fun validatePacket(packet: BitchatPacket, peerID: String): Boolean {
+    fun validatePacket(packet: BitchatPacket, peerID: String, ingressAddress: String? = null): Boolean {
         // Skip validation for our own packets
         if (peerID == myPeerID) {
             return false
@@ -85,6 +94,7 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
                     packet.ttl >= com.bitchat.android.util.AppConstants.MESSAGE_TTL_HOPS
 
             if (!isFreshAnnounce) {
+                experimentRecorder.onDuplicate(packet, ingressAddress)
                 return false
             }
         }
@@ -100,6 +110,7 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
         processedMessages.add(messageID)
         messageTimestamps[messageID] = currentTime
 
+        experimentRecorder.onReceived(packet, ingressAddress)
         return true
     }
     

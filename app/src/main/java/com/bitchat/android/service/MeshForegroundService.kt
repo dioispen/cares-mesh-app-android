@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.flutter.FlutterChatActivity
 import com.bitchat.android.R
 import com.bitchat.android.mesh.BluetoothMeshService
@@ -123,6 +124,10 @@ class MeshForegroundService : Service() {
             MeshServiceHolder.attach(created)
         }
         MeshServiceHolder.getUnifiedOrCreate(applicationContext)
+
+        // The debug-only experiment sender (#70) runs in this service's scope so it keeps
+        // sending while the app is in the background.
+        ExperimentTools.onMeshServiceCreated(scope)
 
         // Notification content is driven by peer-state changes, not a permanent timer.
         updateJob = scope.launch {
@@ -369,6 +374,7 @@ class MeshForegroundService : Service() {
     override fun onDestroy() {
         updateJob?.cancel()
         updateJob = null
+        ExperimentTools.onMeshServiceDestroyed()
         // Cancel the service coroutine scope to prevent leaks
         try { serviceJob.cancel() } catch (_: Exception) { }
         // Best-effort ensure we are not marked foreground

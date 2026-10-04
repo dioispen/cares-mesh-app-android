@@ -9,8 +9,10 @@ import com.bitchat.android.noise.NoisePeerIdentity
 import com.bitchat.android.noise.NoiseSessionError
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.testsupport.RecordingExperimentRecorder
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -685,4 +687,64 @@ class SecurityManagerTest {
 
     private fun String.hexToByteArrayForTest(): ByteArray =
         chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    // Experiment recorder insertion points (#70).
+
+    private fun recordingSecurityManager(): Pair<SecurityManager, RecordingExperimentRecorder> {
+        val recorder = RecordingExperimentRecorder()
+        securityManager.shutdown()
+        securityManager = SecurityManager(fakeEncryptionService, myPeerID, recorder)
+        securityManager.delegate = mockDelegate
+        return securityManager to recorder
+    }
+
+    private fun signedHealthReport(senderID: String): BitchatPacket = BitchatPacket(
+        version = 1u,
+        type = MessageType.HEALTH_REPORT.value,
+        senderID = senderID.hexToByteArrayForTest(),
+        recipientID = null,
+        timestamp = 1_700_000_000_123uL,
+        payload = byteArrayOf(0x01, 0x02),
+        signature = validSignature,
+        ttl = 7u
+    )
+
+    @Test
+    fun `the same packet fed twice records one RX then one DUP from its ingress link`() {
+        setupKnownPeer(otherPeerID, otherSigningKey)
+        val (manager, recorder) = recordingSecurityManager()
+        val packet = signedHealthReport(otherPeerID)
+
+        assertTrue(manager.validatePacket(packet, otherPeerID, "AA:00:00:00:00:01"))
+        assertFalse(manager.validatePacket(packet, otherPeerID, "AA:00:00:00:00:02"))
+
+        assertEquals(
+            listOf(
+                "RX:1700000000123:AA:00:00:00:00:01",
+                "DUP:1700000000123:AA:00:00:00:00:02"
+            ),
+            recorder.events
+        )
+    }
+
+    @Test
+    fun `own packets echoed back record neither RX nor DUP`() {
+        val (manager, recorder) = recordingSecurityManager()
+        val own = signedHealthReport(myPeerID)
+
+        assertFalse(manager.validatePacket(own, myPeerID, "AA:00:00:00:00:01"))
+        assertFalse(manager.validatePacket(own, myPeerID, "AA:00:00:00:00:01"))
+
+        assertEquals(emptyList<String>(), recorder.events)
+    }
+
+    @Test
+    fun `a packet rejected by signature verification records nothing`() {
+        whenever(mockDelegate.getPeerInfo(otherPeerID)).thenReturn(null)
+        val (manager, recorder) = recordingSecurityManager()
+
+        assertFalse(manager.validatePacket(signedHealthReport(otherPeerID), otherPeerID, "AA:00:00:00:00:01"))
+
+        assertEquals(emptyList<String>(), recorder.events)
+    }
 }
