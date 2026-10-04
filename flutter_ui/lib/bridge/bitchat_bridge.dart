@@ -43,6 +43,28 @@ abstract final class HealthReportErrors {
   static const sendFailed = 'SEND_FAILED';
 }
 
+/// 實機量測工具（#70）的 method 名稱，對應 Kotlin `ExperimentBridge`（只在 debug build，
+/// `app/src/debug/.../experiment/ExperimentBridge.kt`）的 companion 常數（命名規則
+/// `experiment_<動詞><受詞>`）。release build 沒有這些 method，只有 debug 限定的實驗畫面會呼叫。
+abstract final class ExperimentMethods {
+  static const getStatus = 'experiment_getStatus';
+  static const startSender = 'experiment_startSender';
+  static const stopSender = 'experiment_stopSender';
+}
+
+/// 實驗 method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `ExperimentBridge` 的
+/// `ERROR_*` 常數。原生沒有做任何事；實驗畫面依錯誤碼告訴操作者原因。
+abstract final class ExperimentErrors {
+  /// 參數不合法（裝置編號、筆數、間隔、TTL、開始時間或 Status）。
+  static const invalidArgument = 'INVALID_ARGUMENT';
+
+  /// mesh 前景服務沒有在跑。
+  static const serviceNotReady = 'SERVICE_NOT_READY';
+
+  /// [ExperimentMethods.startSender]：發送器已在等待開始或發送中，要先停止。
+  static const alreadyRunning = 'ALREADY_RUNNING';
+}
+
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
@@ -292,4 +314,51 @@ class BitchatBridge {
   /// [MissingPluginException] 是這個平台沒有原生 mesh（例如 iOS、測試）。
   static Future<void> sendHealthReport(Map<String, dynamic> broadcastTier) =>
       _method.invokeMethod<void>('sendHealthReport', broadcastTier);
+
+  /// 實驗畫面（#70，debug 限定）讀取現場即時狀態，回傳：
+  ///
+  /// - `links`（int）：目前直連數。
+  /// - `powerMode`（String）：`PowerManager.PowerMode`（`PERFORMANCE`、`BALANCED`、`POWER_SAVER`、
+  ///   `ULTRA_LOW_POWER`）。
+  /// - `peerId`（String?）：本機 mesh peerID 前 8 碼；mesh 沒在跑時為 null。
+  /// - `rx20s`、`rx60s`（`Map<String, int>`）：最近 20 s／60 s 內依實驗 handle 統計的 `RX` 筆數，
+  ///   只列至少 1 筆的 handle。
+  /// - `sender`：發送器狀態，格式同 [startExperimentSender] 的回傳值。
+  ///
+  /// 解析見 `models/experiment_status.dart`。bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> getExperimentStatus() =>
+      _method.invokeMethod<Map>(ExperimentMethods.getStatus);
+
+  /// 啟動實驗用自動發送器（#70，debug 限定）：裝置 [device]（1–7）以固定實驗 handle
+  /// `ee000000000<device>` 送出 [count] 筆（至少 1）Health Report Broadcast Tier，每筆間隔
+  /// [intervalMs]（0 為突發），TTL 為 [ttl]（3 或 7），Status 為 [status]（「安全」「輕傷」「重傷」）。
+  /// 只走 mesh，不寫入 Firestore。發送在原生的 mesh 前景服務裡跑，畫面關掉、app 進背景仍會繼續。
+  ///
+  /// [startAt] 是本機牆鐘 `HH:mm:ss`：原生取它的下一次出現（今天還沒到就今天，否則明天），讓多支
+  /// 手機同時開始；null 表示立即開始。實際開始時間在回傳的 `startsAtMs`。
+  ///
+  /// 回傳發送器狀態 `{state: idle|waiting|sending|done|stopped, sent, failed, total, startsAtMs?,
+  /// handle?, ttl?, intervalMs?}`。沒有啟動時以 [PlatformException] 往上拋，錯誤碼見
+  /// [ExperimentErrors]。
+  static Future<Map<dynamic, dynamic>?> startExperimentSender({
+    required int device,
+    required int count,
+    required int intervalMs,
+    required int ttl,
+    required String? startAt,
+    required String status,
+  }) =>
+      _method.invokeMethod<Map>(ExperimentMethods.startSender, <String, dynamic>{
+        'device': device,
+        'count': count,
+        'intervalMs': intervalMs,
+        'ttl': ttl,
+        'startAt': startAt,
+        'status': status,
+      });
+
+  /// 停止實驗發送器（等待開始或發送中都可停；沒在跑時無害），回傳停止後的發送器狀態，格式同
+  /// [startExperimentSender]。bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> stopExperimentSender() =>
+      _method.invokeMethod<Map>(ExperimentMethods.stopSender);
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +13,7 @@ import 'shelter_screen.dart';
 import 'sos_screen.dart';
 import 'health_screen.dart';
 import 'chat_screen.dart';
+import 'experiment_screen.dart';
 import 'login_screen.dart';
 import 'supply_screen.dart';
 
@@ -86,6 +88,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     Navigator.push(context, route);
   }
 
+  /// 標頭的盾牌圖示。debug build 長按它開啟實驗工具（#70 §3），這是實驗畫面唯一的入口；
+  /// release build 的 [kDebugMode] 是編譯期常數 false，整個入口連同 [ExperimentScreen] 都不會編進去。
+  Widget _buildShield() {
+    final shield = Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: _sosRed.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Icon(Icons.shield_rounded, color: _sosRed, size: 22),
+    );
+    return kDebugMode
+        ? GestureDetector(
+            onLongPress: () {
+              mascotOptionsNotifier.value = const [];
+              _navigateTo(const ExperimentScreen());
+            },
+            child: shield,
+          )
+        : shield;
+  }
+
   /// 首頁出現代表已走完 setup 與登入：點了的聊天通知從這裡帶到聊天畫面（#57）。
   @override
   Widget build(BuildContext context) => ChatNavigationHost(child: _buildHome(context));
@@ -147,14 +171,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
                 child: Row(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: _sosRed.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.shield_rounded, color: _sosRed, size: 22),
-                    ),
+                    _buildShield(),
                     const SizedBox(width: 10),
                     const Text(
                       '防災小助理',

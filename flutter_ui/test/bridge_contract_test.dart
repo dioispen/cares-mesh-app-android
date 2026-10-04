@@ -7,6 +7,11 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 const _kotlinBridgeDir = '../app/src/main/java/com/bitchat/android/flutter';
+
+/// The experiment half of the bridge (#70). It lives in the debug source set only: release builds
+/// answer its methods with `notImplemented`, which is fine because only the debug-only
+/// `ExperimentScreen` calls them (checked below).
+const _kotlinExperimentBridge = '../app/src/debug/java/com/bitchat/android/experiment/ExperimentBridge.kt';
 const _dartBridge = 'lib/bridge/bitchat_bridge.dart';
 
 String _read(String path) {
@@ -15,53 +20,128 @@ String _read(String path) {
   return file.readAsStringSync();
 }
 
+/// Method names a Kotlin bridge that declares them as `const val METHOD_X = "..."` matches in
+/// `METHOD_X ->` branches.
+Iterable<String> _constantBranches(String path) {
+  final source = _read(path);
+  final constants = {
+    for (final m in RegExp(r'const val (METHOD_\w+) = "(\w+)"').allMatches(source)) m.group(1)!: m.group(2)!,
+  };
+  return RegExp(r'^\s*(METHOD_\w+)\s*->', multiLine: true)
+      .allMatches(source)
+      .map((m) => constants[m.group(1)!] ?? fail('$path: branch ${m.group(1)} has no constant'));
+}
+
+/// `ERROR_X` -> code of a Kotlin bridge that declares them as `const val ERROR_X = "..."`.
+Map<String, String> _kotlinErrorCodes(String path) => {
+      for (final m in RegExp(r'const val (ERROR_\w+) = "(\w+)"').allMatches(_read(path))) m.group(1)!: m.group(2)!,
+    };
+
+/// The codes listed in a Dart `abstract final class <name> { static const x = '...'; }`.
+Set<String> _dartErrorCodes(String className) {
+  final block = RegExp('abstract final class $className \\{([^}]*)\\}').firstMatch(_read(_dartBridge))?.group(1) ??
+      fail('$className not found in $_dartBridge');
+  return {for (final m in RegExp(r"static const \w+ = '([^']+)';").allMatches(block)) m.group(1)!};
+}
+
 /// Method names the Kotlin bridge answers. `BitchatFlutterChannels.handle` matches string
-/// literals; `ChatBridge.handle` matches `METHOD_*` constants. Everything else ends in
-/// `notImplemented` (BridgeMethodDispatcher).
+/// literals; `ChatBridge.handle` and the debug-only `ExperimentBridge.handle` match `METHOD_*`
+/// constants. Everything else ends in `notImplemented` (BridgeMethodDispatcher).
 Set<String> _nativeMethods() {
   final channels = _read('$_kotlinBridgeDir/BitchatFlutterChannels.kt');
-  final chat = _read('$_kotlinBridgeDir/ChatBridge.kt');
 
   final literalBranches = RegExp(r'^\s*"(\w+)"\s*->', multiLine: true)
       .allMatches(channels)
       .map((m) => m.group(1)!);
 
-  final constants = {
-    for (final m in RegExp(r'const val (METHOD_\w+) = "(\w+)"').allMatches(chat)) m.group(1)!: m.group(2)!,
+  return {
+    ...literalBranches,
+    ..._constantBranches('$_kotlinBridgeDir/ChatBridge.kt'),
+    ..._constantBranches(_kotlinExperimentBridge),
   };
-  final constantBranches = RegExp(r'^\s*(METHOD_\w+)\s*->', multiLine: true)
-      .allMatches(chat)
-      .map((m) => constants[m.group(1)!] ?? fail('ChatBridge branch ${m.group(1)} has no constant'));
-
-  return {...literalBranches, ...constantBranches};
 }
 
-/// Method names `BitchatBridge` invokes, with `ChatMethods.x` resolved to its value.
+/// Method names `BitchatBridge` invokes, with `ChatMethods.x` / `ExperimentMethods.x` resolved to
+/// their values.
 Set<String> _dartInvokedMethods() {
   final source = _read(_dartBridge);
 
-  final chatMethodsBlock =
-      RegExp(r'abstract final class ChatMethods \{([^}]*)\}').firstMatch(source)?.group(1) ??
-          fail('ChatMethods not found in $_dartBridge');
-  final chatMethods = {
-    for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(chatMethodsBlock))
-      m.group(1)!: m.group(2)!,
+  // `abstract final class XMethods { static const name = 'value'; ... }`, per class.
+  final methodClasses = {
+    for (final block in RegExp(r'abstract final class (\w+Methods) \{([^}]*)\}').allMatches(source))
+      block.group(1)!: {
+        for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(block.group(2)!)) m.group(1)!: m.group(2)!,
+      },
   };
+  for (final name in const ['ChatMethods', 'ExperimentMethods']) {
+    if (!methodClasses.containsKey(name)) fail('$name not found in $_dartBridge');
+  }
 
   final invoked = <String>{};
   for (final m in RegExp(r'\.invokeMethod(?:<[^>(]*>)?\(\s*([^,)\s]+)').allMatches(source)) {
     final argument = m.group(1)!;
     final literal = RegExp(r"^'([^']+)'$").firstMatch(argument);
-    final constant = RegExp(r'^ChatMethods\.(\w+)$').firstMatch(argument);
+    final constant = RegExp(r'^(\w+Methods)\.(\w+)$').firstMatch(argument);
     if (literal != null) {
       invoked.add(literal.group(1)!);
     } else if (constant != null) {
-      invoked.add(chatMethods[constant.group(1)!] ?? fail('unknown ChatMethods.${constant.group(1)}'));
+      final [className, name] = [constant.group(1)!, constant.group(2)!];
+      invoked.add(methodClasses[className]?[name] ?? fail('unknown $className.$name'));
     } else {
       fail('cannot resolve the method name in invokeMethod($argument ...)');
     }
   }
   return invoked;
+}
+
+/// [source] with every full-line comment (`//`, `///`) blanked out, offsets and line numbers kept:
+/// a name in a doc comment is not compiled. A trailing comment is left in, which can only make a
+/// check stricter.
+String _withoutCommentLines(String source) => source.replaceAllMapped(
+      RegExp(r'^[ \t]*//.*$', multiLine: true),
+      (m) => ' ' * m.group(0)!.length,
+    );
+
+/// The source ranges of the "debug" branch of every `kDebugMode ? <debug> : <release>` expression
+/// in [source]. In a release build `kDebugMode` is the compile-time constant `false`, so nothing in
+/// those ranges is compiled in.
+///
+/// A small scanner, not a parser: the branch ends at the first `:` outside any bracket and string.
+/// A nested ternary in the branch only makes the range shorter, so it can make a check stricter,
+/// never looser.
+List<(int, int)> _debugOnlyRanges(String source) {
+  final ranges = <(int, int)>[];
+  for (final m in RegExp(r'\bkDebugMode\s*\?(?![?.])').allMatches(source)) {
+    var depth = 0;
+    var i = m.end;
+    int? end;
+    while (i < source.length && end == null) {
+      final c = source[i];
+      if (c == "'" || c == '"') {
+        // Skip a string literal (with its escapes).
+        i++;
+        while (i < source.length && source[i] != c) {
+          if (source[i] == r'\') i++;
+          i++;
+        }
+      } else if (source.startsWith('//', i)) {
+        i = source.indexOf('\n', i);
+        if (i == -1) break;
+      } else if ('([{'.contains(c)) {
+        depth++;
+      } else if (')]}'.contains(c)) {
+        depth--;
+        if (depth < 0) fail('kDebugMode ternary at ${m.start} has no ":" before its expression ends');
+      } else if (depth == 0 && (c == ';' || c == ',')) {
+        fail('kDebugMode ternary at ${m.start} has no ":" before its expression ends');
+      } else if (depth == 0 && c == ':') {
+        end = i;
+      }
+      i++;
+    }
+    ranges.add((m.end, end ?? fail('kDebugMode ternary at ${m.start} never reaches its ":"')));
+  }
+  return ranges;
 }
 
 /// Dart files under `lib/`, as `lib/...` paths with forward slashes.
@@ -74,8 +154,15 @@ Map<String, String> _libSources() => {
 void main() {
   group('Dart only calls methods the native bridge implements (#12)', () {
     test('the source scan finds both sides', () {
-      expect(_nativeMethods(), containsAll(['getSystemStatus', 'chat_sendMessage', 'chat_setNickname']));
-      expect(_dartInvokedMethods(), containsAll(['getSystemStatus', 'chat_sendMessage', 'chat_setNickname']));
+      const sample = ['getSystemStatus', 'chat_sendMessage', 'chat_setNickname', 'experiment_getStatus'];
+      expect(_nativeMethods(), containsAll(sample));
+      expect(_dartInvokedMethods(), containsAll(sample));
+    });
+
+    test('the experiment methods (#70) are on both sides', () {
+      const experiment = ['experiment_getStatus', 'experiment_startSender', 'experiment_stopSender'];
+      expect(_nativeMethods(), containsAll(experiment));
+      expect(_dartInvokedMethods(), containsAll(experiment));
     });
 
     test('no Dart call falls through to notImplemented', () {
@@ -122,20 +209,91 @@ void main() {
   });
 
   group('Dart knows every error code the chat bridge refuses with', () {
-    Map<String, String> kotlinCodes() => {
-          for (final m in RegExp(r'const val (ERROR_\w+) = "(\w+)"').allMatches(_read('$_kotlinBridgeDir/ChatBridge.kt')))
-            m.group(1)!: m.group(2)!,
-        };
-
-    Set<String> dartCodes() {
-      final block = RegExp(r'abstract final class ChatErrors \{([^}]*)\}').firstMatch(_read(_dartBridge))?.group(1) ??
-          fail('ChatErrors not found in $_dartBridge');
-      return {for (final m in RegExp(r"static const \w+ = '([^']+)';").allMatches(block)) m.group(1)!};
-    }
-
     test('the two sides list the same codes', () {
-      expect(kotlinCodes().values, isNotEmpty);
-      expect(dartCodes(), kotlinCodes().values.toSet());
+      final kotlinCodes = _kotlinErrorCodes('$_kotlinBridgeDir/ChatBridge.kt');
+
+      expect(kotlinCodes.values, isNotEmpty);
+      expect(_dartErrorCodes('ChatErrors'), kotlinCodes.values.toSet());
+    });
+  });
+
+  group('Dart knows every error code the experiment bridge refuses with (#70)', () {
+    test('the two sides list the same codes', () {
+      final kotlinCodes = _kotlinErrorCodes(_kotlinExperimentBridge);
+
+      expect(kotlinCodes.values, containsAll(['INVALID_ARGUMENT', 'SERVICE_NOT_READY', 'ALREADY_RUNNING']));
+      expect(_dartErrorCodes('ExperimentErrors'), kotlinCodes.values.toSet());
+    });
+  });
+
+  group('the experiment screen cannot be reached in a release build (#70)', () {
+    // The only entry is the home header's shield, built only when `kDebugMode`. Being a
+    // compile-time constant, `kDebugMode` drops the entry from release builds, and with it the last
+    // reference to ExperimentScreen, so the screen is tree-shaken away too.
+    final mentionsScreen = RegExp(r'\bExperimentScreen\b');
+
+    test('only the home screen refers to it', () {
+      final files = {
+        for (final entry in _libSources().entries)
+          if (mentionsScreen.hasMatch(_withoutCommentLines(entry.value))) entry.key,
+      };
+
+      expect(files, {'lib/screens/experiment_screen.dart', 'lib/screens/home_screen.dart'});
+    });
+
+    test('the home screen refers to it only inside a kDebugMode ? … : … branch', () {
+      final home = _withoutCommentLines(_read('lib/screens/home_screen.dart'));
+      final ranges = _debugOnlyRanges(home);
+      final uses = mentionsScreen.allMatches(home).map((m) => m.start).toList();
+
+      expect(uses, isNotEmpty);
+      for (final use in uses) {
+        final line = '\n'.allMatches(home.substring(0, use)).length + 1;
+        expect(ranges.any((r) => r.$1 <= use && use < r.$2), isTrue,
+            reason: 'home_screen.dart:$line uses ExperimentScreen outside a kDebugMode branch');
+      }
+    });
+
+    test('that kDebugMode is the compile-time constant from Flutter', () {
+      final home = _withoutCommentLines(_read('lib/screens/home_screen.dart'));
+
+      expect(home, contains("import 'package:flutter/foundation.dart' show kDebugMode;"));
+      expect(RegExp(r'\bkDebugMode\s*=').hasMatch(home), isFalse, reason: 'kDebugMode is shadowed');
+    });
+
+    test('nothing but the experiment screen calls the experiment bridge', () {
+      final callsExperimentBridge = RegExp(r'\b(getExperimentStatus|startExperimentSender|stopExperimentSender)\b');
+      final files = {
+        for (final entry in _libSources().entries)
+          if (callsExperimentBridge.hasMatch(_withoutCommentLines(entry.value))) entry.key,
+      };
+
+      expect(files, {_dartBridge, 'lib/screens/experiment_screen.dart'});
+    });
+
+    test('the scanner sees what a kDebugMode branch covers', () {
+      const source = '''
+        final a = kDebugMode ? GestureDetector(onLongPress: () => go(const X()), child: s) : s;
+        final b = X();
+      ''';
+      final ranges = _debugOnlyRanges(source);
+      bool covered(String needle, [int from = 0]) {
+        final at = source.indexOf(needle, from);
+        return ranges.any((r) => r.$1 <= at && at < r.$2);
+      }
+
+      expect(ranges, hasLength(1));
+      expect(covered('X()'), isTrue);
+      expect(covered('s;'), isFalse, reason: 'the release branch');
+      expect(covered('X()', source.indexOf('final b')), isFalse);
+    });
+
+    test('a name in a comment line is not code, one after code still is', () {
+      const source = '  /// opens [ExperimentScreen]\n  go(); // ExperimentScreen\n';
+      final stripped = _withoutCommentLines(source);
+
+      expect(stripped.length, source.length);
+      expect(mentionsScreen.allMatches(stripped).map((m) => m.start), [source.lastIndexOf('ExperimentScreen')]);
     });
   });
 
