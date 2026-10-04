@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/mascot_service.dart';
+import '../widgets/chat_navigation_host.dart';
 import 'knowledge_screen.dart';
 import 'shelter_screen.dart';
 import 'sos_screen.dart';
@@ -80,11 +81,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _navigateTo(Widget screen) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+    // 聊天室用它的具名 route，點通知時（ChatNavigationHost）才認得出它已經開著。
+    final route = screen is ChatScreen ? ChatScreen.route() : MaterialPageRoute<void>(builder: (_) => screen);
+    Navigator.push(context, route);
   }
 
+  /// 首頁出現代表已走完 setup 與登入：點了的聊天通知從這裡帶到聊天畫面（#57）。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ChatNavigationHost(child: _buildHome(context));
+
+  Widget _buildHome(BuildContext context) {
     final features = [
       {
         'title': 'SOS 緊急求救',

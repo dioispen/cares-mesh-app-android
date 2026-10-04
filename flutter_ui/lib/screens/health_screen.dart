@@ -8,6 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
+import '../models/health_report_delivery.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
 import '../services/mascot_service.dart';
@@ -383,23 +384,37 @@ class _HealthScreenState extends State<HealthScreen>
 
       // BLE 廣播只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標
       // （由原生端就地降精度為 geohash）。姓名／電話／血型／自由文字一律不進入廣播（ADR-0003）。
-      await BitchatBridge.sendHealthReport({
-        'reporterHandle': handle,
-        'status': status,
-        'lat': _currentPosition?.latitude,
-        'lng': _currentPosition?.longitude,
-      });
+      String? broadcastFailure;
+      try {
+        await BitchatBridge.sendHealthReport({
+          'reporterHandle': handle,
+          'status': status,
+          'lat': _currentPosition?.latitude,
+          'lng': _currentPosition?.longitude,
+        });
+      } catch (e) {
+        debugPrint('HealthScreen: Health Report broadcast failed: $e');
+        broadcastFailure = HealthReportDelivery.broadcastFailureReason(e);
+      }
 
-      // Firestore 仍寫入完整回報（Reporter 對後端的自願揭露，另由 firestore.rules 治理）
-      await FirebaseFirestore.instance
-          .collection('health_reports')
-          .add(report.toJson());
+      // 附近廣播失敗也照樣上傳。Firestore 仍寫入完整回報（Reporter 對後端的自願揭露，另由
+      // firestore.rules 治理）。
+      String? uploadFailure;
+      try {
+        await FirebaseFirestore.instance
+            .collection('health_reports')
+            .add(report.toJson());
+      } catch (e) {
+        debugPrint('HealthScreen: Health Report upload failed: $e');
+        uploadFailure = '$e';
+      }
 
+      final delivery = HealthReportDelivery(broadcastFailure: broadcastFailure, uploadFailure: uploadFailure);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('已回報：$status'),
-            backgroundColor: _statusColor(),
+            content: Text(delivery.message(status)),
+            backgroundColor: delivery.complete ? _statusColor() : (delivery.failed ? _red : _orange),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),

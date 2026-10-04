@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'dart:io' show Platform;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/chat_peer.dart';
 import '../models/user.dart';
 import '../bridge/bitchat_bridge.dart';
+import '../services/chat_service.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 import 'verify_email_screen.dart';
@@ -25,7 +27,6 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   bool _hasError = false;
   bool _needsPermissions = false;
   bool _meshStarted = false;
-  Map<String, String> _nearbyPeers = {};
   Timer? _searchTimer;
 
   @override
@@ -62,7 +63,6 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       _hasError = false;
       _needsPermissions = false;
       _meshStarted = false;
-      _nearbyPeers = {};
       _isChecking = true;
       _statusText = '檢查必要權限與服務狀態...';
     });
@@ -104,14 +104,9 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       _statusText = '正在搜尋附近 Bitchat 節點...';
     });
 
-    // 3. 開始搜尋附近裝置並進行註冊檢查
+    // 3. 開始搜尋附近裝置並進行註冊檢查（附近裝置由 ChatService.peerList 即時提供，見 _nearbyPeers）
     _searchTimer?.cancel();
     _searchTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      final peers = await BitchatBridge.getNearbyPeers();
-      if (mounted) {
-        setState(() => _nearbyPeers = peers);
-      }
-
       // 搜尋滿一次 tick 後即可進行身份驗證
       if (timer.tick >= 1) {
         _checkRegistration();
@@ -209,6 +204,49 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// 附近已發現的 mesh peer，直接看聊天用的 peer 快照（`ChatService.peerList`，#53），
+  /// 與聊天室的「附近的人」是同一份資料；不含附在最後的離線我的最愛（#58），它們不在附近。
+  Widget _nearbyPeers(Color brown) => ValueListenableBuilder<ChatPeerList?>(
+        valueListenable: ChatService.instance.peerList,
+        builder: (context, peerList, _) {
+          final peers = [
+            for (final peer in peerList?.peers ?? const <ChatPeer>[])
+              if (peer.isOnline) peer,
+          ];
+          if (peers.isEmpty) {
+            return const Text(
+              '正在尋找其他 Bitchat 節點...',
+              style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
+            );
+          }
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '附近已發現裝置：',
+                style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 200),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: peers.length,
+                  itemBuilder: (context, index) {
+                    final peer = peers[index];
+                    return ListTile(
+                      leading: Icon(Icons.devices, color: brown),
+                      title: Text('${peer.displayName}${peer.displaySuffix}'),
+                      subtitle: Text('ID: ${peer.peerID.characters.take(8)}'),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      );
+
   @override
   Widget build(BuildContext context) {
     const brown = Color(0xFF5C3D2E);
@@ -247,33 +285,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
               if (showSpinner) ...[
                 const CircularProgressIndicator(color: brown),
                 const SizedBox(height: 32),
-                if (_nearbyPeers.isNotEmpty) ...[
-                  const Text(
-                    '附近已發現裝置：',
-                    style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: _nearbyPeers.length,
-                      itemBuilder: (context, index) {
-                        final entry = _nearbyPeers.entries.elementAt(index);
-                        return ListTile(
-                          leading: const Icon(Icons.devices, color: brown),
-                          title: Text(entry.value),
-                          subtitle: Text('ID: ${entry.key.substring(0, 8)}'),
-                        );
-                      },
-                    ),
-                  ),
-                ] else ...[
-                  const Text(
-                    '正在尋找其他 Bitchat 節點...',
-                    style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
-                  ),
-                ],
+                _nearbyPeers(brown),
               ],
               const SizedBox(height: 32),
               // 手動檢查按鈕：不管狀態如何都顯示（非 checking 狀態下可點）

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
+import 'services/chat_service.dart';
 import 'services/mascot_service.dart';
 import 'widgets/mascot_assistant.dart';
 
@@ -50,7 +51,15 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkInitialStatus();
       _listenToSystemStatus();
+      _startChat();
     });
+  }
+
+  /// 聊天狀態由 app 層級的 [ChatService] 持有，app 一啟動就開始接收，
+  /// 不必等到打開聊天室；mesh 之後才啟動也沒關係，快照會隨變化推來。
+  void _startChat() {
+    if (kIsWeb) return;
+    unawaited(ChatService.instance.start());
   }
 
   @override

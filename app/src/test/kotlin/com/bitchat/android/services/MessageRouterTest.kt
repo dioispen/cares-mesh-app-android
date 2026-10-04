@@ -2,9 +2,15 @@ package com.bitchat.android.services
 
 import android.content.Context
 import android.os.Build
+import com.bitchat.android.favorites.FavoritesPersistenceService
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.mesh.PeerInfo
+import com.bitchat.android.model.ReadReceipt
+import com.bitchat.android.nostr.GeohashAliasRegistry
+import com.bitchat.android.nostr.NostrTransport
+import com.bitchat.android.testsupport.FakeAndroidKeyStore
+import com.bitchat.android.util.AppConstants
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -14,8 +20,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.clearInvocations
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
@@ -175,6 +183,115 @@ class MessageRouterTest {
     }
 
     @Test
+    fun `a mutual favourite with a Nostr key is still queued for the mesh while Nostr is disabled`() {
+        // CARES ships with Nostr compiled out. Without this gate the router handed such a
+        // favourite's messages to NostrTransport whenever the mesh was not ready, reported them
+        // sent, and nothing ever delivered them: no relay is ever connected.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        peerOffline()
+        withMutualNostrFavorite {
+            val result = router.sendPrivate("hello", peerID, "peer", "msg-n")
+
+            assertEquals(MessageRouter.RouteResult.QUEUED, result)
+            verify(mesh, never()).sendPrivateMessage(any(), any(), any(), anyOrNull())
+
+            // It goes out over the mesh as soon as the peer is back with a session.
+            peerReady()
+            router.onSessionEstablished(peerID)
+            verify(mesh, times(1)).sendPrivateMessage("hello", peerID, "peer", "msg-n")
+        }
+    }
+
+    @Test
+    fun `a favourite notification for a peer off the mesh is not handed to Nostr while it is disabled`() {
+        // Same gate as above, for ChatViewModel.toggleFavorite's notice to the peer (#58). With no
+        // relay ever connected it could only sit in NostrRelayManager's pending queue.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        withNostrTransport { nostr ->
+            // A mutual favourite that told us its Nostr key: the one peer a relay could reach.
+            peerOffline()
+            withMutualNostrFavorite {
+                listOf(::peerOffline, ::peerConnectedNoSession).forEach { state ->
+                    state()
+
+                    router.sendFavoriteNotification(peerID, isFavorite = true)
+
+                    verify(nostr, never()).sendFavoriteNotification(any(), any())
+                    verify(mesh, never()).sendPrivateMessage(any(), any(), any(), anyOrNull())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `a favourite notification still goes over the mesh to a peer with a session`() {
+        withNostrTransport { nostr ->
+            peerReady()
+
+            router.sendFavoriteNotification(peerID, isFavorite = false)
+
+            verify(mesh, times(1)).sendPrivateMessage(
+                argThat { startsWith("[UNFAVORITED]") },
+                eq(peerID),
+                eq("peer"),
+                isNull()
+            )
+            verify(nostr, never()).sendFavoriteNotification(any(), any())
+        }
+    }
+
+    @Test
+    fun `a read receipt for a peer off the mesh is not handed to Nostr while it is disabled`() {
+        // Same gate as the favourite notification: upstream falls back to Nostr for any peer
+        // without a mesh session, and with no relay ever connected the receipt would only queue.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        withNostrTransport { nostr ->
+            listOf(::peerOffline, ::peerConnectedNoSession).forEach { state ->
+                state()
+
+                router.sendReadReceipt(ReadReceipt("msg-1", myPeerID), peerID)
+
+                verify(nostr, never()).sendReadReceipt(any(), any())
+                verify(mesh, never()).sendReadReceipt(any(), any(), any())
+            }
+        }
+    }
+
+    @Test
+    fun `a read receipt still goes over the mesh to a peer with a session`() {
+        withNostrTransport { nostr ->
+            peerReady()
+
+            router.sendReadReceipt(ReadReceipt("msg-1", myPeerID), peerID)
+
+            verify(mesh, times(1)).sendReadReceipt(eq("msg-1"), eq(peerID), eq("peer"))
+            verify(nostr, never()).sendReadReceipt(any(), any())
+        }
+    }
+
+    @Test
+    fun `a delivery ACK is never handed to Nostr while it is disabled`() {
+        // The router only sends ACKs over Nostr (mesh ACKs come from MessageHandler), for a peer
+        // off the mesh and for a geohash alias alike.
+        assertFalse(AppConstants.Nostr.ENABLED)
+        val alias = "nostr_${"cd".repeat(8)}"
+        GeohashAliasRegistry.put(alias, "ef".repeat(32))
+        try {
+            withNostrTransport { nostr ->
+                peerOffline()
+
+                router.sendDeliveryAck("msg-1", peerID)
+                router.sendDeliveryAck("msg-2", alias)
+
+                verify(nostr, never()).sendDeliveryAck(any(), any())
+                verify(nostr, never()).sendDeliveryAckGeohash(any(), any(), any())
+            }
+        } finally {
+            GeohashAliasRegistry.clear()
+        }
+    }
+
+    @Test
     fun `scheduler stops with the mesh service and restarts on rebind`() {
         MessageRouter.disableSchedulerForTesting = false
         MessageRouter.resetForTesting()
@@ -187,6 +304,52 @@ class MessageRouterTest {
 
         val rebound = MessageRouter.getInstance(context, mesh)
         assertTrue(rebound.isSchedulerRunning)
+    }
+
+    /**
+     * Runs [block] with the peer recorded as a mutual favourite that told us its Nostr key — the
+     * one case where upstream's router prefers Nostr — then puts the process-wide favourites
+     * store back to uninitialised, as every other test here expects.
+     */
+    private fun withMutualNostrFavorite(block: () -> Unit) {
+        FakeAndroidKeyStore.install()
+        try {
+            FavoritesPersistenceService.initialize(RuntimeEnvironment.getApplication())
+            FavoritesPersistenceService.shared.apply {
+                updateFavoriteStatus(noiseKey, "peer", isFavorite = true)
+                updatePeerFavoritedUs(noiseKey, theyFavoritedUs = true)
+                updateNostrPublicKey(noiseKey, "ab".repeat(32))
+            }
+            // The router sees it through the peer's Noise key, which mesh.getPeerInfo supplies.
+            val contact = ContactDirectory.resolve(peerID)
+            assertTrue(contact.isMutualFavorite && contact.nostrPubkey != null)
+            block()
+        } finally {
+            runCatching { FavoritesPersistenceService.shared.clearAllFavorites() }
+            FavoritesPersistenceService::class.java.getDeclaredField("INSTANCE")
+                .apply { isAccessible = true }
+                .set(null, null)
+            FakeAndroidKeyStore.uninstall()
+        }
+    }
+
+    /**
+     * Runs [block] with a router built on a mock [NostrTransport] — the process-wide instance the
+     * router takes when it is created — then restores the real one.
+     */
+    private fun withNostrTransport(block: (NostrTransport) -> Unit) {
+        val field = NostrTransport::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }
+        val previous = field.get(null)
+        val nostr = mock<NostrTransport>()
+        field.set(null, nostr)
+        try {
+            MessageRouter.resetForTesting()
+            router = MessageRouter.getInstance(RuntimeEnvironment.getApplication(), mesh)
+            block(nostr)
+        } finally {
+            field.set(null, previous)
+            MessageRouter.resetForTesting()
+        }
     }
 
     private fun peerOffline() {

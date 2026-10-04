@@ -153,6 +153,9 @@ val syncSharedAppTests = tasks.register<Sync>("syncSharedAppTests") {
             "com/bitchat/android/mesh/**",
             "com/bitchat/FileTransferTest.kt",
         )
+        // Drives the phone's BluetoothMeshService (excluded from the watch sources above) with
+        // phone-only fixtures from app/src/test/.../testsupport.
+        exclude("com/bitchat/android/mesh/PrivateMessageWireTest.kt")
     }
     into(layout.buildDirectory.dir("sharedTestSrc"))
 }
