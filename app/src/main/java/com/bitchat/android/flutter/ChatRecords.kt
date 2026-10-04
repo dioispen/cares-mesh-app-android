@@ -11,8 +11,8 @@ import com.bitchat.android.ui.DataManager
 
 /**
  * Upstream records the chat bridge reads on demand, outside `ChatViewModel`'s flows (#58): the
- * favourites store and the block list. Read-only — every change goes through upstream's own
- * methods (`toggleFavorite`, `/block`, `/unblock`).
+ * favourites store, the block list and (#73) the contact directory's aliases. Read-only — every
+ * change goes through upstream's own methods (`toggleFavorite`, `/block`, `/unblock`).
  *
  * Reads may touch disk and the keystore (the encrypted identity store, the block list in
  * preferences), so [ChatBridge] makes them only while building a snapshot on its snapshot
@@ -41,6 +41,19 @@ interface ChatRecords {
 
     /** Upstream's own decision (`PrivateChatManager.isPeerBlocked`) for a peer or conversation ID. */
     fun isPeerBlocked(peerID: String): Boolean
+
+    /**
+     * Every ID upstream knows a connected peer by (`ContactDirectory.aliasesForConversation`: the
+     * ID itself, its conversation, live mesh peer, Noise key...), as the native sheet matches peers
+     * with conversations (#73); just [peerID] when it cannot be resolved, as upstream falls back.
+     */
+    fun conversationAliases(peerID: String): Set<String>
+
+    /**
+     * The favourites store's record for one of a conversation's IDs
+     * (`FavoritesPersistenceService.getFavoriteStatus(alias)`, #73); null when there is none.
+     */
+    fun favoriteRelationship(alias: String): ChatFavorites.Relationship?
 }
 
 /**
@@ -107,4 +120,17 @@ class UpstreamChatRecords(
 
     override fun isPeerBlocked(peerID: String): Boolean =
         runCatching { chatViewModel.privateChatManager.isPeerBlocked(peerID) }.getOrDefault(false)
+
+    override fun conversationAliases(peerID: String): Set<String> =
+        runCatching { ContactDirectory.aliasesForConversation(peerID) }.getOrDefault(setOf(peerID))
+
+    override fun favoriteRelationship(alias: String): ChatFavorites.Relationship? =
+        runCatching {
+            favorites?.getFavoriteStatus(alias)?.let { relationship ->
+                ChatFavorites.Relationship(
+                    fingerprint = ContactIdentityResolver.fingerprintHex(relationship.peerNoisePublicKey),
+                    theyFavoritedUs = relationship.theyFavoritedUs
+                )
+            }
+        }.getOrNull()
 }

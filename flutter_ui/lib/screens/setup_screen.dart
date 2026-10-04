@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'dart:io' show Platform;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/chat_conversation.dart';
 import '../models/chat_peer.dart';
 import '../models/user.dart';
 import '../bridge/bitchat_bridge.dart';
@@ -204,48 +205,57 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// 附近已發現的 mesh peer，直接看聊天用的 peer 快照（`ChatService.peerList`，#53），
-  /// 與聊天室的「附近的人」是同一份資料；不含附在最後的離線我的最愛（#58），它們不在附近。
-  Widget _nearbyPeers(Color brown) => ValueListenableBuilder<ChatPeerList?>(
-        valueListenable: ChatService.instance.peerList,
-        builder: (context, peerList, _) {
-          final peers = [
+  /// 附近已發現的 mesh peer，直接看聊天用的快照，與聊天室列表是同一份資料：「附近的人」
+  /// （`ChatService.peerList`，#53），加上對方在線的私訊對話（`ChatService.conversations`）——已有
+  /// 對話的 peer 由原生列在「對話」區段，不在「附近的人」裡（#73）。不含離線的我的最愛（#58）與
+  /// 離線的對話，它們不在附近。對話沒有 mesh peer ID，那幾列不顯示 ID。
+  Widget _nearbyPeers(Color brown) => ValueListenableBuilder<ChatConversationList?>(
+        valueListenable: ChatService.instance.conversations,
+        builder: (context, conversations, _) => ValueListenableBuilder<ChatPeerList?>(
+          valueListenable: ChatService.instance.peerList,
+          builder: (context, peerList, _) => _nearbyPeerList(brown, [
+            for (final conversation in conversations?.conversations ?? const <ChatConversation>[])
+              if (conversation.isOnline) (name: '${conversation.displayName}${conversation.displaySuffix}', id: null),
             for (final peer in peerList?.peers ?? const <ChatPeer>[])
-              if (peer.isOnline) peer,
-          ];
-          if (peers.isEmpty) {
-            return const Text(
-              '正在尋找其他 Bitchat 節點...',
-              style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
-            );
-          }
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                '附近已發現裝置：',
-                style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                constraints: const BoxConstraints(maxHeight: 200),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: peers.length,
-                  itemBuilder: (context, index) {
-                    final peer = peers[index];
-                    return ListTile(
-                      leading: Icon(Icons.devices, color: brown),
-                      title: Text('${peer.displayName}${peer.displaySuffix}'),
-                      subtitle: Text('ID: ${peer.peerID.characters.take(8)}'),
-                    );
-                  },
-                ),
-              ),
-            ],
-          );
-        },
+              if (peer.isOnline) (name: '${peer.displayName}${peer.displaySuffix}', id: peer.peerID),
+          ]),
+        ),
       );
+
+  Widget _nearbyPeerList(Color brown, List<({String name, String? id})> peers) {
+    if (peers.isEmpty) {
+      return const Text(
+        '正在尋找其他 Bitchat 節點...',
+        style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          '附近已發現裝置：',
+          style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          constraints: const BoxConstraints(maxHeight: 200),
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: peers.length,
+            itemBuilder: (context, index) {
+              final peer = peers[index];
+              final id = peer.id;
+              return ListTile(
+                leading: Icon(Icons.devices, color: brown),
+                title: Text(peer.name),
+                subtitle: id == null ? null : Text('ID: ${id.characters.take(8)}'),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {

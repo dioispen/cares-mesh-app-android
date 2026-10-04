@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/chat_conversation.dart';
 import 'package:flutter_ui/models/chat_message.dart';
 import 'package:flutter_ui/models/chat_navigation.dart';
 import 'package:flutter_ui/models/chat_suggestions.dart';
@@ -702,6 +703,88 @@ void main() {
       expect(service.publicMessages.value.map((m) => m.id), ['M']);
       expect(service.nickname.value, 'anon4821');
       expect(service.peerList.value!.peers.map((p) => p.peerID), ['A']);
+    });
+  });
+
+  group('conversations (#73)', () {
+    Map<String, dynamic> conversations(List<String> ids, {String state = 'ready', int unread = 0}) => {
+          'type': 'chat_conversations',
+          'state': state,
+          'conversations': [
+            for (final id in ids)
+              {
+                'conversationID': id,
+                'displayName': 'nick-$id',
+                'displaySuffix': '',
+                'preview': 'hi',
+                'previewType': 'message',
+                'previewIsFromSelf': false,
+                'timestamp': 1700000000000,
+                'unreadCount': unread,
+                'isOnline': false,
+                'connection': 'offline',
+                'isFavorite': false,
+                'theyFavoritedUs': false,
+              },
+          ],
+        };
+
+    test('are unknown until Kotlin reports them', () {
+      expect(service.conversations.value, isNull);
+    });
+
+    test('a conversations snapshot sets the whole list, in the order Kotlin sends', () async {
+      await service.start();
+
+      events.add(conversations(['contact_b', 'contact_a']));
+      await pumpEventQueue();
+
+      expect(service.conversations.value!.state, ChatConversationStoreState.ready);
+      expect(service.conversations.value!.conversations.map((c) => c.conversationID), ['contact_b', 'contact_a']);
+    });
+
+    test('a later snapshot replaces it: opening a chat clears its unread count upstream', () async {
+      await service.start();
+      events.add(conversations(['contact_a'], unread: 2));
+      await pumpEventQueue();
+      expect(service.conversations.value!.conversations.single.unreadCount, 2);
+
+      events.add(conversations(['contact_a']));
+      await pumpEventQueue();
+
+      expect(service.conversations.value!.conversations.single.unreadCount, 0);
+    });
+
+    test('a malformed conversations snapshot keeps the current list', () async {
+      await service.start();
+      events.add(conversations(['contact_a']));
+      await pumpEventQueue();
+
+      events.add({'type': 'chat_conversations'});
+      events.add({'type': 'chat_conversations', 'state': 'ready', 'conversations': 'nope'});
+      await pumpEventQueue();
+
+      expect(service.conversations.value!.conversations.map((c) => c.conversationID), ['contact_a']);
+    });
+
+    test('conversations and peers snapshots do not disturb each other', () async {
+      await service.start();
+
+      events.add(conversations(['contact_a'], state: 'loading'));
+      events.add({'type': 'chat_peers', 'onlineCount': 0, 'peopleCount': 0, 'peers': []});
+      await pumpEventQueue();
+
+      expect(service.conversations.value!.state, ChatConversationStoreState.loading);
+      expect(service.peerList.value!.peers, isEmpty);
+    });
+
+    test('a conversation is opened like any private chat, by its conversation ID', () async {
+      await service.start();
+
+      await service.startPrivateChat('contact_a');
+
+      expect(calls, contains('start:contact_a'));
+      expect(service.selectedPrivateChat.value!.peerID, 'contact_a');
     });
   });
 

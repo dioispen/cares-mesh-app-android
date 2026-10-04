@@ -16,7 +16,8 @@ data class ChatSelf(val peerID: String, val nickname: String)
  *
  * Every value is a `StandardMessageCodec` type: String, Boolean, Int, Long (epoch millis), null,
  * List and String-keyed Map. The Dart side (`flutter_ui/lib/models/chat_message.dart`,
- * `chat_peer.dart`, `chat_suggestions.dart`) mirrors these keys; change both together.
+ * `chat_peer.dart`, `chat_conversation.dart`, `chat_suggestions.dart`...) mirrors these keys;
+ * change both together.
  */
 object ChatSerialization {
 
@@ -43,6 +44,9 @@ object ChatSerialization {
 
     /** Snapshot of the tapped notification Dart has yet to act on (see [PendingChatNavigation]). */
     const val EVENT_PENDING_NAVIGATION = "chat_pending_navigation"
+
+    /** Snapshot of the native sheet's conversations section (see [ChatConversations]). */
+    const val EVENT_CONVERSATIONS = "chat_conversations"
 
     // MessageHandler.handleHealthReport() turns every Health Report into a public chat line with
     // exactly this sender and content prefix. The mesh layer is out of bounds for #49, so the
@@ -150,11 +154,13 @@ object ChatSerialization {
     )
 
     /**
-     * `{type: "chat_peers", onlineCount, peers: [peer, ...]}` — the native header count and list
-     * rows, built from one reading of [inputs] so the two always agree. Rows are in display order:
-     * the connected peers, then the offline favourites (which the count leaves out). Peer IDs and
-     * nicknames are what every device in range already sees in ANNOUNCE packets; an offline
-     * favourite's name and key are what that peer once announced to us.
+     * `{type: "chat_peers", onlineCount, peopleCount, peers: [peer, ...]}` — the native header count,
+     * the people section's count and its rows, built from one reading of [inputs] so they always
+     * agree. Rows are in display order: the connected peers, then the offline favourites (which
+     * neither count counts). Peers with a listed conversation are left to `chat_conversations`
+     * (#73): `onlineCount` (the header's) still counts them, `peopleCount` (the section's) does not.
+     * Peer IDs and nicknames are what every device in range already sees in ANNOUNCE packets; an
+     * offline favourite's name and key are what that peer once announced to us.
      */
     fun peersEvent(
         inputs: ChatPeerList.Inputs,
@@ -163,6 +169,7 @@ object ChatSerialization {
     ): Map<String, Any?> = mapOf(
         "type" to EVENT_PEERS,
         "onlineCount" to ChatPeerList.onlineCount(inputs),
+        "peopleCount" to ChatPeerList.peopleCount(inputs),
         "peers" to ChatPeerList.rows(inputs, favoriteFallbacks, isDirectFallback).map(::peer)
     )
 
@@ -247,6 +254,44 @@ object ChatSerialization {
         "type" to EVENT_UNREAD,
         "hasUnread" to unreadConversationIDs.isNotEmpty(),
         "conversations" to conversations.associate { it.conversationID to it.unreadCount }
+    )
+
+    /**
+     * One conversation row (#73). Every key is always present and never null: `previewType` is a
+     * [ChatConversations.PreviewType.wire] name, `timestamp` epoch millis, `connection` a
+     * [ChatPeerList.Connection.wire] name — `offline` exactly when `isOnline` is false. Dart mirrors
+     * these keys in `flutter_ui/lib/models/chat_conversation.dart`; change both together.
+     */
+    fun conversation(row: ChatConversations.Row): Map<String, Any?> = mapOf(
+        "conversationID" to row.conversationID,
+        "displayName" to row.displayName,
+        "displaySuffix" to row.displaySuffix,
+        "preview" to row.preview,
+        "previewType" to row.previewType.wire,
+        "previewIsFromSelf" to row.previewIsFromSelf,
+        "timestamp" to row.timestamp,
+        "unreadCount" to row.unreadCount,
+        "isOnline" to row.isOnline,
+        "connection" to row.connection.wire,
+        "isFavorite" to row.isFavorite,
+        "theyFavoritedUs" to row.theyFavoritedUs
+    )
+
+    /**
+     * `{type: "chat_conversations", state, conversations: [conversation, ...]}` — every private
+     * conversation upstream keeps, online and offline in one list, in upstream's order
+     * (`sortConversationSummaries`), blocked peers' left out; and upstream's conversation store
+     * [state] (`loading` / `ready` / `error`), which tells an empty list still loading from one with
+     * nothing in it. Names and previews are the peers' own messages, kept on this device; nothing
+     * here is broadcast.
+     */
+    fun conversationsEvent(
+        state: ChatConversations.StoreState,
+        rows: List<ChatConversations.Row>
+    ): Map<String, Any?> = mapOf(
+        "type" to EVENT_CONVERSATIONS,
+        "state" to state.wire,
+        "conversations" to rows.map(::conversation)
     )
 
     /**

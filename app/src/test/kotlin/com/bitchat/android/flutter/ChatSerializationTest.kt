@@ -481,6 +481,21 @@ class ChatSerializationTest {
         assertEquals(event, codec.decodeMessage(encoded))
     }
 
+    @Test
+    fun `peers event carries the people section's count beside the online count (#73)`() {
+        // A peer with a listed conversation is shown in the conversations section instead.
+        val event = ChatSerialization.peersEvent(
+            peerInputs(connectedPeers = listOf(alice, bob)).copy(
+                conversationAliases = setOf(contact),
+                peerAliases = mapOf(alice to setOf(alice, contact))
+            )
+        ) { false }
+
+        assertEquals(2, event["onlineCount"])
+        assertEquals(1, event["peopleCount"])
+        assertEquals(listOf(bob), peerMaps(event).map { it["peerID"] })
+    }
+
     // --- suggestions (#54) ---------------------------------------------------------------------
 
     @Test
@@ -733,6 +748,117 @@ class ChatSerializationTest {
 
         assertEquals(event, codec.decodeMessage(encoded))
     }
+
+    // --- conversations (#73) -----------------------------------------------------------------------
+
+    private fun conversationRow(
+        conversationID: String = contact,
+        displayName: String = "dora",
+        displaySuffix: String = "",
+        preview: String = "meet at the gym",
+        previewType: ChatConversations.PreviewType = ChatConversations.PreviewType.MESSAGE,
+        previewIsFromSelf: Boolean = false,
+        timestamp: Long = 1_700_000_000_123L,
+        unreadCount: Int = 0,
+        isOnline: Boolean = false,
+        connection: ChatPeerList.Connection = ChatPeerList.Connection.OFFLINE,
+        isFavorite: Boolean = false,
+        theyFavoritedUs: Boolean = false
+    ) = ChatConversations.Row(
+        conversationID = conversationID,
+        displayName = displayName,
+        displaySuffix = displaySuffix,
+        preview = preview,
+        previewType = previewType,
+        previewIsFromSelf = previewIsFromSelf,
+        timestamp = timestamp,
+        unreadCount = unreadCount,
+        isOnline = isOnline,
+        connection = connection,
+        isFavorite = isFavorite,
+        theyFavoritedUs = theyFavoritedUs
+    )
+
+    @Test
+    fun `conversation maps every bridge field`() {
+        val row = conversationRow(
+            displayName = "dora",
+            displaySuffix = "#0a1b",
+            preview = "meet at the gym",
+            previewType = ChatConversations.PreviewType.FILE,
+            previewIsFromSelf = true,
+            unreadCount = 3,
+            isOnline = true,
+            connection = ChatPeerList.Connection.BLUETOOTH,
+            isFavorite = true,
+            theyFavoritedUs = true
+        )
+
+        assertEquals(
+            mapOf(
+                "conversationID" to contact,
+                "displayName" to "dora",
+                "displaySuffix" to "#0a1b",
+                "preview" to "meet at the gym",
+                "previewType" to "file",
+                "previewIsFromSelf" to true,
+                "timestamp" to 1_700_000_000_123L,
+                "unreadCount" to 3,
+                "isOnline" to true,
+                "connection" to "bluetooth",
+                "isFavorite" to true,
+                "theyFavoritedUs" to true
+            ),
+            ChatSerialization.conversation(row)
+        )
+    }
+
+    @Test
+    fun `an offline conversation says so twice - not online, connection offline`() {
+        val map = ChatSerialization.conversation(conversationRow())
+
+        assertEquals(false, map["isOnline"])
+        assertEquals("offline", map["connection"])
+        assertEquals("nothing unread is a zero count", 0, map["unreadCount"])
+    }
+
+    @Test
+    fun `conversations event carries the store state and the rows in upstream order`() {
+        val event = ChatSerialization.conversationsEvent(
+            ChatConversations.StoreState.READY,
+            listOf(conversationRow(conversationID = contact), conversationRow(conversationID = bob))
+        )
+
+        assertEquals("chat_conversations", event["type"])
+        assertEquals("ready", event["state"])
+        assertEquals(listOf(contact, bob), conversationMaps(event).map { it["conversationID"] })
+    }
+
+    @Test
+    fun `no conversations is an empty list, not a missing key`() {
+        assertEquals(
+            mapOf("type" to "chat_conversations", "state" to "loading", "conversations" to emptyList<Any?>()),
+            ChatSerialization.conversationsEvent(ChatConversations.StoreState.LOADING, emptyList())
+        )
+    }
+
+    @Test
+    fun `conversations event survives a StandardMessageCodec round trip`() {
+        val event = ChatSerialization.conversationsEvent(
+            ChatConversations.StoreState.ERROR,
+            listOf(
+                conversationRow(displayName = "小明", displaySuffix = "#beef", preview = "集合點：國小體育館 🏫", unreadCount = 120),
+                conversationRow(conversationID = bob, isOnline = true, connection = ChatPeerList.Connection.WIFI_AWARE)
+            )
+        )
+        val codec = StandardMessageCodec.INSTANCE
+        val encoded = codec.encodeMessage(event)!!.also { it.rewind() }
+
+        assertEquals(event, codec.decodeMessage(encoded))
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun conversationMaps(event: Map<String, Any?>) = event["conversations"] as List<Map<String, Any?>>
 
     @Suppress("UNCHECKED_CAST")
     private fun privateChatMaps(event: Map<String, Any?>) =

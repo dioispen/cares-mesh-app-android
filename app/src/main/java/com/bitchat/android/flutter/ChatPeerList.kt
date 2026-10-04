@@ -15,27 +15,29 @@ import com.bitchat.android.ui.truncateNickname
  * - online count: `ChatHeader.kt` `MainHeader` → `PeerCounter` (connected peers minus ourselves).
  * - rows: `MeshPeerListSheet.kt` `PeopleSection` (order, display name, `#abcd` suffix) and
  *   `PeerItem` (name truncation, direct / routed / Wi-Fi Aware).
+ * - who is listed (#73): `MeshPeerListSheet`'s `visibleConnectedPeers` — a connected peer upstream
+ *   knows by an ID one of the listed conversations is known by (`ContactDirectory
+ *   .aliasesForConversation` against `conversationIdentityAliases`, ignoring case) is shown in the
+ *   conversations section above instead ([ChatConversations]); `PeopleSection`'s header counts the
+ *   rest ([peopleCount]). The online count still counts every connected peer.
  * - signal bars: `MeshPeerListSheet.kt` `convertRSSIToSignalStrength` and the bar bands in its doc.
- * - unread badge (#56): the badge of the peer's online conversation (see [ChatUnread]).
+ * - unread badge (#56): the badge of the peer's online conversation (see [ChatUnread]). Since #73
+ *   a peer with a listed conversation is shown there, so a row listed here rarely has one; it is
+ *   kept as the conversation's badge (`ConversationRow` → `UnreadBadge`) rather than
+ *   `PeopleSection`'s lookups of the raw unread set, which would also count a blocked peer's
+ *   hidden messages (#58: its conversation is not listed, so the peer is listed here).
  * - favourite star (#58): `PeopleSection` `peerFavoriteStates` / `peerTheyFavoritedUsStates`, by the
  *   peer's fingerprint (`ChatViewModel.peerFingerprints`), see [ChatFavorites.status].
  * - order: `PeopleSection` `sortedPeers` — peers with unread private messages first (#56), then the
  *   most recent private message (#55), then favourites (#58), then alphabetical.
  * - offline favourites (#58): `PeopleSection` `offlineFavoriteRows` — our favourites in upstream's
- *   store that no connected peer is (same Noise key, or same Nostr key), appended after the
- *   connected peers in the store's order, keyed by their Noise key (what upstream opens their
- *   private chat with), named by the record and counted in the `#abcd` de-duplication.
+ *   store that no listed connected peer is (same Noise key, or same Nostr key) and that have no
+ *   listed conversation (their Noise key is not among the conversations' aliases, #73: upstream
+ *   lists those among its conversations), appended after the connected peers in the store's order,
+ *   keyed by their Noise key (what upstream opens their private chat with), named by the record and
+ *   counted in the `#abcd` de-duplication.
  *
  * Deliberately not mirrored:
- * - Connected peers upstream moves into its "conversations" section; the Flutter chat has no such
- *   section yet, so every connected peer is listed. That is why a row's unread badge and "unread
- *   first" key come from the peer's conversation (`ChatViewModel.conversations`, as upstream's
- *   conversation rows show and sort them: `ConversationRow` → `UnreadBadge`) rather than from
- *   `PeopleSection`'s own lookups: the peers `PeopleSection` still shows are the ones without a
- *   conversation, so its unread keys (its sort looks the unread set up by mesh peer ID, which
- *   upstream replaces with a `contact_…` ID once it knows the peer's Noise key) rarely apply.
- *   For the same reason offline favourites with a conversation are listed here as well (upstream
- *   lists those among its offline conversations instead): it is how the Flutter chat reaches them.
  * - The offline favourite's "reachable over Nostr" globe (mutual favourite with a Nostr key): this
  *   app has Nostr disabled, so no favourite is reachable that way.
  * - Upstream's `peerID == nickname` → "You" branch compares a peer ID with our nickname and never
@@ -71,7 +73,18 @@ object ChatPeerList {
         /** Connected peer ID → its Noise key (mesh peer info, else the cached key), any case. */
         val peerNoiseKeys: Map<String, String> = emptyMap(),
         /** Connected peer ID → the hex Nostr key upstream indexed for it, any case. */
-        val peerNostrKeys: Map<String, String> = emptyMap()
+        val peerNostrKeys: Map<String, String> = emptyMap(),
+        /**
+         * Every ID the conversations listed above the people are known by
+         * ([ChatConversations.identityAliases]); empty when none is listed.
+         */
+        val conversationAliases: Set<String> = emptySet(),
+        /**
+         * Connected peer ID → the IDs upstream knows it by (`ContactDirectory.aliasesForConversation`,
+         * [ChatRecords.conversationAliases]); a peer missing here is known by its own ID only. Only
+         * needed while [conversationAliases] is not empty.
+         */
+        val peerAliases: Map<String, Set<String>> = emptyMap()
     )
 
     /**
@@ -113,7 +126,25 @@ object ChatPeerList {
     fun onlineCount(inputs: Inputs): Int = inputs.connectedPeers.count { it != inputs.myPeerID }
 
     /**
-     * The rows, in upstream order: the connected peers, then the offline favourites.
+     * `PeopleSection`'s header count (`peopleCount`): the connected peers it lists — those without a
+     * listed conversation ([listedPeers]) — minus ourselves.
+     */
+    fun peopleCount(inputs: Inputs): Int = listedPeers(inputs).count { it != inputs.myPeerID }
+
+    /**
+     * `visibleConnectedPeers`: the connected peers none of whose IDs a listed conversation is known
+     * by (#73) — those are listed in the conversations section instead.
+     */
+    private fun listedPeers(inputs: Inputs): List<String> {
+        if (inputs.conversationAliases.isEmpty()) return inputs.connectedPeers
+        return inputs.connectedPeers.filterNot { peerID ->
+            (inputs.peerAliases[peerID] ?: setOf(peerID)).any { it.lowercase() in inputs.conversationAliases }
+        }
+    }
+
+    /**
+     * The rows, in upstream order: the connected peers, then the offline favourites — without those
+     * listed in the conversations section (#73).
      * [favoriteFallbacks] answer a connected peer's star while its fingerprint is unknown;
      * [isDirectFallback] answers for peers `peerDirect` does not cover yet (upstream asks
      * `ChatViewModel.getMeshPeerInfo(id)?.isDirectConnection`).
@@ -123,7 +154,7 @@ object ChatPeerList {
         favoriteFallbacks: ChatFavorites.Fallbacks = ChatFavorites.Fallbacks.NONE,
         isDirectFallback: (String) -> Boolean
     ): List<Row> {
-        val others = inputs.connectedPeers.filter { it != inputs.myPeerID }
+        val others = listedPeers(inputs).filter { it != inputs.myPeerID }
         val unread = others.associateWith { ChatUnread.countFor(it, inputs.unreadConversations) }
         val favorites = others.associateWith { peerID ->
             ChatFavorites.status(
@@ -190,7 +221,8 @@ object ChatPeerList {
     }
 
     /**
-     * `offlineFavoriteRows`: our favourites no connected peer is — upstream's
+     * `offlineFavoriteRows`: our favourites with no listed conversation (their Noise key is not among
+     * [Inputs.conversationAliases], #73) that no listed connected peer is — upstream's
      * `isFavoriteMappedToConnected` compares the record's Noise key, then its Nostr key, with the
      * connected peers', ignoring case.
      */
@@ -199,7 +231,8 @@ object ChatPeerList {
         val connectedNoiseKeys = connected.mapNotNullTo(HashSet()) { inputs.peerNoiseKeys[it]?.lowercase() }
         val connectedNostrKeys = connected.mapNotNullTo(HashSet()) { inputs.peerNostrKeys[it]?.lowercase() }
         return inputs.ourFavorites.filterNot { favorite ->
-            favorite.noiseKeyHex.lowercase() in connectedNoiseKeys ||
+            favorite.noiseKeyHex.lowercase() in inputs.conversationAliases ||
+                favorite.noiseKeyHex.lowercase() in connectedNoiseKeys ||
                 favorite.nostrPubkeyHex?.lowercase()?.let { it in connectedNostrKeys } == true
         }
     }
@@ -243,7 +276,8 @@ object ChatPeerList {
             ?: inputs.privateChats[peerID]?.lastOrNull()?.sender
             ?: peerID.take(12)
 
-    private fun connection(isWifiAware: Boolean, isDirect: Boolean): Connection = when {
+    /** Upstream's precedence for a reachable peer (see [Connection]); a conversation row's too. */
+    internal fun connection(isWifiAware: Boolean, isDirect: Boolean): Connection = when {
         isWifiAware -> Connection.WIFI_AWARE
         isDirect -> Connection.BLUETOOTH
         else -> Connection.ROUTED

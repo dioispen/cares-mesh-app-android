@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../bridge/bitchat_bridge.dart';
+import '../models/chat_conversation.dart';
 import '../models/chat_message.dart';
 import '../models/chat_navigation.dart';
 import '../models/chat_peer.dart';
@@ -75,6 +76,7 @@ class ChatService {
       ValueNotifier<Map<String, List<ChatMessage>>>(const {});
   final ValueNotifier<ChatUnread> _unread = ValueNotifier<ChatUnread>(ChatUnread.none);
   final ValueNotifier<ChatNavigation?> _pendingNavigation = ValueNotifier<ChatNavigation?>(null);
+  final ValueNotifier<ChatConversationList?> _conversations = ValueNotifier<ChatConversationList?>(null);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
@@ -89,10 +91,17 @@ class ChatService {
 
   /// 目前 mesh 上的線上人數與 peer 列表（原生標頭人數與 peer 列表的投影），peer 加入、
   /// 離開、改名、訊號或我的最愛變化時整份更新；原生端還沒回報前是 null。列表最後是離線的
-  /// 我的最愛（[ChatPeer.isOnline] 為 false），人數不算它們。
+  /// 我的最愛（[ChatPeer.isOnline] 為 false），人數不算它們。已有對話的 peer 在 [conversations]，
+  /// 不在這份列表裡（#73）。
   ///
   /// 人數與列表放在同一個值裡，一定來自同一份快照。
   ValueListenable<ChatPeerList?> get peerList => _peerList;
+
+  /// 原生持有的所有私訊對話（#73，原生 `ChatViewModel.conversations` 的投影）：對方在線與離線在
+  /// 同一份清單、依原生順序，每列帶未讀數與是否在線；原生端還沒回報前是 null。訊息進來、開啟對話
+  /// （原生清除未讀）、對方上線或離線時整份更新。開啟某段對話就以它的
+  /// [ChatConversation.conversationID] 呼叫 [startPrivateChat]（私訊畫面自己會呼叫）。
+  ValueListenable<ChatConversationList?> get conversations => _conversations;
 
   /// 輸入框上方的 `/` 指令與 `@` 提及補完（原生 `ChatViewModel` 補完狀態的投影）；
   /// 原生端還沒回報前是 [ChatSuggestions.none]。只隨快照更新，這裡的方法不會先行改動它。
@@ -230,6 +239,8 @@ class ChatService {
         }
         // 這個 app 不認得的目的地當作沒有：它留在原生，等下一次點擊取代。
         _pendingNavigation.value = ChatNavigation.fromMap(event['navigation']);
+      case ChatEvents.conversations:
+        _replace(_conversations, type, ChatConversationList.fromEvent(event));
     }
   }
 
@@ -254,5 +265,6 @@ class ChatService {
     _privateChats.dispose();
     _unread.dispose();
     _pendingNavigation.dispose();
+    _conversations.dispose();
   }
 }

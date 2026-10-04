@@ -378,8 +378,15 @@ void main() {
           'theyFavoritedUs': theyFavoritedUs,
         };
 
-    Future<void> pushPeers(WidgetTester tester, int onlineCount, List<Map<String, Object?>> peers) async {
-      events.add({'type': 'chat_peers', 'onlineCount': onlineCount, 'peers': peers});
+    /// [peopleCount] is the people section's count (#73); without conversations it is [onlineCount].
+    Future<void> pushPeers(WidgetTester tester, int onlineCount, List<Map<String, Object?>> peers,
+        {int? peopleCount}) async {
+      events.add({
+        'type': 'chat_peers',
+        'onlineCount': onlineCount,
+        'peopleCount': peopleCount ?? onlineCount,
+        'peers': peers,
+      });
       await tester.pump();
       await tester.pump();
     }
@@ -604,6 +611,189 @@ void main() {
 
       expect(find.byType(PrivateChatScreen), findsOneWidget);
       expect(routing, ['start:$noiseKey']);
+    });
+
+    // --- conversations (#73) ------------------------------------------------------------------
+
+    const contactAlice = 'contact_aaaa';
+    const contactDora = 'contact_dddd';
+
+    /// A `chat_conversations` row as Kotlin sends it; by default offline, read, five minutes old.
+    Map<String, Object?> conversation(
+      String conversationID, {
+      String displayName = 'dora',
+      String displaySuffix = '',
+      String preview = 'meet at the gym',
+      String previewType = 'message',
+      bool previewIsFromSelf = false,
+      int? timestamp,
+      int unreadCount = 0,
+      bool isOnline = false,
+      String connection = 'offline',
+      bool isFavorite = false,
+      bool theyFavoritedUs = false,
+    }) =>
+        {
+          'conversationID': conversationID,
+          'displayName': displayName,
+          'displaySuffix': displaySuffix,
+          'preview': preview,
+          'previewType': previewType,
+          'previewIsFromSelf': previewIsFromSelf,
+          'timestamp': timestamp ?? DateTime.now().subtract(const Duration(minutes: 5)).millisecondsSinceEpoch,
+          'unreadCount': unreadCount,
+          'isOnline': isOnline,
+          'connection': connection,
+          'isFavorite': isFavorite,
+          'theyFavoritedUs': theyFavoritedUs,
+        };
+
+    Future<void> pushConversations(WidgetTester tester, List<Map<String, Object?>> conversations,
+        {String state = 'ready'}) async {
+      events.add({'type': 'chat_conversations', 'state': state, 'conversations': conversations});
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Finder conversationTile(String name) =>
+        find.ancestor(of: inSheet(find.text(name)), matching: find.byType(ConversationListTile));
+
+    double topOf(WidgetTester tester, Finder finder) => tester.getTopLeft(finder).dy;
+
+    testWidgets('a conversations section above the people lists every conversation, online and offline together',
+        (tester) async {
+      await pumpChat(tester);
+      await pushConversations(tester, [
+        conversation(contactAlice, displayName: 'alice', isOnline: true, connection: 'bluetooth'),
+        conversation(contactDora, displayName: 'dora'),
+      ]);
+      // alice has a conversation, so the native side lists only bob among the people.
+      await pushPeers(tester, 2, [peer('2222222222222222', displayName: 'bob')], peopleCount: 1);
+      await openPeerList(tester);
+
+      final header = topOf(tester, inSheet(find.text('對話')));
+      final alice = topOf(tester, inSheet(find.text('alice')));
+      final dora = topOf(tester, inSheet(find.text('dora')));
+      final people = topOf(tester, inSheet(find.text('附近的人（1）')));
+      final bob = topOf(tester, inSheet(find.text('bob')));
+      expect([header < alice, alice < dora, dora < people, people < bob], everyElement(isTrue),
+          reason: 'in the order the native side sends, conversations above the people');
+      expect(inSheet(find.byType(ConversationListTile)), findsNWidgets(2));
+      // One list: no online / offline group headings, each row marks its own presence.
+      expect(inSheet(find.text('在線')), findsNothing);
+      expect(inSheet(find.text('離線')), findsNothing);
+      expect(find.descendant(of: conversationTile('alice'), matching: find.byTooltip('在線 · 藍牙直連')), findsOneWidget);
+      expect(find.descendant(of: conversationTile('dora'), matching: find.byTooltip('離線 · 不在 mesh 上')), findsOneWidget);
+    });
+
+    testWidgets('an offline, read conversation that is no favourite opens with its whole history', (tester) async {
+      startPrivateChat = (peerID) async => focusEvent(peerID, name: 'dora');
+      await pumpChat(tester);
+      await pushConversations(tester, [conversation(contactDora, displayName: 'dora')]);
+      await pushPeers(tester, 0, []);
+      await openPeerList(tester);
+      expect(inSheet(find.text('目前沒有人連線')), findsOneWidget, reason: 'dora is neither online nor a favourite');
+
+      await tester.tap(inSheet(find.text('dora')));
+      await tester.pumpAndSettle();
+      // Upstream's startPrivateChat loaded the stored history; it arrives with the next snapshot.
+      events.add({
+        'type': 'chat_private_chats',
+        'chats': {
+          contactDora: [
+            message('P1', sender: 'dora', content: 'the meeting point is the school gym'),
+            message('P2', sender: 'me', content: 'got it', isFromSelf: true),
+          ],
+        },
+      });
+      await tester.pumpAndSettle();
+
+      expect(sheet(), findsNothing);
+      expect(find.byType(PrivateChatScreen), findsOneWidget);
+      expect(routing, ['start:$contactDora'], reason: 'opened by its conversation ID, as the native row opens it');
+      expect(find.text('the meeting point is the school gym'), findsOneWidget);
+      expect(find.text('got it'), findsOneWidget);
+    });
+
+    testWidgets('each conversation shows its unread count, gone once the native side reports it read',
+        (tester) async {
+      await pumpChat(tester);
+      await pushConversations(tester, [conversation(contactDora, displayName: 'dora', unreadCount: 3)]);
+      await pushPeers(tester, 0, []);
+      await openPeerList(tester);
+
+      expect(find.descendant(of: conversationTile('dora'), matching: find.byTooltip('3 則未讀私訊')), findsOneWidget);
+
+      await pushConversations(tester, [conversation(contactDora, displayName: 'dora')]);
+
+      expect(inSheet(find.byType(UnreadBadge)), findsNothing);
+    });
+
+    testWidgets('a conversation previews its latest message and when it came', (tester) async {
+      await pumpChat(tester);
+      await pushConversations(tester, [
+        conversation(contactDora, displayName: 'dora', preview: 'see you there', previewIsFromSelf: true),
+      ]);
+      await pushPeers(tester, 0, []);
+      await openPeerList(tester);
+
+      expect(find.descendant(of: conversationTile('dora'), matching: find.text('你：see you there')), findsOneWidget);
+      expect(find.descendant(of: conversationTile('dora'), matching: find.text('· 5 分鐘前')), findsOneWidget);
+    });
+
+    testWidgets('a conversation shows the star of a favourite, as the native row does', (tester) async {
+      await pumpChat(tester);
+      await pushConversations(tester, [
+        conversation(contactAlice, displayName: 'alice', isFavorite: true),
+        conversation(contactDora, displayName: 'dora'),
+      ]);
+      await pushPeers(tester, 0, []);
+      await openPeerList(tester);
+
+      expect(find.descendant(of: conversationTile('alice'), matching: find.byIcon(Icons.star)), findsOneWidget);
+      expect(find.descendant(of: conversationTile('dora'), matching: find.byIcon(Icons.star)), findsNothing);
+      expect(find.descendant(of: conversationTile('dora'), matching: find.byIcon(Icons.star_border)), findsNothing);
+    });
+
+    testWidgets('with no conversations yet the section says so, as the native one does', (tester) async {
+      await pumpChat(tester);
+      await pushConversations(tester, []);
+      await pushPeers(tester, 0, []);
+      await openPeerList(tester);
+
+      expect(inSheet(find.text('對話')), findsOneWidget);
+      expect(inSheet(find.text('私訊對話會顯示在這裡')), findsOneWidget);
+    });
+
+    testWidgets('while the conversation store loads or has failed, the empty section says so', (tester) async {
+      await pumpChat(tester);
+      await pushPeers(tester, 0, []);
+      await openPeerList(tester);
+      expect(inSheet(find.text('正在載入私訊對話…')), findsOneWidget, reason: 'nothing reported yet');
+
+      await pushConversations(tester, [], state: 'loading');
+      expect(inSheet(find.text('正在載入私訊對話…')), findsOneWidget);
+
+      await pushConversations(tester, [], state: 'error');
+      expect(inSheet(find.text('無法載入私訊對話')), findsOneWidget);
+      expect(inSheet(find.text('私訊對話會顯示在這裡')), findsNothing);
+
+      // Conversations already loaded are listed whatever the state.
+      await pushConversations(tester, [conversation(contactDora)], state: 'loading');
+      expect(inSheet(find.text('dora')), findsOneWidget);
+      expect(inSheet(find.text('正在載入私訊對話…')), findsNothing);
+    });
+
+    testWidgets('the people header counts the people section; the app bar still counts everyone online',
+        (tester) async {
+      await pumpChat(tester);
+      await pushConversations(tester, [conversation(contactAlice, displayName: 'alice', isOnline: true)]);
+      await pushPeers(tester, 2, [peer('2222222222222222', displayName: 'bob')], peopleCount: 1);
+
+      expect(inCount('2'), findsOneWidget);
+      await openPeerList(tester);
+
+      expect(inSheet(find.text('附近的人（1）')), findsOneWidget);
     });
   });
 

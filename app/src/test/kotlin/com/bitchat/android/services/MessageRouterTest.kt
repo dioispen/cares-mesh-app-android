@@ -102,6 +102,28 @@ class MessageRouterTest {
     }
 
     @Test
+    fun `a message sent in an offline contact conversation is queued under it and flushed once the peer is back`() {
+        // The Flutter conversation list (#73) opens an offline peer's chat by its `contact_…` ID,
+        // so the private chat upstream sends from is that ID, not a mesh peer ID.
+        val contactID = ContactIdentityResolver.contactConversationIdForNoiseKey(noiseKey)
+        peerOffline()
+        val result = router.sendPrivate("meet at the gym", contactID, "peer", "msg-1")
+
+        assertEquals(MessageRouter.RouteResult.QUEUED, result)
+        verify(mesh, never()).sendPrivateMessage(any(), any(), any(), anyOrNull())
+
+        // The peer reappears under its mesh peer ID; its Noise key leads back to the conversation.
+        peerConnectedNoSession()
+        router.onPeersUpdated(listOf(peerID))
+        verify(mesh, times(1)).initiateNoiseHandshake(peerID)
+        verify(mesh, never()).sendPrivateMessage(any(), any(), any(), anyOrNull())
+
+        peerReady()
+        router.onSessionEstablished(peerID)
+        verify(mesh, times(1)).sendPrivateMessage("meet at the gym", peerID, "peer", "msg-1")
+    }
+
+    @Test
     fun `scheduler retries handshake with capped backoff`() {
         peerConnectedNoSession()
         val result = router.sendPrivate("hello", peerID, "peer", "msg-1")

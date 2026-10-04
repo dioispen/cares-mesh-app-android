@@ -71,6 +71,12 @@ import kotlinx.coroutines.withContext
  * ([ChatRecords]), so those snapshots are also re-pushed when the favourites store reports a change
  * and after every command upstream ran.
  *
+ * Conversations (#73) are upstream's list too: `ChatViewModel.conversations`, projected as
+ * `chat_conversations` ([ChatConversations]) for the conversations section above the people, which
+ * lists every conversation upstream keeps — the peer offline and the chat read included. A row is
+ * opened like any private chat, with its conversation ID through [METHOD_START_PRIVATE_CHAT]; a peer
+ * with a listed conversation is left out of `chat_peers` as the native sheet leaves it out.
+ *
  * Channels are not supported yet (P3): the bridge keeps upstream on the main timeline, refusing
  * the join command and leaving a channel upstream is already in ([ChatChannels]).
  *
@@ -173,6 +179,7 @@ class ChatBridge(
         // fingerprints once a second and the peer set on every join/leave; the debounce folds a
         // refresh that touches several flows into one snapshot, read from all of them at once.
         // Offline favourites come from the favourites store; unread badges hide blocked peers.
+        // `conversations` also decides who is left to the conversations section (#73).
         Projection(
             changes = merge(
                 chatViewModel.connectedPeers,
@@ -241,6 +248,21 @@ class ChatBridge(
                     ChatBlocking.visibleConversations(ChatUnread.conversations(chatViewModel.conversations.value), blocked)
                 )
             }
+        ),
+        // The native sheet's conversations section (#73). `conversations` carries the names,
+        // previews, unread counts and presence (upstream rebuilds it as messages, peers and the
+        // unread set change); the transport icon and the star read the flows behind them, and
+        // blocked peers are left out (re-checked after every command).
+        Projection(
+            changes = merge(
+                chatViewModel.conversations,
+                chatViewModel.conversationStoreState,
+                chatViewModel.peerDirect,
+                wifiAwarePeers,
+                favoriteStarChanges,
+                commandsRun
+            ),
+            snapshot = ::conversationsEvent
         ),
         // A tapped notification Dart has yet to act on (#57). On a cold start it is there before
         // Dart runs; Dart's subscription (or chat_requestSnapshot) picks it up.
@@ -550,6 +572,9 @@ class ChatBridge(
         // Only needed to tell which favourites are online (PeopleSection's noiseHexByPeerID and
         // nostrHexByPeerID).
         val matchFavorites = ourFavorites.isNotEmpty()
+        // Who the conversations section lists instead (#73); the peers' own aliases (the contact
+        // directory) are only looked up while it lists any.
+        val conversationAliases = ChatConversations.identityAliases(visibleConversations(isBlocked))
         return ChatPeerList.Inputs(
             myPeerID = chatViewModel.myPeerID,
             connectedPeers = connectedPeers,
@@ -567,7 +592,34 @@ class ChatBridge(
             peerFingerprints = chatViewModel.peerFingerprints.value,
             ourFavorites = ourFavorites,
             peerNoiseKeys = if (matchFavorites) connectedPeers.associateWithNotNull(::noiseKeyHex) else emptyMap(),
-            peerNostrKeys = if (matchFavorites) connectedPeers.associateWithNotNull(records::nostrPubkeyHex) else emptyMap()
+            peerNostrKeys = if (matchFavorites) connectedPeers.associateWithNotNull(records::nostrPubkeyHex) else emptyMap(),
+            conversationAliases = conversationAliases,
+            peerAliases = if (conversationAliases.isNotEmpty()) connectedPeers.associateWith(records::conversationAliases) else emptyMap()
+        )
+    }
+
+    /** Upstream's conversations the Flutter sheet lists: all but blocked peers' ([ChatBlocking]). */
+    private fun visibleConversations(isBlocked: (String) -> Boolean) =
+        ChatBlocking.visibleSummaries(chatViewModel.conversations.value, isBlocked)
+
+    /** The `chat_conversations` snapshot (#73), see [ChatConversations]. */
+    private fun conversationsEvent(): Map<String, Any?> {
+        val inputs = ChatConversations.Inputs(
+            conversations = visibleConversations(blockedPeers()),
+            peerDirect = chatViewModel.peerDirect.value,
+            wifiAwarePeerIDs = wifiAwarePeers.value.keys,
+            favoritePeers = chatViewModel.favoritePeers.value,
+            peerFavoritedUs = chatViewModel.peerFavoritedUs.value,
+            peerFingerprints = chatViewModel.peerFingerprints.value
+        )
+        return ChatSerialization.conversationsEvent(
+            ChatConversations.storeState(chatViewModel.conversationStoreState.value),
+            ChatConversations.rows(
+                inputs,
+                favoriteRelationship = records::favoriteRelationship,
+                isFavoriteFallback = favoriteFallbacks.isFavorite,
+                isDirectFallback = ::isDirectOnMesh
+            )
         )
     }
 

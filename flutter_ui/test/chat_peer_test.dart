@@ -180,6 +180,21 @@ void main() {
       expect(list.peers.map((p) => p.peerID), ['1111111111111111', '2222222222222222']);
     });
 
+    test('reads the people section count beside the online count (#73)', () {
+      // Peers with a listed conversation are shown in the conversations section instead: the
+      // header's count still counts them, the people section's does not.
+      final list = ChatPeerList.fromEvent(event(onlineCount: 3)..['peopleCount'] = 1)!;
+
+      expect(list.onlineCount, 3);
+      expect(list.peopleCount, 1);
+    });
+
+    test('a missing or malformed people count is unknown, not recounted (#73)', () {
+      expect(ChatPeerList.fromEvent(event())!.peopleCount, isNull);
+      expect(ChatPeerList.fromEvent(event()..['peopleCount'] = '1')!.peopleCount, isNull);
+      expect(ChatPeerList.fromEvent(event()..['peopleCount'] = -1)!.peopleCount, isNull);
+    });
+
     test('the count is taken as Kotlin sends it, not recounted', () {
       // Upstream's header count and its list rows are separate rules.
       final list = ChatPeerList.fromEvent(event(onlineCount: 5))!;

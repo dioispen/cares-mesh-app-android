@@ -9,7 +9,8 @@
 /// 整份快照的外框（`onlineCount`、`peers`）不對時整份拒收，讓呼叫端保留現有狀態。
 ///
 /// 列表先是在線的 peer，再接著離線的我的最愛（#58，[ChatPeerConnection.offline]），都由原生
-/// 依原生列表的規則排好。
+/// 依原生列表的規則排好。已有私訊對話的 peer 由原生移到「對話」區段（#73，見
+/// `models/chat_conversation.dart`），不在這份列表裡。
 library;
 
 /// 我們如何連到這個 peer（原生的判斷順序：Wi-Fi Aware → 藍牙直連 → 經其他 peer 轉傳）。
@@ -23,7 +24,17 @@ enum ChatPeerConnection {
   offline,
 
   /// 缺值或不認得的值；不猜測是直連還是轉傳。
-  unknown,
+  unknown;
+
+  /// Kotlin `ChatPeerList.Connection.wire` 的名稱（`chat_peers` 與 `chat_conversations` 共用）；
+  /// 缺值或不認得時是 [unknown]。
+  static ChatPeerConnection fromWire(Object? wire) => switch (wire) {
+        'bluetooth' => bluetooth,
+        'wifiAware' => wifiAware,
+        'routed' => routed,
+        'offline' => offline,
+        _ => unknown,
+      };
 }
 
 class ChatPeer {
@@ -91,13 +102,7 @@ class ChatPeer {
       displaySuffix: displaySuffix is String ? displaySuffix : '',
       rssi: raw['rssi'] is int ? raw['rssi'] as int : null,
       signalBars: signalBars is int && signalBars >= 0 && signalBars <= 3 ? signalBars : null,
-      connection: switch (raw['connection']) {
-        'bluetooth' => ChatPeerConnection.bluetooth,
-        'wifiAware' => ChatPeerConnection.wifiAware,
-        'routed' => ChatPeerConnection.routed,
-        'offline' => ChatPeerConnection.offline,
-        _ => ChatPeerConnection.unknown,
-      },
+      connection: ChatPeerConnection.fromWire(raw['connection']),
       unreadCount: unreadCount is int && unreadCount > 0 ? unreadCount : 0,
       isFavorite: raw['isFavorite'] == true,
       theyFavoritedUs: raw['theyFavoritedUs'] == true,
@@ -105,26 +110,32 @@ class ChatPeer {
   }
 }
 
-/// 一份 `chat_peers` 快照：原生標頭的線上人數，加上原生 peer 列表的各列（依顯示順序）。
+/// 一份 `chat_peers` 快照：原生標頭的線上人數、「附近的人」區段的人數，加上該區段的各列（依顯示順序）。
 ///
-/// 兩者由 Kotlin 從同一個時間點的狀態算出，[onlineCount] 照 Kotlin 給的值，不在這裡重數。
+/// 都由 Kotlin 從同一個時間點的狀態算出，[onlineCount]、[peopleCount] 照 Kotlin 給的值，不在這裡重數。
 class ChatPeerList {
-  const ChatPeerList({required this.onlineCount, required this.peers});
+  const ChatPeerList({required this.onlineCount, this.peopleCount, required this.peers});
 
-  /// 目前 mesh 上的線上人數（不含自己；不含離線的我的最愛）。
+  /// 目前 mesh 上的線上人數（不含自己；不含離線的我的最愛）——原生標頭的人數，聊天室 AppBar 顯示它。
   final int onlineCount;
+
+  /// 「附近的人」區段列出的在線人數（原生 `PeopleSection` 標題的人數，#73）：已有對話、列在「對話」
+  /// 區段的 peer 不算。Kotlin 沒有給、或格式不對時是 null（標題就不顯示人數）。
+  final int? peopleCount;
 
   /// 依原生列表順序：在線 peer，再接離線的我的最愛；不可修改。
   final List<ChatPeer> peers;
 
-  /// 解析 `{type: chat_peers, onlineCount, peers}`。`onlineCount` 不是非負整數、
+  /// 解析 `{type: chat_peers, onlineCount, peopleCount, peers}`。`onlineCount` 不是非負整數、
   /// 或 `peers` 不是 List 時回傳 null；清單中不是 peer 的項目略過、保留其餘順序。
   static ChatPeerList? fromEvent(Map<String, dynamic> event) {
     final onlineCount = event['onlineCount'];
+    final peopleCount = event['peopleCount'];
     final peers = event['peers'];
     if (onlineCount is! int || onlineCount < 0 || peers is! List) return null;
     return ChatPeerList(
       onlineCount: onlineCount,
+      peopleCount: peopleCount is int && peopleCount >= 0 ? peopleCount : null,
       peers: List.unmodifiable([
         for (final entry in peers) ?ChatPeer.fromMap(entry),
       ]),

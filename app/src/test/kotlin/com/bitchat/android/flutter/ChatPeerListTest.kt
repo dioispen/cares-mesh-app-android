@@ -27,7 +27,9 @@ class ChatPeerListTest {
         peerFingerprints: Map<String, String> = emptyMap(),
         ourFavorites: List<ChatFavorites.Favorite> = emptyList(),
         peerNoiseKeys: Map<String, String> = emptyMap(),
-        peerNostrKeys: Map<String, String> = emptyMap()
+        peerNostrKeys: Map<String, String> = emptyMap(),
+        conversationAliases: Set<String> = emptySet(),
+        peerAliases: Map<String, Set<String>> = emptyMap()
     ) = ChatPeerList.Inputs(
         myPeerID = ME,
         connectedPeers = connectedPeers,
@@ -42,7 +44,9 @@ class ChatPeerListTest {
         peerFingerprints = peerFingerprints,
         ourFavorites = ourFavorites,
         peerNoiseKeys = peerNoiseKeys,
-        peerNostrKeys = peerNostrKeys
+        peerNostrKeys = peerNostrKeys,
+        conversationAliases = conversationAliases,
+        peerAliases = peerAliases
     )
 
     private fun rows(
@@ -470,6 +474,87 @@ class ChatPeerListTest {
         )
 
         assertEquals(4, row(state).unreadCount)
+    }
+
+    // --- conversations section (#73: MeshPeerListSheet visibleConnectedPeers, excludedIdentityAliases) -
+
+    @Test
+    fun `a connected peer with a listed conversation is left to the conversations section`() {
+        // visibleConnectedPeers: a peer any of whose aliases (ContactDirectory.aliasesForConversation)
+        // is one of the listed conversations' identityAliases is shown there, not among the people.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "alice", BOB to "bob"),
+            conversationAliases = setOf(CONTACT, NOISE_DORA),
+            peerAliases = mapOf(ALICE to setOf(ALICE, CONTACT), BOB to setOf(BOB))
+        )
+
+        assertEquals(listOf(BOB), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `a peer's aliases match the conversation's ignoring case`() {
+        val state = inputs(
+            connectedPeers = listOf(ALICE),
+            conversationAliases = setOf(NOISE_DORA),
+            peerAliases = mapOf(ALICE to setOf(ALICE, NOISE_DORA.uppercase()))
+        )
+
+        assertEquals(emptyList<ChatPeerList.Row>(), rows(state))
+    }
+
+    @Test
+    fun `a peer whose aliases upstream could not tell is matched by its own ID`() {
+        // aliasesForConversation(peerID) falls back to setOf(peerID) when it cannot be resolved.
+        val state = inputs(connectedPeers = listOf(ALICE, BOB), conversationAliases = setOf(ALICE))
+
+        assertEquals(listOf(BOB), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `the people count is the peers listed among the people, the online count still everyone`() {
+        // PeopleSection's header counts visibleConnectedPeers; the header's PeerCounter counts all.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB, ME),
+            conversationAliases = setOf(CONTACT),
+            peerAliases = mapOf(ALICE to setOf(ALICE, CONTACT))
+        )
+
+        assertEquals(1, ChatPeerList.peopleCount(state))
+        assertEquals(2, ChatPeerList.onlineCount(state))
+    }
+
+    @Test
+    fun `without conversations everyone connected is counted among the people`() {
+        val state = inputs(connectedPeers = listOf(ALICE, BOB, ME))
+
+        assertEquals(2, ChatPeerList.peopleCount(state))
+    }
+
+    @Test
+    fun `an offline favourite with a listed conversation is left to the conversations section`() {
+        // offlineFavoriteRows: favoriteNoiseKey.lowercase() in excludedIdentityAliases.
+        val state = inputs(
+            connectedPeers = emptyList(),
+            ourFavorites = listOf(favorite(NOISE_DORA, "dora"), favorite(NOISE_ERIN, "erin")),
+            conversationAliases = setOf(CONTACT_DORA, NOISE_DORA)
+        )
+
+        assertEquals(listOf(NOISE_ERIN), rows(state).map { it.peerID })
+    }
+
+    @Test
+    fun `hash suffixes are decided among the rows the people section still lists`() {
+        // baseNameCounts: only the visible connected peers and the offline favourites not excluded.
+        val state = inputs(
+            connectedPeers = listOf(ALICE, BOB),
+            peerNicknames = mapOf(ALICE to "sam#0a1b", BOB to "sam#ffff"),
+            ourFavorites = listOf(favorite(NOISE_DORA, "sam#d0d0")),
+            conversationAliases = setOf(CONTACT, NOISE_DORA),
+            peerAliases = mapOf(ALICE to setOf(ALICE, CONTACT))
+        )
+
+        assertEquals(listOf("sam" to ""), rows(state).map { it.displayName to it.displaySuffix })
     }
 
     // --- signal (PeerManager RSSI, MeshPeerListSheet.convertRSSIToSignalStrength) -----------------
