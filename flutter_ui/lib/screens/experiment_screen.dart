@@ -43,6 +43,9 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
   /// 沒有預設：多支手機同時實驗時，忘了改裝置編號會讓接收端把兩支算成同一個來源。
   int? _device;
   int _ttl = 3;
+
+  /// run 期間持有 wake lock；E4 要關掉，否則手機無法休眠。
+  bool _keepAwake = true;
   String _status = _statusLabels.first;
 
   Timer? _poller;
@@ -116,6 +119,7 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
         ttl: _ttl,
         startAt: startAt,
         status: _status,
+        keepAwake: _keepAwake,
       ),
     );
   }
@@ -207,7 +211,12 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
         ),
         _Field(
           '本次',
-          '${sender.handle ?? '—'}・TTL ${sender.ttl ?? '—'}・間隔 ${sender.intervalMs ?? '—'} ms',
+          [
+            sender.handle ?? '—',
+            'TTL ${sender.ttl ?? '—'}',
+            '間隔 ${sender.intervalMs ?? '—'} ms',
+            if (sender.keepAwake != null) sender.keepAwake! ? '保持喚醒' : '不保持喚醒',
+          ].join('・'),
           valueKey: 'experiment-sender-job',
           style: _monospace,
         ),
@@ -309,6 +318,14 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
               selected: {_status},
               onSelectionChanged: (selected) => setState(() => _status = selected.single),
             ),
+          ),
+          SwitchListTile(
+            key: const ValueKey('experiment-keep-awake'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('保持喚醒'),
+            subtitle: const Text('螢幕關閉也照排程送。E4 要關掉，否則手機無法休眠'),
+            value: _keepAwake,
+            onChanged: (value) => setState(() => _keepAwake = value),
           ),
           const SizedBox(height: 16),
           Row(

@@ -117,6 +117,7 @@ Debug 限定的畫面，可設定的參數：
 | TTL | 3 = 現行 Health Report；7 = `MESSAGE_TTL_HOPS` |
 | 開始時間 | 牆鐘 `HH:mm:ss`，讓多支手機在同一時刻開始 |
 | Status | 預設「安全」 |
+| 保持喚醒 | 預設開：run 期間持有 wake lock，螢幕關閉也照排程送。**E4 要關掉**，否則手機無法休眠，背景存活與耗電會偏樂觀。關掉時 CPU 休眠會讓排程延後，醒來後不補送錯過的筆數 |
 
 - Payload 使用與 `sendHealthReport` 相同的 Health Report Broadcast Tier 編碼。每支手機用固定的實驗 handle（`ee0000000001`～`ee0000000010` 對應 A～J），走的路徑與真實 Health Report 相同。
 - 每一筆都寫一個 `TX` 事件。

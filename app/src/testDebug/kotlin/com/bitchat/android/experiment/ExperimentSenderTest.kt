@@ -22,12 +22,15 @@ class ExperimentSenderTest {
     private val tenOClock = base + 10_000
 
     private val sent = mutableListOf<Long>()
+
+    /** How far the phone's wall clock jumped while the CPU slept (the test scheduler does not see it). */
+    private var sleptMs = 0L
     private val keepAwake = RecordingKeepAwake()
     private var accept = true
 
     private fun TestScope.sender() = ExperimentSender(
         scope = backgroundScope,
-        clock = { base + testScheduler.currentTime },
+        clock = { base + testScheduler.currentTime + sleptMs },
         zone = ZoneOffset.UTC,
         keepAwake = keepAwake
     ) { _, pts ->
@@ -41,15 +44,20 @@ class ExperimentSenderTest {
         runCurrent()
     }
 
-    private fun plan(count: Int = 3, intervalMs: Long = 1_000, startAt: LocalTime? = LocalTime.of(10, 0, 0)) =
-        ExperimentPlan(
-            handle = "ee0000000001",
-            status = HealthStatus.SAFE,
-            count = count,
-            intervalMs = intervalMs,
-            ttl = 7,
-            startAt = startAt
-        )
+    private fun plan(
+        count: Int = 3,
+        intervalMs: Long = 1_000,
+        startAt: LocalTime? = LocalTime.of(10, 0, 0),
+        keepAwake: Boolean = true
+    ) = ExperimentPlan(
+        handle = "ee0000000001",
+        status = HealthStatus.SAFE,
+        count = count,
+        intervalMs = intervalMs,
+        ttl = 7,
+        startAt = startAt,
+        keepAwake = keepAwake
+    )
 
     @Test
     fun `waits for the wall-clock start, then sends count packets an interval apart`() = runTest {
@@ -229,6 +237,36 @@ class ExperimentSenderTest {
         sender.start(plan(count = 1, startAt = null))
 
         assertEquals(0, sender.status.noLink)
+    }
+
+    @Test
+    fun `a run that must not keep the phone awake never takes the wake lock`() = runTest {
+        val sender = sender()
+
+        sender.start(plan(count = 2, intervalMs = 60_000, startAt = null, keepAwake = false))
+        finish()
+
+        assertEquals(2, sent.size)
+        assertEquals(emptyList<String>(), keepAwake.calls)
+    }
+
+    @Test
+    fun `after the CPU slept through slots, sending resumes one interval at a time instead of bursting`() = runTest {
+        val sender = sender()
+        sender.start(plan(count = 3, intervalMs = 60_000, startAt = null, keepAwake = false))
+        runCurrent()
+
+        sleptMs = 600_000
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(listOf(base, base + 660_000), sent)
+
+        advanceTimeBy(59_999)
+        runCurrent()
+        assertEquals("the next one keeps a full interval", 2, sent.size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(base, base + 660_000, base + 720_000), sent)
     }
 
     private class RecordingKeepAwake : KeepAwake {

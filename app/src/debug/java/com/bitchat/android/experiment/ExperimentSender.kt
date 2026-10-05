@@ -22,7 +22,12 @@ data class ExperimentPlan(
     /** 3（現行 Health Report）或 7（`MESSAGE_TTL_HOPS`）。 */
     val ttl: Int,
     /** 牆鐘開始時間，讓多支手機同時開始；null 是立刻開始。 */
-    val startAt: LocalTime?
+    val startAt: LocalTime?,
+    /**
+     * run 期間持有 wake lock，螢幕關閉也照排程送。E4 要關掉：wake lock 會讓手機無法休眠，
+     * 量到的背景存活與耗電會偏樂觀。
+     */
+    val keepAwake: Boolean = true
 ) {
     companion object {
         val TTLS = setOf(3, 7)
@@ -44,7 +49,10 @@ interface KeepAwake {
 /**
  * 實驗用自動發送器（#70）：依 [ExperimentPlan] 在指定的牆鐘時刻開始，定速送出固定筆數的
  * Health Report。迴圈跑在 [scope]（`MeshForegroundService` 的 scope）裡，所以 app 進背景後仍繼續；
- * 等待與送出期間持有 [keepAwake]。
+ * [ExperimentPlan.keepAwake] 時，等待與送出期間持有 [keepAwake]。
+ *
+ * 不保持喚醒時，CPU 休眠會讓排程延後。醒來後如果已經錯過一整個間隔以上，這一筆照送，之後
+ * 從這一筆重新起算間隔，不連發補送錯過的筆數（每筆的實際送出時間記在 `TX` 的 `t_ms`）。
  *
  * 第 i 筆排在 `開始時刻 + i × 間隔`，不因單筆送出花的時間累積誤差。每筆交給 [transmit] 的封包
  * timestamp `pts` 嚴格遞增（突發時同一 ms 會順延 1 ms），`(src, pts)` 因此唯一。
@@ -114,11 +122,17 @@ class ExperimentSender(
     }
 
     private suspend fun send(id: Int, plan: ExperimentPlan, startsAt: Long, startedAt: Long) {
-        keepAwake.acquire(startsAt - startedAt + (plan.count - 1) * plan.intervalMs + WAKE_LOCK_MARGIN_MS)
+        if (plan.keepAwake) {
+            keepAwake.acquire(startsAt - startedAt + (plan.count - 1) * plan.intervalMs + WAKE_LOCK_MARGIN_MS)
+        }
         try {
             var lastPts = Long.MIN_VALUE
+            var slotBase = startsAt
             for (i in 0 until plan.count) {
-                delayUntil(startsAt + i * plan.intervalMs)
+                delayUntil(slotBase + i * plan.intervalMs)
+                if (plan.intervalMs > 0 && clock() - (slotBase + i * plan.intervalMs) >= plan.intervalMs) {
+                    slotBase = clock() - i * plan.intervalMs
+                }
                 if (plan.intervalMs == 0L && i > 0) yield()
                 val pts = maxOf(clock(), lastPts + 1)
                 lastPts = pts
@@ -136,7 +150,7 @@ class ExperimentSender(
             }
             update(id) { it.copy(state = State.DONE) }
         } finally {
-            keepAwake.release()
+            if (plan.keepAwake) keepAwake.release()
         }
     }
 

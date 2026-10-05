@@ -36,6 +36,7 @@ void main() {
     String? handle,
     int? ttl,
     int? intervalMs,
+    bool? keepAwake,
   }) =>
       {
         'state': state,
@@ -48,6 +49,7 @@ void main() {
         'handle': handle,
         'ttl': ttl,
         'intervalMs': intervalMs,
+        'keepAwake': keepAwake,
       };
 
   Map<String, Object?> statusMap({
@@ -219,7 +221,7 @@ void main() {
     testWidgets('shows how far the sender got', (tester) async {
       status = statusMap(
         senderStatus: sender(
-            state: 'sending', sent: 12, failed: 1, written: 9, noLink: 2, total: 50, startsAt: now, handle: 'ee0000000003', ttl: 7, intervalMs: 200),
+            state: 'sending', sent: 12, failed: 1, written: 9, noLink: 2, total: 50, startsAt: now, handle: 'ee0000000003', ttl: 7, intervalMs: 200, keepAwake: false),
       );
 
       await pumpScreen(tester);
@@ -227,7 +229,7 @@ void main() {
       expect(textOf(tester, 'experiment-sender-state'), '發送中');
       expect(textOf(tester, 'experiment-sender-progress'), '12 / 50');
       expect(textOf(tester, 'experiment-sender-outcome'), '有鏈路 9・無鏈路 2・mesh 未收下 1');
-      expect(textOf(tester, 'experiment-sender-job'), 'ee0000000003・TTL 7・間隔 200 ms');
+      expect(textOf(tester, 'experiment-sender-job'), 'ee0000000003・TTL 7・間隔 200 ms・不保持喚醒');
     });
   });
 
@@ -251,6 +253,7 @@ void main() {
         'ttl': 7,
         'startAt': '09:05:00',
         'status': '重傷',
+        'keepAwake': true,
       });
     });
 
@@ -268,7 +271,20 @@ void main() {
         'ttl': 3,
         'startAt': null,
         'status': '安全',
+        'keepAwake': true,
       });
+    });
+
+    testWidgets('an E4 run turns keeping the phone awake off', (tester) async {
+      await pumpScreen(tester);
+
+      await selectDevice(tester, 1);
+      await tester.ensureVisible(find.byKey(const ValueKey('experiment-keep-awake')));
+      await tester.tap(find.byKey(const ValueKey('experiment-keep-awake')));
+      await tester.pump();
+      await tapStart(tester);
+
+      expect(callsOf(ExperimentMethods.startSender).single.arguments, containsPair('keepAwake', false));
     });
 
     testWidgets('the form shows the handle the chosen device sends with', (tester) async {

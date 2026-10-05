@@ -17,7 +17,7 @@ import java.time.format.DateTimeParseException
  * - [METHOD_GET_STATUS]：直連數、電源模式、系統省電模式、本機 peerID 前 8 碼、最近 20 s／60 s 依
  *   實驗 handle 的 `RX` 筆數，以及發送器狀態（[senderStatus]）。
  * - [METHOD_START_SENDER]：`{device: 1..10, count: >=1, intervalMs: >=0, ttl: 3|7,
- *   startAt: "HH:mm:ss"|null, status: Status label}`，回傳發送器狀態。
+ *   startAt: "HH:mm:ss"|null, status: Status label, keepAwake: bool（省略為 true）}`，回傳發送器狀態。
  * - [METHOD_STOP_SENDER]：停止發送器，回傳發送器狀態。
  *
  * [sender] 在 `MeshForegroundService` 存在時才有；沒有時開始會回 [ERROR_SERVICE_NOT_READY]。
@@ -52,7 +52,7 @@ class ExperimentBridge(
         val plan = planFrom(call.arguments as? Map<*, *>)
             ?: return result.invalidArguments(
                 call,
-                "{device: 1..10, count: >=1, intervalMs: >=0, ttl: 3|7, startAt: HH:mm:ss|null, status: String}"
+                "{device: 1..10, count: >=1, intervalMs: >=0, ttl: 3|7, startAt: HH:mm:ss|null, status: String, keepAwake: Boolean?}"
             )
         val sender = sender()
             ?: return result.error(ERROR_SERVICE_NOT_READY, "Mesh foreground service is not running", null)
@@ -94,13 +94,19 @@ class ExperimentBridge(
                 }
                 else -> return null
             }
+            val keepAwake = when (val raw = arguments["keepAwake"]) {
+                null -> true
+                is Boolean -> raw
+                else -> return null
+            }
             return ExperimentPlan(
                 handle = ExperimentHandles.forDevice(device.toInt()),
                 status = status,
                 count = count.toInt(),
                 intervalMs = intervalMs,
                 ttl = ttl,
-                startAt = startAt
+                startAt = startAt,
+                keepAwake = keepAwake
             )
         }
 
@@ -124,7 +130,8 @@ class ExperimentBridge(
                 "startsAtMs" to current.startsAtMs,
                 "handle" to current.plan?.handle,
                 "ttl" to current.plan?.ttl,
-                "intervalMs" to current.plan?.intervalMs
+                "intervalMs" to current.plan?.intervalMs,
+                "keepAwake" to current.plan?.keepAwake
             )
         }
     }

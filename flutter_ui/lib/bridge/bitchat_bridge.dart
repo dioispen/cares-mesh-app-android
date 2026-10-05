@@ -334,12 +334,14 @@ class BitchatBridge {
   /// （`ee` 加裝置編號補零成 10 位）送出 [count] 筆（至少 1）Health Report Broadcast Tier，每筆間隔
   /// [intervalMs]（0 為突發），TTL 為 [ttl]（3 或 7），Status 為 [status]（「安全」「輕傷」「重傷」）。
   /// 只走 mesh，不寫入 Firestore。發送在原生的 mesh 前景服務裡跑，畫面關掉、app 進背景仍會繼續。
+  /// [keepAwake] 為 true 時原生在 run 期間持有 wake lock，螢幕關閉也照排程送；E4 要傳 false，
+  /// 否則手機無法休眠，背景存活與耗電會量得偏樂觀。
   ///
   /// [startAt] 是本機牆鐘 `HH:mm:ss`：原生取它的下一次出現（今天還沒到就今天，否則明天），讓多支
   /// 手機同時開始；null 表示立即開始。實際開始時間在回傳的 `startsAtMs`。
   ///
   /// 回傳發送器狀態 `{state: idle|waiting|sending|done|stopped, sent, failed, written, noLink, total, startsAtMs?,
-  /// handle?, ttl?, intervalMs?}`。沒有啟動時以 [PlatformException] 往上拋，錯誤碼見
+  /// handle?, ttl?, intervalMs?, keepAwake?}`。沒有啟動時以 [PlatformException] 往上拋，錯誤碼見
   /// [ExperimentErrors]。
   static Future<Map<dynamic, dynamic>?> startExperimentSender({
     required int device,
@@ -348,6 +350,7 @@ class BitchatBridge {
     required int ttl,
     required String? startAt,
     required String status,
+    required bool keepAwake,
   }) =>
       _method.invokeMethod<Map>(ExperimentMethods.startSender, <String, dynamic>{
         'device': device,
@@ -356,6 +359,7 @@ class BitchatBridge {
         'ttl': ttl,
         'startAt': startAt,
         'status': status,
+        'keepAwake': keepAwake,
       });
 
   /// 停止實驗發送器（等待開始或發送中都可停；沒在跑時無害），回傳停止後的發送器狀態，格式同

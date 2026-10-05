@@ -66,6 +66,7 @@ class ExperimentSenderStatus {
     this.handle,
     this.ttl,
     this.intervalMs,
+    this.keepAwake,
   });
 
   /// 原生還沒回報發送器時的預設：閒置、沒有排程。
@@ -100,11 +101,15 @@ class ExperimentSenderStatus {
   /// 本次每筆的間隔（ms）；閒置時是 null。
   final int? intervalMs;
 
+  /// 本次是否持有 wake lock（螢幕關閉也照排程送）；閒置或原生沒給時是 null。
+  final bool? keepAwake;
+
   /// 不是 Map 時回傳 null；其餘情況一定回傳狀態。
   static ExperimentSenderStatus? fromMap(Object? raw) {
     if (raw is! Map) return null;
     final startsAtMs = raw['startsAtMs'];
     final handle = raw['handle'];
+    final keepAwake = raw['keepAwake'];
     return ExperimentSenderStatus(
       state: ExperimentSenderState.fromWire(raw['state']),
       sent: _count(raw['sent']) ?? 0,
@@ -116,6 +121,7 @@ class ExperimentSenderStatus {
       handle: handle is String && handle.isNotEmpty ? handle : null,
       ttl: _count(raw['ttl']),
       intervalMs: _count(raw['intervalMs']),
+      keepAwake: keepAwake is bool ? keepAwake : null,
     );
   }
 }

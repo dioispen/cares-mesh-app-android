@@ -15,6 +15,7 @@ Map<Object?, Object?> _sender({
   String? handle = 'ee0000000003',
   int? ttl = 7,
   int? intervalMs = 200,
+  bool? keepAwake = true,
 }) =>
     {
       'state': state,
@@ -27,6 +28,7 @@ Map<Object?, Object?> _sender({
       'handle': handle,
       'ttl': ttl,
       'intervalMs': intervalMs,
+      'keepAwake': keepAwake,
     };
 
 /// An `experiment_getStatus` reply exactly as the Kotlin experiment bridge sends it.
@@ -80,6 +82,7 @@ void main() {
       expect(sender.handle, 'ee0000000003');
       expect(sender.ttl, 7);
       expect(sender.intervalMs, 200);
+      expect(sender.keepAwake, isTrue);
     });
 
     test('reads each state; an unknown one is not mistaken for a known one', () {

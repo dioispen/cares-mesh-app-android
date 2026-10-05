@@ -108,6 +108,19 @@ class ExperimentBridgeTest {
     }
 
     @Test
+    fun `keeping the phone awake is on unless the run turns it off`() = runTest {
+        installSender()
+
+        call(ExperimentBridge.METHOD_START_SENDER, validStart)
+        assertEquals(true, sender!!.status.plan!!.keepAwake)
+        sender!!.stop()
+
+        val answer = call(ExperimentBridge.METHOD_START_SENDER, validStart + ("keepAwake" to false)).values.single() as Map<*, *>
+        assertEquals(false, sender!!.status.plan!!.keepAwake)
+        assertEquals(false, answer["keepAwake"])
+    }
+
+    @Test
     fun `start without a start time begins at once`() = runTest {
         installSender()
 
@@ -129,6 +142,7 @@ class ExperimentBridgeTest {
             validStart + ("startAt" to "25:00:00"),
             validStart + ("startAt" to "10:00"),
             validStart + ("status" to "unknown"),
+            validStart + ("keepAwake" to "no"),
             validStart - "count"
         )
 
