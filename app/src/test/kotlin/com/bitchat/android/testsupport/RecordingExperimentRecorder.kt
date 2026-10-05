@@ -19,6 +19,10 @@ internal class RecordingExperimentRecorder : ExperimentRecorder {
         events += "WRITTEN:${packet.timestamp}:$fanout"
     }
 
+    override fun onBroadcastDropped(packet: BitchatPacket) {
+        events += "DROPPED:${packet.timestamp}"
+    }
+
     override fun onSendQueueFull(deviceAddress: String, data: ByteArray) {
         events += "QFULL:$deviceAddress"
     }

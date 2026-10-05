@@ -41,8 +41,16 @@ class ExperimentEventRecorder(
     }
 
     override fun onBroadcastWritten(packet: BitchatPacket, wireBytes: Int, fanout: Int) {
+        recordBroadcast(packet, wireBytes, fanout)
+    }
+
+    override fun onBroadcastDropped(packet: BitchatPacket) {
+        recordBroadcast(packet, packet.bleLength(), fanout = 0)
+    }
+
+    private fun recordBroadcast(packet: BitchatPacket, len: Int?, fanout: Int) {
         val kind = if (packet.senderID.toHexString() == probe.myPeerID()) Kind.TX else Kind.RELAY
-        emit(packetEvent(kind, clock(), packet, wireBytes, fanout = fanout))
+        emit(packetEvent(kind, clock(), packet, len, fanout = fanout))
         if (kind == Kind.TX && experimentHandleOf(packet) != null) {
             onExperimentTx(packet.timestamp.toLong(), fanout)
         }

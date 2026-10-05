@@ -340,7 +340,10 @@ class BluetoothConnectionManager(
      * Automatically fragments large packets to fit within BLE MTU limits
      */
     fun broadcastPacket(routed: RoutedPacket): Boolean {
-        if (!isActive || !isBleTransportEnabled()) return false
+        if (!isActive || !isBleTransportEnabled()) {
+            experimentRecorder.onBroadcastDropped(routed.packet)
+            return false
+        }
 
         return packetBroadcaster.broadcastPacket(
             routed,

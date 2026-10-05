@@ -80,11 +80,11 @@ class ExperimentSender(
         val startsAtMs: Long? = null,
         /** 交給 mesh 的筆數。 */
         val sent: Int = 0,
-        /** mesh 沒收下（例如服務沒在跑）的筆數。 */
+        /** mesh 沒收下（服務沒在跑或已停止）的筆數；這些沒有 `TX` 列。 */
         val failed: Int = 0,
         /** 已送出、且至少寫出一條 BLE 鏈路的筆數。 */
         val written: Int = 0,
-        /** 已送出、但寫出時沒有任何鏈路可送（沒有人收得到）的筆數。 */
+        /** 已送出、但沒有任何鏈路可送（附近沒有連上的手機，或藍牙傳輸關閉；沒有人收得到）的筆數。 */
         val noLink: Int = 0
     ) {
         val total: Int get() = plan?.count ?: 0

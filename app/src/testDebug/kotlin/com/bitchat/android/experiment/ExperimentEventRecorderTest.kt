@@ -197,6 +197,32 @@ class ExperimentEventRecorderTest {
     }
 
     @Test
+    fun `a broadcast dropped with the BLE transport down is still a TX or RELAY row, with fanout 0`() {
+        val written = mutableListOf<Pair<Long, Int>>()
+        val reporting = ExperimentEventRecorder(
+            sink = { rows += it.toCsvRow() },
+            probe = probe,
+            rxCounter = counter,
+            clock = { now },
+            onExperimentTx = { pts, fanout -> written += pts to fanout }
+        )
+        val ours = healthReport(ME, handle = "ee0000000003", ttl = 7u)
+
+        reporting.onBroadcastDropped(ours)
+        reporting.onBroadcastDropped(healthReport(OTHER, ttl = 5u))
+
+        val len = ours.bleLength()
+        assertEquals(
+            listOf(
+                "$now,TX,0x30,00112233,1700000000123,7,$len,,0,,BALANCED,2,,,0",
+                "$now,RELAY,0x30,a1b2c3d4,1700000000123,5,$len,,0,,BALANCED,2,,,0"
+            ),
+            rows
+        )
+        assertEquals(listOf(1_700_000_000_123L to 0), written)
+    }
+
+    @Test
     fun `our experiment Health Report writes are reported with their fanout`() {
         val written = mutableListOf<Pair<Long, Int>>()
         val reporting = ExperimentEventRecorder(

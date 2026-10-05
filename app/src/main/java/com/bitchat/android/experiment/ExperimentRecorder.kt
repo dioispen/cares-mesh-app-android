@@ -31,6 +31,13 @@ interface ExperimentRecorder {
      */
     fun onBroadcastWritten(packet: BitchatPacket, wireBytes: Int, fanout: Int)
 
+    /**
+     * `TX`／`RELAY`，`fanout` 為 0：BLE 傳輸沒在跑（藍牙傳輸關閉或停止中），[packet] 沒交給任何
+     * 鏈路就丟棄。和 [onBroadcastWritten] 合起來，交給 BLE 廣播的封包每個都記一列，送達率的分母
+     * 才不會漏掉這些。
+     */
+    fun onBroadcastDropped(packet: BitchatPacket)
+
     /** `QFULL`：[deviceAddress] 這條鏈路的送出佇列已滿，[data]（線路上的封包）被拒收。 */
     fun onSendQueueFull(deviceAddress: String, data: ByteArray)
 
@@ -52,6 +59,7 @@ interface ExperimentRecorder {
         override fun onReceived(packet: BitchatPacket, ingressAddress: String?) = Unit
         override fun onDuplicate(packet: BitchatPacket, ingressAddress: String?) = Unit
         override fun onBroadcastWritten(packet: BitchatPacket, wireBytes: Int, fanout: Int) = Unit
+        override fun onBroadcastDropped(packet: BitchatPacket) = Unit
         override fun onSendQueueFull(deviceAddress: String, data: ByteArray) = Unit
         override fun onLinkUp(deviceAddress: String, peerID: String) = Unit
         override fun onLinkDown(deviceAddress: String, peerID: String) = Unit
