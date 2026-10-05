@@ -70,7 +70,7 @@
 
 ### 3.2 需要補上的實驗工具
 
-實作追蹤於 [#70](https://github.com/dioispen/cares-mesh-app-android/issues/70)。只在 debug build 啟用。不改封包格式，不影響與 iOS 的相容性。
+已實作於 [#70](https://github.com/dioispen/cares-mesh-app-android/issues/70)。只在 debug build 啟用。不改封包格式，不影響與 iOS 的相容性。實作與下列規格的差異（`TX` 涵蓋本機所有廣播、`LINK_UP` 的時機、`STAT` 每條直連一列等）與操作方式見 [field-day-runbook.md](field-day-runbook.md)。
 
 **(a) 結構化實驗 log**
 
@@ -158,7 +158,7 @@ done
 Session 開始前：
 
 ```bash
-adb -s "$S" shell run-as com.bitchat.droid rm -f files/exp.csv   # 路徑依實作調整
+adb -s "$S" shell run-as com.bitchat.droid rm -f files/exp.csv
 adb -s "$S" logcat -G 16M
 adb -s "$S" logcat -c
 ```

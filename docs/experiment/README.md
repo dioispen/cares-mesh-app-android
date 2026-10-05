@@ -60,12 +60,14 @@ E1-B 量出的**可靠單跳距離 `d_rel`** 是後續所有實驗的間距基�
 
 詳見 [00-setup-and-instrumentation.md](00-setup-and-instrumentation.md)。
 
-最關鍵的是：**現行程式碼沒有能對齊封包的 log**。Flutter 端每位 Reporter 只顯示最新一筆，bridge 的 log 也沒有 sender、TTL、封包時間戳，因此送達率、延遲、跳數這三個核心指標都算不出來。實驗開始前需要先補上（追蹤於 [#70](https://github.com/dioispen/cares-mesh-app-android/issues/70)）：
+最關鍵的是：**原本的程式碼沒有能對齊封包的 log**。Flutter 端每位 Reporter 只顯示最新一筆，bridge 的 log 也沒有 sender、TTL、封包時間戳，因此送達率、延遲、跳數這三個核心指標都算不出來。實驗開始前需要先補上（[#70](https://github.com/dioispen/cares-mesh-app-android/issues/70)）：
 
-- [ ] 結構化實驗 log（`CARES_EXP`），同時寫入 logcat 與 app 私有目錄的檔案
-- [ ] 實驗用自動發送器：可設定筆數、間隔、TTL、開始時間，螢幕關閉後仍持續發送
-- [ ] 現場即時計數畫面：顯示最近收到的實驗封包數，方便現場判斷要不要重做
-- [ ] 時鐘偏移量測腳本試跑
+- [x] 結構化實驗 log（`CARES_EXP`），同時寫入 logcat 與 app 私有目錄的檔案
+- [x] 實驗用自動發送器：可設定筆數、間隔、TTL、開始時間，螢幕關閉後仍持續發送
+- [x] 現場即時計數畫面：顯示最近收到的實驗封包數，方便現場判斷要不要重做
+- [ ] 時鐘偏移量測腳本試跑（Day 0）
+
+當天的操作順序見 [field-day-runbook.md](field-day-runbook.md)。
 
 ## 指標總覽
 
@@ -92,6 +94,7 @@ E1-B 量出的**可靠單跳距離 `d_rel`** 是後續所有實驗的間距基�
 | 檔案 | 內容 |
 |---|---|
 | [00-setup-and-instrumentation.md](00-setup-and-instrumentation.md) | 裝置登錄、控制變因、量測工具規格、時鐘同步、log 收集、共用指標定義、統計慣例 |
+| [field-day-runbook.md](field-day-runbook.md) | 實驗當天的角色、安裝、session 與每個 run 的操作順序、Day 0 工具驗收 |
 | [01-multihop-line.md](01-multihop-line.md) | E1 多跳線性鏈 |
 | [02-building-penetration.md](02-building-penetration.md) | E2 建築物穿透 |
 | [03-flooding-tolerance.md](03-flooding-tolerance.md) | E3 Flooding 耐受度 |
