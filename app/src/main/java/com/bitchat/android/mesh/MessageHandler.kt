@@ -1,6 +1,7 @@
 package com.bitchat.android.mesh
 
 import android.util.Log
+import com.bitchat.android.experiment.ExperimentHandles
 import com.bitchat.android.favorites.FavoriteControlMessage
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.BitchatMessageType
@@ -602,6 +603,9 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
             return
         }
         Log.d(TAG, "📢 健康報告解碼成功")
+
+        // 實機實驗（#70）的封包照常轉發與量測，但不是真的有人回報：聊天與 Health 畫面都不顯示。
+        if (ExperimentHandles.isExperimentHandle(report.reporterHandle)) return
 
         // 1. Notify UI/Flutter —— 只帶 Broadcast Tier：Status 與近似位置，不含任何 PII
         val approx = report.approximateLatLng()

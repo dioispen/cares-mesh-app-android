@@ -238,6 +238,22 @@ class MessageHandlerTest {
     }
 
     @Test
+    fun `field-experiment health report is not shown as a real report`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val toFlutter = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { toFlutter += it }
+        InboundPacketBridge.addListener(listener)
+        try {
+            handler.handleMessage(RoutedPacket(healthReportPacket(reporterHandle = "ee0000000003"), peerID, "direct-link"))
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+
+        verify(delegate, never()).onMessageReceived(any())
+        assertTrue(toFlutter.isEmpty())
+    }
+
+    @Test
     fun `encrypted prerelease iOS Noise 0x09 private media is delivered`() {
         runBlocking {
             val file = BitchatFilePacket(
@@ -507,9 +523,9 @@ class MessageHandlerTest {
         lastSeen = System.currentTimeMillis()
     )
 
-    private fun healthReportPacket(): BitchatPacket {
+    private fun healthReportPacket(reporterHandle: String = "abcdef012345"): BitchatPacket {
         val payload = HealthReportPayload.fromLocation(
-            reporterHandle = "abcdef012345",
+            reporterHandle = reporterHandle,
             status = HealthStatus.SAFE,
             lat = null,
             lng = null,

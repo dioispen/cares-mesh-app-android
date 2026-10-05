@@ -61,7 +61,7 @@ class ExperimentReleaseIsolationTest {
     }
 
     @Test
-    fun `main reaches the experiment tools only through ExperimentTools and ExperimentRecorder`() {
+    fun `main reaches the experiment tools only through ExperimentTools, ExperimentRecorder and ExperimentHandles`() {
         val topLevel = Regex("""^(?:(?:private|internal|data|sealed|enum) )*(?:class|object|interface) (\w+)""", RegexOption.MULTILINE)
         val debugOnly = kotlinFiles(debugTools)
             .flatMap { file -> topLevel.findAll(file.readText()).map { it.groupValues[1] }.toList() }

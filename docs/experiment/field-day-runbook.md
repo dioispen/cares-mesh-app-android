@@ -139,3 +139,4 @@ print("latency p50 (ms, 未校正偏移)", (m.t_ms_rx - m.pts).median())
 
 - 現場畫面只有最近 20 s／60 s 的視窗，**沒有累計數**。50 筆、1 s 間隔的 run 在結束後 10 秒內讀 60 s 欄還能涵蓋全部；更長的 run，畫面只能確認「還在收」，筆數以 `exp.csv` 為準。
 - `STAT` 的計時器不持有 wake lock。E4 螢幕關閉、又沒在發送的手機，`STAT` 可能延遲或缺漏（每列的 `t_ms` 是實際時間）。
+- 實驗發送器送的 Health Report 走真正的 Health Report 路徑。app（debug、release 都一樣）認得實驗 handle，收到時照常轉發，但不在聊天與 Health 畫面顯示；**還沒有這個過濾的舊版 build 會把它們當成真的回報**（例如「匿名回報 ee00」重傷）。戶外與大樓場次附近若可能有人裝舊版 CARES，發送器的狀態一律選「安全」。
