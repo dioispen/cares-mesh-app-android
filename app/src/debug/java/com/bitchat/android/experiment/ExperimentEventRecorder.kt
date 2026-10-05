@@ -25,6 +25,11 @@ class ExperimentEventRecorder(
     private val onExperimentTx: (pts: Long, fanout: Int) -> Unit = { _, _ -> }
 ) : ExperimentRecorder {
 
+    private data class RssiSample(val rssi: Int, val atMs: Long)
+
+    /** 每個鄰居（完整 peerID）最近一次記下的掃描 RSSI。 */
+    private val scanRssi = HashMap<String, RssiSample>()
+
     override fun onReceived(packet: BitchatPacket, ingressAddress: String?) {
         val now = clock()
         emit(packetEvent(Kind.RX, now, packet, packet.bleLength(), peer = ingressAddress?.let(probe::peerAt)))
@@ -57,14 +62,30 @@ class ExperimentEventRecorder(
     }
 
     override fun onLinkUp(deviceAddress: String, peerID: String) {
-        emit(ExperimentEvent(clock(), Kind.LINK_UP, peer = id8(peerID), rssi = probe.rssiAt(deviceAddress)))
+        val now = clock()
+        emit(ExperimentEvent(now, Kind.LINK_UP, peer = id8(peerID), rssi = latestRssi(peerID, now)))
     }
 
     override fun onLinkDown(deviceAddress: String, peerID: String) {
         emit(ExperimentEvent(clock(), Kind.LINK_DOWN, peer = id8(peerID)))
     }
 
-    /** `STAT`：每條直連一列（鄰居與它的 RSSI），沒有直連時一列；電量與溫度每列相同。 */
+    /**
+     * 每個鄰居每 [RSSI_SAMPLE_INTERVAL_MS] 最多記一列，掃描結果多的時候不會把 CSV 灌爆；30 s 內
+     * 仍有足夠的樣本取中位數。沒有 peerID 的廣播算給同位址的直連；都認不出是誰就不記。
+     */
+    override fun onScanRssi(peerID: String?, deviceAddress: String, rssi: Int) {
+        val peer = peerID ?: probe.peerAt(deviceAddress) ?: return
+        val now = clock()
+        synchronized(scanRssi) {
+            val last = scanRssi[peer]
+            if (last != null && now - last.atMs < RSSI_SAMPLE_INTERVAL_MS) return
+            scanRssi[peer] = RssiSample(rssi, now)
+        }
+        emit(ExperimentEvent(now, Kind.RSSI, peer = id8(peer), rssi = rssi))
+    }
+
+    /** `STAT`：每條直連一列（鄰居與它最近的 RSSI），沒有直連時一列；電量與溫度每列相同。 */
     fun recordStat(battery: BatteryReading) {
         val now = clock()
         val links = probe.links().ifEmpty { listOf(null) }
@@ -74,12 +95,17 @@ class ExperimentEventRecorder(
                     now,
                     Kind.STAT,
                     peer = link?.peerID?.let(::id8),
-                    rssi = link?.rssi,
+                    rssi = link?.peerID?.let { latestRssi(it, now) },
                     batt = battery.percent,
                     temp = battery.temperatureC
                 )
             )
         }
+    }
+
+    /** [peer] 在 [RSSI_FRESH_MS] 內最新的掃描 RSSI；太舊或沒有時為 null。 */
+    private fun latestRssi(peer: String, now: Long): Int? = synchronized(scanRssi) {
+        scanRssi[peer]?.takeIf { now - it.atMs <= RSSI_FRESH_MS }?.rssi
     }
 
     private fun emit(event: ExperimentEvent) {
@@ -119,5 +145,13 @@ class ExperimentEventRecorder(
         if (payload.isEmpty() || payload[0] != BroadcastContentTag.HEALTH_REPORT.value) return null
         val handle = HealthReportPayload.decode(payload.copyOfRange(1, payload.size))?.reporterHandle
         return handle?.takeIf(ExperimentHandles::isExperimentHandle)
+    }
+
+    companion object {
+        /** 同一個鄰居兩列 `RSSI` 之間至少隔多久。 */
+        const val RSSI_SAMPLE_INTERVAL_MS = 1_000L
+
+        /** `LINK_UP`／`STAT` 採用的掃描 RSSI 最多可以多舊。 */
+        const val RSSI_FRESH_MS = 60_000L
     }
 }

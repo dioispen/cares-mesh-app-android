@@ -8,6 +8,7 @@ import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.CoroutineScope
@@ -27,7 +28,9 @@ class BluetoothGattClientManager(
     private val connectionTracker: BluetoothConnectionTracker,
     private val permissionManager: BluetoothPermissionManager,
     private val powerManager: PowerManager,
-    private val delegate: BluetoothConnectionManagerDelegate?
+    private val delegate: BluetoothConnectionManagerDelegate?,
+    /** Field-experiment RSSI hook (#70): every advertisement heard, including from connected peers. */
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
 ) {
     
     companion object {
@@ -391,6 +394,8 @@ class BluetoothGattClientManager(
         } else {
             null
         }
+
+        experimentRecorder.onScanRssi(peerID, deviceAddress, rssi)
 
         if (peerID != null) {
             if (connectionTracker.isPeerConnected(peerID)) {

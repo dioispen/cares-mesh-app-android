@@ -20,11 +20,14 @@ data class ExperimentEvent(
     val ttl: Int? = null,
     /** 線路上的封包長度（bytes）。 */
     val len: Int? = null,
-    /** `RX`／`DUP`／`QFULL`：那條鏈路的 peerID 前 8 碼；`LINK_*`／`STAT`：鄰居 peerID 前 8 碼。 */
+    /** `RX`／`DUP`／`QFULL`：那條鏈路的 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居 peerID 前 8 碼。 */
     val peer: String? = null,
     /** `TX`／`RELAY`：實際寫出的鏈路數。 */
     val fanout: Int? = null,
-    /** `LINK_UP`／`STAT`：連線 RSSI，取得到才有。 */
+    /**
+     * `RSSI`：這次掃描收到對方廣播的強度（dBm）；`LINK_UP`／`STAT`：該鄰居最近 60 s 內最新的一筆，
+     * 沒有就留空。程式不讀連線中的 RSSI。
+     */
     val rssi: Int? = null,
     /** 當下 app 的 `PowerManager.PowerMode`（不受系統省電模式影響，見 [sysSaver]）。 */
     val mode: String? = null,
@@ -37,7 +40,7 @@ data class ExperimentEvent(
     /** Android 系統省電模式是否開著，輸出為 `1`／`0`。 */
     val sysSaver: Boolean? = null
 ) {
-    enum class Kind { TX, RX, DUP, RELAY, QFULL, LINK_UP, LINK_DOWN, STAT }
+    enum class Kind { TX, RX, DUP, RELAY, QFULL, LINK_UP, LINK_DOWN, STAT, RSSI }
 
     fun toCsvRow(): String = listOf(
         tMs,

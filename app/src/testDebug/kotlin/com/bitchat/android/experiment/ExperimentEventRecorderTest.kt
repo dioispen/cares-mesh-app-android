@@ -14,7 +14,7 @@ import org.junit.Test
  * `(src, pts)` always identifies the packet the same way on sender and receiver (#70).
  */
 class ExperimentEventRecorderTest {
-    private val now = 1_700_000_001_000L
+    private var now = 1_700_000_001_000L
     private val rows = mutableListOf<String>()
     private val probe = FakeProbe()
     private val counter = ExperimentRxCounter { now }
@@ -89,7 +89,10 @@ class ExperimentEventRecorderTest {
     }
 
     @Test
-    fun `link events name the neighbour, and LINK_UP its connection RSSI`() {
+    fun `link events name the neighbour, and LINK_UP its latest scanned RSSI`() {
+        recorder.onScanRssi(NEIGHBOUR, LINK_A, -61)
+        rows.clear()
+
         recorder.onLinkUp(LINK_A, NEIGHBOUR)
         recorder.onLinkDown(LINK_A, NEIGHBOUR)
 
@@ -103,7 +106,47 @@ class ExperimentEventRecorderTest {
     }
 
     @Test
+    fun `a neighbour's advertisements are sampled as RSSI rows at most once a second`() {
+        recorder.onScanRssi(NEIGHBOUR, LINK_A, -70)
+        now += 500
+        recorder.onScanRssi(NEIGHBOUR, LINK_A, -71)
+        now += 500
+        recorder.onScanRssi(NEIGHBOUR, LINK_A, -72)
+        recorder.onScanRssi(OTHER, "AA:00:00:00:00:09", -80)
+
+        assertEquals(
+            listOf(
+                "${now - 1_000},RSSI,,,,,,88990011,,-70,BALANCED,2,,,0",
+                "$now,RSSI,,,,,,88990011,,-72,BALANCED,2,,,0",
+                "$now,RSSI,,,,,,a1b2c3d4,,-80,BALANCED,2,,,0"
+            ),
+            rows
+        )
+    }
+
+    @Test
+    fun `an advertisement without a peerID is credited to its link's peer, or dropped when unknown`() {
+        recorder.onScanRssi(null, LINK_A, -65)
+        recorder.onScanRssi(null, "AA:00:00:00:00:09", -90)
+
+        assertEquals(listOf("$now,RSSI,,,,,,88990011,,-65,BALANCED,2,,,0"), rows)
+    }
+
+    @Test
+    fun `a link with no advertisement heard in the last minute has no RSSI`() {
+        recorder.onScanRssi(NEIGHBOUR, LINK_A, -61)
+        now += 60_001
+        rows.clear()
+
+        recorder.onLinkUp(LINK_A, NEIGHBOUR)
+
+        assertEquals(listOf("$now,LINK_UP,,,,,,88990011,,,BALANCED,2,,,0"), rows)
+    }
+
+    @Test
     fun `STAT snapshots battery and every link, or one row when there is none`() {
+        recorder.onScanRssi(NEIGHBOUR, LINK_A, -61)
+        rows.clear()
         recorder.recordStat(BatteryReading(percent = 87, temperatureC = 31.46))
         probe.links = emptyList()
         probe.linkCount = 0
@@ -176,8 +219,8 @@ class ExperimentEventRecorderTest {
         var linkCount: Int? = 2
         var systemPowerSave: Boolean? = false
         var links = listOf(
-            MeshProbe.Link(LINK_A, NEIGHBOUR, -61),
-            MeshProbe.Link(LINK_B, null, null)
+            MeshProbe.Link(LINK_A, NEIGHBOUR),
+            MeshProbe.Link(LINK_B, null)
         )
 
         override fun myPeerID(): String = ME
@@ -185,7 +228,6 @@ class ExperimentEventRecorderTest {
         override fun linkCount(): Int? = linkCount
         override fun systemPowerSave(): Boolean? = systemPowerSave
         override fun peerAt(address: String): String? = links.firstOrNull { it.address == address }?.peerID
-        override fun rssiAt(address: String): Int? = links.firstOrNull { it.address == address }?.rssi
         override fun links(): List<MeshProbe.Link> = links
     }
 

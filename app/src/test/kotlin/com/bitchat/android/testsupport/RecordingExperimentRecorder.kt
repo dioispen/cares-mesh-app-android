@@ -30,4 +30,8 @@ internal class RecordingExperimentRecorder : ExperimentRecorder {
     override fun onLinkDown(deviceAddress: String, peerID: String) {
         events += "LINK_DOWN:$deviceAddress:$peerID"
     }
+
+    override fun onScanRssi(peerID: String?, deviceAddress: String, rssi: Int) {
+        events += "RSSI:$peerID:$deviceAddress:$rssi"
+    }
 }

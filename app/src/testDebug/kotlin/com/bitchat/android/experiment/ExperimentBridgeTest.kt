@@ -202,7 +202,6 @@ class ExperimentBridgeTest {
         override fun linkCount(): Int = 2
         override fun systemPowerSave(): Boolean = false
         override fun peerAt(address: String): String? = null
-        override fun rssiAt(address: String): Int? = null
         override fun links(): List<MeshProbe.Link> = emptyList()
     }
 }

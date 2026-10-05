@@ -37,6 +37,13 @@ interface ExperimentRecorder {
     /** `LINK_DOWN`：已確認是 [peerID] 的直連 [deviceAddress] 中斷。 */
     fun onLinkDown(deviceAddress: String, peerID: String)
 
+    /**
+     * `RSSI`：掃描收到 [deviceAddress] 的廣播，訊號強度 [rssi]（dBm）。[peerID] 取自掃描回應的
+     * service data，沒有時為 null。程式不讀連線中的 RSSI，對方廣播在本機收到的強度就是
+     * 「本機收對方」這個方向的量測；連上線之後對方仍持續廣播，所以也量得到。
+     */
+    fun onScanRssi(peerID: String?, deviceAddress: String, rssi: Int)
+
     /** release build 與未安裝實驗工具時的實作：什麼都不做。 */
     object NoOp : ExperimentRecorder {
         override fun onReceived(packet: BitchatPacket, ingressAddress: String?) = Unit
@@ -45,5 +52,6 @@ interface ExperimentRecorder {
         override fun onSendQueueFull(deviceAddress: String, data: ByteArray) = Unit
         override fun onLinkUp(deviceAddress: String, peerID: String) = Unit
         override fun onLinkDown(deviceAddress: String, peerID: String) = Unit
+        override fun onScanRssi(peerID: String?, deviceAddress: String, rssi: Int) = Unit
     }
 }

@@ -67,7 +67,7 @@
 | logcat `PacketRelayManager` | `Evaluating relay ... (TTL: n)`、`🔄 Relaying packet ...` | 可以數轉發次數，但一樣無法對齊 |
 | logcat `BluetoothPacketBroadcaster` | `BLE send queue full ...` | E3 可以直接使用 |
 | Setup 畫面的附近節點 | `getNearbyPeers` 回傳的 peer 清單 | 只看得到「有沒有」，看不到跳數 |
-| nRF Connect（第三方 app） | 對方廣播封包的 RSSI | 量到的是廣播 RSSI，不是連線中的 RSSI |
+| nRF Connect（第三方 app） | 對方廣播封包的 RSSI | 與實驗 log 的 `RSSI` 事件量的是同一種東西（廣播 RSSI），可用來交叉檢查 |
 
 結論：只靠現有工具，只能觀察「有收到／沒收到」。**送達率、延遲、跳數三個核心指標都算不出來。**
 
@@ -88,9 +88,9 @@
 | `pts` | 封包標頭的 timestamp（發送端時鐘，ms）。**`(src, pts)` 可以唯一識別一個封包** |
 | `ttl` | 收到或送出時的 TTL |
 | `len` | 封包長度（bytes） |
-| `peer` | `RX`／`DUP`：上一跳的 peerID 前 8 碼；`LINK_*`：鄰居的 peerID 前 8 碼 |
+| `peer` | `RX`／`DUP`：上一跳的 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居的 peerID 前 8 碼 |
 | `fanout` | `TX`／`RELAY`：實際寫出的鏈路數 |
-| `rssi` | `LINK_UP` 與 `STAT` 時的連線 RSSI（可取得時才填） |
+| `rssi` | `RSSI`：這次掃描收到對方廣播的強度（dBm）；`LINK_UP`／`STAT`：該鄰居最近 60 s 內最新的一筆，沒有就留空。程式不讀連線中的 RSSI（連線的值只在連上時抄一次，不會更新），所以一律用廣播 RSSI |
 | `mode` | 當下的電源模式 |
 | `n_links` | 當下的直連數 |
 | `batt` / `temp` | `STAT` 時的電量（%）與電池溫度（°C） |
@@ -105,6 +105,7 @@
 | `QFULL` | 單一鏈路的送出佇列已滿 | `BluetoothPacketBroadcaster.enqueueSend` |
 | `LINK_UP` / `LINK_DOWN` | 與直連鄰居建立或中斷連線 | 連線追蹤（`BluetoothConnectionTracker`） |
 | `STAT` | 每 60 s 一筆狀態快照 | 計時器 |
+| `RSSI` | 掃描到鄰居的廣播（每個鄰居每秒最多一筆；連上線之後對方仍持續廣播） | `BluetoothGattClientManager` 的掃描結果 |
 
 **(b) 實驗用自動發送器**
 
@@ -206,7 +207,7 @@ adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 | 端到端延遲 | L | 收到時間 − 封包時間戳（已校正時鐘偏移） | 報 p50、p95、最大值 |
 | 跳數 | h | 封包從來源到接收端經過的鏈路數 | `TTL_送出 − TTL_收到 + 1` |
 | 每跳延遲 | ΔL | 延遲對跳數的斜率 | 對 (h, L) 做線性迴歸 |
-| RSSI | — | 連線中的訊號強度（dBm） | 該條件下 30 s 內的中位數 |
+| RSSI | — | 收到對方廣播的訊號強度（dBm）。「P 收 Q」＝P 的 `exp.csv` 裡 `peer` 為 Q 的 `RSSI` 列 | 該條件下 30 s 內 `RSSI` 列的中位數（約 20 個樣本）。廣播發射功率隨電源模式變，跨模式比較要註明 |
 | 衰減 | ΔRSSI | 同距離下，對照組 RSSI − 實驗組 RSSI（dB） | — |
 | 發現時間 | T_disc | 兩機進入範圍（或打開藍牙）到 `LINK_UP` 的時間 | 開始時刻以碼錶記牆鐘，結束時刻取自 log |
 | 重複率 | R_dup | (RX + DUP) ÷ RX | 每個節點平均每個唯一封包收到幾份 |
