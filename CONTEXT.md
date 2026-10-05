@@ -11,8 +11,12 @@ A self-published statement of a Status and position at a moment in time, under a
 _Avoid_: disaster report, casualty record, 實驗封包, test packet
 
 **Status**:
-The survivor's own description of their physical condition — 安全, 輕傷, or 重傷. Always self-declared; never verified by the system.
+The survivor's own description of their physical condition — 安全, 輕傷, or 重傷 — or 未宣告 when they raised an SOS without stating it. Always self-declared; never verified by the system.
 _Avoid_: severity, injury level, triage state
+
+**SOS**:
+A Reporter's standing request to be rescued, carried on each of their Health Reports until they withdraw it or declare 安全. A mark on a Health Report, not a separate kind of report.
+_Avoid_: SOS request, emergency request, distress signal
 
 **Reporter**:
 The person who published a Health Report, known to receivers only through its Reporter Handle. Distinct from the device that relayed it.
