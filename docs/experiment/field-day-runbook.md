@@ -2,6 +2,8 @@
 
 把 [00](00-setup-and-instrumentation.md) 的規範與 #70 實作出來的量測工具串成一天的操作順序。各實驗的佈置、距離、筆數照 E1～E5 各自的文件；這份只管「每個 session、每個 run 要按什麼、看什麼、拉什麼」。
 
+下面的指令都在筆電的 **Git Bash** 執行。第一次使用前，照 [adb-cheatsheet.md](adb-cheatsheet.md) 設好 Git Bash 與 adb；現場要即時看 log 或查手機狀態，也查那份。
+
 ## 角色
 
 | 角色 | 人數 | 負責 |

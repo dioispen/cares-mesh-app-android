@@ -95,6 +95,7 @@ E1-B 量出的**可靠單跳距離 `d_rel`** 是後續所有實驗的間距基�
 |---|---|
 | [00-setup-and-instrumentation.md](00-setup-and-instrumentation.md) | 裝置登錄、控制變因、量測工具規格、時鐘同步、log 收集、共用指標定義、統計慣例 |
 | [field-day-runbook.md](field-day-runbook.md) | 實驗當天的角色、安裝、session 與每個 run 的操作順序、Day 0 工具驗收 |
+| [adb-cheatsheet.md](adb-cheatsheet.md) | 筆電環境設定（Git Bash、adb PATH）與 adb 常用指令：即時看 log、查 exp.csv、手機狀態、常見錯誤 |
 | [01-multihop-line.md](01-multihop-line.md) | E1 多跳線性鏈 |
 | [02-building-penetration.md](02-building-penetration.md) | E2 建築物穿透 |
 | [03-flooding-tolerance.md](03-flooding-tolerance.md) | E3 Flooding 耐受度 |
