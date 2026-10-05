@@ -80,12 +80,11 @@ class BluetoothConnectionTracker(
      */
     fun addDeviceConnection(deviceAddress: String, deviceConn: DeviceConnection) {
         Log.d(TAG, "Tracker: Adding device connection for $deviceAddress (isClient: ${deviceConn.isClient}")
-        val replacedPeer = synchronized(connectionStateLock) {
+        synchronized(connectionStateLock) {
             connectedDevices[deviceAddress] = deviceConn
             // A route observation belongs to this GATT generation, not its reusable address.
-            addressPeerMap.remove(deviceAddress)
+            reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
         }
-        reportLinkDown(deviceAddress, replacedPeer)
         removePendingConnection(deviceAddress)
         // Mark as awaiting first ANNOUNCE on this connection
         firstAnnounceSeen[deviceAddress] = false
@@ -128,18 +127,16 @@ class BluetoothConnectionTracker(
      * other observations. The link generation check prevents a late packet from an old GATT
      * connection from being applied to a replacement connection that reused the same address.
      */
-    fun observePeerIfCurrent(deviceAddress: String, linkID: String, peerID: String): Boolean {
-        val previousPeer: String?
+    fun observePeerIfCurrent(deviceAddress: String, linkID: String, peerID: String): Boolean =
         synchronized(connectionStateLock) {
-            if (connectedDevices[deviceAddress]?.linkID != linkID) return false
-            previousPeer = addressPeerMap.put(deviceAddress, peerID)
+            if (connectedDevices[deviceAddress]?.linkID != linkID) return@synchronized false
+            val previousPeer = addressPeerMap.put(deviceAddress, peerID)
+            if (previousPeer != peerID) {
+                reportLinkDown(deviceAddress, previousPeer)
+                experimentRecorder.onLinkUp(deviceAddress, peerID)
+            }
+            true
         }
-        if (previousPeer != peerID) {
-            reportLinkDown(deviceAddress, previousPeer)
-            experimentRecorder.onLinkUp(deviceAddress, peerID)
-        }
-        return true
-    }
     
     /**
      * Get all connected devices
@@ -281,13 +278,12 @@ class BluetoothConnectionTracker(
      * Clean up a specific device connection
      */
     fun cleanupDeviceConnection(deviceAddress: String) {
-        val peer = synchronized(connectionStateLock) {
+        synchronized(connectionStateLock) {
             connectedDevices.remove(deviceAddress)
             subscribedDevices.removeAll { it.address == deviceAddress }
             firstAnnounceSeen.remove(deviceAddress)
-            addressPeerMap.remove(deviceAddress)
+            reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
         }
-        reportLinkDown(deviceAddress, peer)
         Log.d(TAG, "Cleaned up device connection for $deviceAddress")
     }
 
@@ -295,7 +291,6 @@ class BluetoothConnectionTracker(
         deviceAddress: String,
         expectedLinkID: String
     ): Boolean {
-        val peer: String?
         synchronized(connectionStateLock) {
             val current = connectedDevices[deviceAddress] ?: return false
             if (current.linkID != expectedLinkID) {
@@ -305,10 +300,9 @@ class BluetoothConnectionTracker(
                 return false
             }
             subscribedDevices.removeAll { it.address == deviceAddress }
-            peer = addressPeerMap.remove(deviceAddress)
+            reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
             firstAnnounceSeen.remove(deviceAddress)
         }
-        reportLinkDown(deviceAddress, peer)
         Log.d(TAG, "Cleaned up device connection for $deviceAddress")
         return true
     }
@@ -338,17 +332,22 @@ class BluetoothConnectionTracker(
      * Clear all connection tracking
      */
     private fun clearAllConnections() {
-        val identifiedLinks = addressPeerMap.toMap()
-        connectedDevices.clear()
-        subscribedDevices.clear()
-        addressPeerMap.clear()
+        synchronized(connectionStateLock) {
+            addressPeerMap.forEach { (address, peer) -> reportLinkDown(address, peer) }
+            connectedDevices.clear()
+            subscribedDevices.clear()
+            addressPeerMap.clear()
+        }
         pendingConnections.clear()
         scanRSSI.clear()
         firstAnnounceSeen.clear()
-        identifiedLinks.forEach { (address, peer) -> reportLinkDown(address, peer) }
     }
 
-    /** Reports the end of an identified link; a link whose peer was never identified was never up. */
+    /**
+     * Reports the end of an identified link; a link whose peer was never identified was never up.
+     * Called with [connectionStateLock] held, like `onLinkUp`, so one address's LINK_UP / LINK_DOWN
+     * come out in the order its peer observations changed.
+     */
     private fun reportLinkDown(deviceAddress: String, peerID: String?) {
         peerID?.let { experimentRecorder.onLinkDown(deviceAddress, it) }
     }

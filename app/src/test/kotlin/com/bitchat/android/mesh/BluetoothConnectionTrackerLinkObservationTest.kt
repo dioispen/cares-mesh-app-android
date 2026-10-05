@@ -1,6 +1,7 @@
 package com.bitchat.android.mesh
 
 import android.bluetooth.BluetoothDevice
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.testsupport.RecordingExperimentRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
+import kotlin.concurrent.thread
 
 class BluetoothConnectionTrackerLinkObservationTest {
     private val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
@@ -138,6 +140,31 @@ class BluetoothConnectionTrackerLinkObservationTest {
         tracker.stop()
 
         assertEquals(listOf("LINK_UP:$ADDRESS:$PEER_ID", "LINK_DOWN:$ADDRESS:$PEER_ID"), recorder.events)
+    }
+
+    @Test
+    fun `a link cleaned up while its LINK_UP is being recorded goes down after it, not before`() {
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        lateinit var tracker: BluetoothConnectionTracker
+        val recorder = object : ExperimentRecorder by ExperimentRecorder.NoOp {
+            override fun onLinkUp(deviceAddress: String, peerID: String) {
+                // A GATT disconnect arriving right after the peer was observed.
+                val disconnect = thread { tracker.cleanupDeviceConnectionIfCurrent(deviceAddress, "link-a") }
+                disconnect.join(200)
+                events += "LINK_UP"
+            }
+
+            override fun onLinkDown(deviceAddress: String, peerID: String) {
+                events += "LINK_DOWN"
+            }
+        }
+        tracker = BluetoothConnectionTracker(scope, mock(), recorder)
+        tracker.connect(ADDRESS, "link-a")
+
+        tracker.observePeerIfCurrent(ADDRESS, "link-a", PEER_ID)
+        repeat(50) { if (events.size < 2) Thread.sleep(10) }
+
+        assertEquals(listOf("LINK_UP", "LINK_DOWN"), events.toList())
     }
 
     private companion object {
