@@ -71,6 +71,18 @@ void main() {
         'sender': senderStatus ?? sender(),
       };
 
+  /// Drags the TTL slider all the way to [ttl] 0 or 7, or onto an inner value via its callback.
+  Future<void> setTtl(WidgetTester tester, int ttl) async {
+    final finder = find.byKey(const ValueKey('experiment-ttl'));
+    await tester.ensureVisible(finder);
+    if (ttl == 0 || ttl == 7) {
+      await tester.drag(finder, Offset(ttl == 0 ? -1000 : 1000, 0));
+    } else {
+      tester.widget<Slider>(finder).onChanged!(ttl.toDouble());
+    }
+    await tester.pump();
+  }
+
   Iterable<MethodCall> callsOf(String method) => calls.where((call) => call.method == method);
 
   setUp(() {
@@ -240,7 +252,7 @@ void main() {
       await selectDevice(tester, 3);
       await tester.enterText(find.byKey(const ValueKey('experiment-count')), '20');
       await tester.enterText(find.byKey(const ValueKey('experiment-interval')), '200');
-      await tester.tap(find.descendant(of: find.byKey(const ValueKey('experiment-ttl')), matching: find.text('7')));
+      await setTtl(tester, 7);
       await tester.enterText(find.byKey(const ValueKey('experiment-start-at')), '9:05:00');
       await tester.tap(find.text('重傷'));
       await tester.pump();
@@ -285,6 +297,21 @@ void main() {
       await tapStart(tester);
 
       expect(callsOf(ExperimentMethods.startSender).single.arguments, containsPair('keepAwake', false));
+    });
+
+    testWidgets('the TTL slider covers 0 to 7 and says how far the packet can go', (tester) async {
+      await pumpScreen(tester);
+      expect(textOf(tester, 'experiment-ttl-reach'), 'TTL 3：最遠第 4 跳');
+
+      await setTtl(tester, 0);
+      expect(textOf(tester, 'experiment-ttl-reach'), 'TTL 0：只到直連鄰居');
+
+      await selectDevice(tester, 1);
+      await tapStart(tester);
+      expect(callsOf(ExperimentMethods.startSender).single.arguments, containsPair('ttl', 0));
+
+      final slider = tester.widget<Slider>(find.byKey(const ValueKey('experiment-ttl')));
+      expect([slider.min, slider.max, slider.divisions], [0, 7, 7]);
     });
 
     testWidgets('the form shows the handle the chosen device sends with', (tester) async {

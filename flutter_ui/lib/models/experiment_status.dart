@@ -23,6 +23,20 @@ abstract final class ExperimentHandles {
   static final List<String> all = List.unmodifiable([for (final device in devices) forDevice(device)]);
 }
 
+/// 發送器的 TTL：0～7，與 Kotlin `ExperimentPlan.TTL_RANGE` 一致。
+abstract final class ExperimentTtl {
+  static const min = 0;
+
+  /// `MESSAGE_TTL_HOPS`。
+  static const max = 7;
+
+  /// 現行 Health Report 的 TTL。
+  static const initial = 3;
+
+  /// [ttl] 最遠能到第幾跳：發送端不扣 TTL、每轉發一次扣 1、到 0 就不再轉發，所以 TTL n 到第 n + 1 跳。
+  static String reach(int ttl) => ttl == 0 ? 'TTL 0：只到直連鄰居' : 'TTL $ttl：最遠第 ${ttl + 1} 跳';
+}
+
 /// 發送器的狀態（原生 `state`）。
 enum ExperimentSenderState {
   idle('閒置'),

@@ -121,6 +121,17 @@ class ExperimentBridgeTest {
     }
 
     @Test
+    fun `any TTL from 0 to 7 is accepted`() = runTest {
+        installSender()
+
+        (0..7).forEach { ttl ->
+            call(ExperimentBridge.METHOD_START_SENDER, validStart + ("ttl" to ttl))
+            assertEquals(ttl, sender!!.status.plan!!.ttl)
+            sender!!.stop()
+        }
+    }
+
+    @Test
     fun `start without a start time begins at once`() = runTest {
         installSender()
 
@@ -137,7 +148,8 @@ class ExperimentBridgeTest {
             validStart + ("device" to 11),
             validStart + ("count" to 0),
             validStart + ("intervalMs" to -1),
-            validStart + ("ttl" to 5),
+            validStart + ("ttl" to 8),
+            validStart + ("ttl" to -1),
             validStart + ("ttl" to 7.0),
             validStart + ("startAt" to "25:00:00"),
             validStart + ("startAt" to "10:00"),

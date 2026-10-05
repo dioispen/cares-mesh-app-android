@@ -306,6 +306,18 @@ void main() {
     });
   });
 
+  group('ExperimentTtl', () {
+    test('runs from 0 to 7, starting at the current Health Report TTL', () {
+      expect([ExperimentTtl.min, ExperimentTtl.max, ExperimentTtl.initial], [0, 7, 3]);
+    });
+
+    test('says how far a TTL reaches: TTL n goes up to hop n + 1', () {
+      expect(ExperimentTtl.reach(0), 'TTL 0：只到直連鄰居');
+      expect(ExperimentTtl.reach(3), 'TTL 3：最遠第 4 跳');
+      expect(ExperimentTtl.reach(7), 'TTL 7：最遠第 8 跳');
+    });
+  });
+
   group('the bridge fields added for the field-day bugs', () {
     test('the system battery saver is read as given, and anything but a bool is unknown', () {
       expect(ExperimentStatus.fromMap(_status())!.systemPowerSave, isTrue);

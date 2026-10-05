@@ -1,6 +1,7 @@
 package com.bitchat.android.experiment
 
 import com.bitchat.android.protocol.HealthStatus
+import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,7 +20,10 @@ data class ExperimentPlan(
     val count: Int,
     /** 兩筆之間隔幾 ms；0 是突發測試，一次送完。 */
     val intervalMs: Long,
-    /** 3（現行 Health Report）或 7（`MESSAGE_TTL_HOPS`）。 */
+    /**
+     * 0～7（[TTL_RANGE]）。發送端不扣 TTL、每轉發一次扣 1、到 0 就不再轉發，所以 TTL n 最遠到第
+     * n + 1 跳：0 只到直連鄰居，3 是現行 Health Report（第 4 跳），7 是 `MESSAGE_TTL_HOPS`。
+     */
     val ttl: Int,
     /** 牆鐘開始時間，讓多支手機同時開始；null 是立刻開始。 */
     val startAt: LocalTime?,
@@ -30,7 +34,7 @@ data class ExperimentPlan(
     val keepAwake: Boolean = true
 ) {
     companion object {
-        val TTLS = setOf(3, 7)
+        val TTL_RANGE = 0..AppConstants.MESSAGE_TTL_HOPS.toInt()
     }
 }
 

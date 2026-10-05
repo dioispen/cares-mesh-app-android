@@ -32,7 +32,6 @@ class ExperimentScreen extends StatefulWidget {
 
 class _ExperimentScreenState extends State<ExperimentScreen> {
   static const _statusLabels = ['安全', '輕傷', '重傷'];
-  static const _ttls = [3, 7];
   static const _monospace = TextStyle(fontFamily: 'monospace');
 
   final _formKey = GlobalKey<FormState>();
@@ -42,7 +41,7 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
 
   /// 沒有預設：多支手機同時實驗時，忘了改裝置編號會讓接收端把兩支算成同一個來源。
   int? _device;
-  int _ttl = 3;
+  int _ttl = ExperimentTtl.initial;
 
   /// run 期間持有 wake lock；E4 要關掉，否則手機無法休眠。
   bool _keepAwake = true;
@@ -289,11 +288,20 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
           const SizedBox(height: 12),
           _LabeledRow(
             label: 'TTL',
-            child: SegmentedButton<int>(
-              key: const ValueKey('experiment-ttl'),
-              segments: [for (final ttl in _ttls) ButtonSegment(value: ttl, label: Text('$ttl'))],
-              selected: {_ttl},
-              onSelectionChanged: (selected) => setState(() => _ttl = selected.single),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Slider(
+                  key: const ValueKey('experiment-ttl'),
+                  min: ExperimentTtl.min.toDouble(),
+                  max: ExperimentTtl.max.toDouble(),
+                  divisions: ExperimentTtl.max - ExperimentTtl.min,
+                  label: '$_ttl',
+                  value: _ttl.toDouble(),
+                  onChanged: (value) => setState(() => _ttl = value.round()),
+                ),
+                Text(ExperimentTtl.reach(_ttl), key: const ValueKey('experiment-ttl-reach')),
+              ],
             ),
           ),
           TextFormField(

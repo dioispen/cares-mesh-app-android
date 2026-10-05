@@ -332,7 +332,7 @@ class BitchatBridge {
 
   /// 啟動實驗用自動發送器（#70，debug 限定）：裝置 [device]（1–10）以固定實驗 handle
   /// （`ee` 加裝置編號補零成 10 位）送出 [count] 筆（至少 1）Health Report Broadcast Tier，每筆間隔
-  /// [intervalMs]（0 為突發），TTL 為 [ttl]（3 或 7），Status 為 [status]（「安全」「輕傷」「重傷」）。
+  /// [intervalMs]（0 為突發），TTL 為 [ttl]（0～7），Status 為 [status]（「安全」「輕傷」「重傷」）。
   /// 只走 mesh，不寫入 Firestore。發送在原生的 mesh 前景服務裡跑，畫面關掉、app 進背景仍會繼續。
   /// [keepAwake] 為 true 時原生在 run 期間持有 wake lock，螢幕關閉也照排程送；E4 要傳 false，
   /// 否則手機無法休眠，背景存活與耗電會量得偏樂觀。
