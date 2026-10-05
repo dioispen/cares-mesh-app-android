@@ -142,14 +142,20 @@ Debug 限定的畫面，可設定的參數：
 
 ```bash
 # offset.sh — 量測每支手機相對於筆電的時鐘偏移
+# 在 Git Bash 或 Linux 執行；macOS 內建的 date 不支援 %N，要改用 coreutils 的 gdate。
+
+# 輸出檔名帶日期與時間，session 前後各跑一次不會互相覆蓋
 out="offset_$(date +%Y%m%d_%H%M).csv"
 echo "serial,t0_ms,phone_ms,t1_ms" > "$out"
+
+# 逐一處理已授權的手機：略過 `adb devices` 的標題列，以及狀態不是 device（unauthorized、offline）的手機
 for s in $(adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
+  # 每支量 10 次，之後取中位數
   for i in $(seq 1 10); do
-    t0=$(date +%s%3N)
-    d=$(adb -s "$s" shell date +%s%N | tr -d '\r')
-    t1=$(date +%s%3N)
-    echo "$s,$t0,${d:0:13},$t1" >> "$out"
+    t0=$(date +%s%3N)                               # 筆電時間（ms），問手機之前
+    d=$(adb -s "$s" shell date +%s%N | tr -d '\r')  # 手機時間（ns）；去掉 adb shell 輸出結尾的 \r
+    t1=$(date +%s%3N)                               # 筆電時間（ms），手機回答之後
+    echo "$s,$t0,${d:0:13},$t1" >> "$out"           # ns 的前 13 位就是 ms
   done
 done
 ```
@@ -164,16 +170,27 @@ done
 Session 開始前：
 
 ```bash
+# S：這支手機的 adb serial（`adb devices` 的第一欄），例如 S=R58N12ABCDE
+
+# 刪掉上一次的實驗 log。exp.csv 在 app 的私有目錄，要透過 run-as 以 app 的身分操作（debug build 才可以）
 adb -s "$S" shell run-as com.bitchat.droid rm -f files/exp.csv
+# 把手機的 logcat 緩衝區加大到 16 MB，長時間的 session 前面的 log 才不會被覆蓋
 adb -s "$S" logcat -G 16M
+# 清空 logcat，之後拉出來的只有這個 session 的 log
 adb -s "$S" logcat -c
 ```
 
 Session 結束後：
 
 ```bash
+# SESSION：這個 session 的資料夾名稱（自訂，例如 20261010_campus）
+# CODE：這支手機的代號 A～J（devices.csv 的 code）；S 同上，是它的 adb serial
+
+# 每個 session 一個資料夾
 mkdir -p "raw/$SESSION"
+# 從 app 的私有目錄讀出實驗 log，存成「代號.exp.csv」
 adb -s "$S" shell run-as com.bitchat.droid cat files/exp.csv > "raw/$SESSION/$CODE.exp.csv"
+# 匯出整份 logcat：-d 印完就結束，-v epoch 以 Unix 時間（秒，含小數到 ms）標示每一行，方便和 exp.csv 對時
 adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 ```
 

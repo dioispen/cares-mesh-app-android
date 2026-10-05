@@ -33,14 +33,20 @@
 
 1. 在 `feat/physical-experiment-plan` 分支建 debug build，記下 commit：
    ```bash
-   git rev-parse --short HEAD          # 填進 runs.csv 的 app_commit
+   # 目前 commit 的短 hash，填進 runs.csv 的 app_commit
+   git rev-parse --short HEAD
+   # 用 Android Studio 內附的 JDK 21 建置（PATH 上的 java 可能是別的版本）；之後在這個 shell 跑的 ./gradlew 都用它
    export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"
+   # 建 debug build：各 ABI 的 APK 與一個 universal APK，都在 app/build/outputs/apk/debug/
    ./gradlew assembleDebug
    ```
 2. 每支手機**全新安裝**（00 §2.2）：
    ```bash
+   # 對每支已授權的手機（略過 `adb devices` 的標題列，以及 unauthorized、offline 的手機）
    for s in $(adb devices | awk 'NR>1 && $2=="device"{print $1}'); do
+     # 先解除安裝，連同 app 資料、登入狀態與 mesh 身分一起清掉（沒裝過時會印 Failure，可以忽略）
      adb -s "$s" uninstall com.bitchat.droid
+     # 再裝 universal APK：含所有 ABI，不用管手機是哪種 CPU
      adb -s "$s" install app/build/outputs/apk/debug/app-universal-debug.apk
    done
    ```
@@ -57,8 +63,13 @@
 2. **時鐘偏移**：手機逐一接筆電跑 [00 §3.4](00-setup-and-instrumentation.md#34-時鐘偏移量測) 的 `offset.sh`。
 3. **清 log**（手機還接著 USB 時一起做）：
    ```bash
+   # S：這支手機的 adb serial（`adb devices` 的第一欄），例如 S=R58N12ABCDE
+
+   # 刪掉上一次的實驗 log。exp.csv 在 app 的私有目錄，要透過 run-as 以 app 的身分操作（debug build 才可以）
    adb -s "$S" shell run-as com.bitchat.droid rm -f files/exp.csv
+   # 把手機的 logcat 緩衝區加大到 16 MB，長時間的 session 前面的 log 才不會被覆蓋
    adb -s "$S" logcat -G 16M
+   # 清空 logcat，之後拉出來的只有這個 session 的 log
    adb -s "$S" logcat -c
    ```
    app 開著也可以刪；下一個事件會重建檔案並寫上表頭。
@@ -89,8 +100,14 @@
 1. 手機逐一接回筆電，再跑一次 `offset.sh`（前後兩次的差就是漂移）。
 2. 拉 log：
    ```bash
+   # SESSION：這個 session 的資料夾名稱（自訂，例如 20261010_campus）
+   # CODE：這支手機的代號 A～J（devices.csv 的 code）；S 同上，是它的 adb serial
+
+   # 每個 session 一個資料夾
    mkdir -p "raw/$SESSION"
+   # 從 app 的私有目錄讀出實驗 log，存成「代號.exp.csv」
    adb -s "$S" shell run-as com.bitchat.droid cat files/exp.csv > "raw/$SESSION/$CODE.exp.csv"
+   # 匯出整份 logcat：-d 印完就結束，-v epoch 以 Unix 時間（秒，含小數到 ms）標示每一行，方便和 exp.csv 對時
    adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
    ```
 3. 檢查每個 `exp.csv` 的第一筆早於 session 開始、最後一筆晚於 session 結束；每 60 s 應該都有 `STAT` 列。缺的話該 session 的資料不完整。
@@ -113,11 +130,17 @@
 
 ```python
 import pandas as pd
+
+# A 送出的 Health Report（TX 列）與 B 第一次收到的 Health Report（RX 列）
 tx = pd.read_csv("A.exp.csv").query("ev == 'TX' and type == '0x30'")
 rx = pd.read_csv("B.exp.csv").query("ev == 'RX' and type == '0x30'")
+# 以 (src, pts) 對齊同一個封包；A 的 TX 在 B 找不到 RX，就是 B 沒收到
 m = tx.merge(rx, on=["src", "pts"], suffixes=("_tx", "_rx"))
+# 送達率：B 收到的筆數 ÷ A 送出的筆數
 print("PDR", len(m) / len(tx))
+# 跳數分布：發送端不扣 TTL、每轉發一次扣 1，所以跳數 = 送出時的 TTL − 收到時的 TTL + 1
 print("hops", (m.ttl_tx - m.ttl_rx + 1).value_counts().to_dict())
+# 延遲中位數：B 收到的時間 − 封包的時間戳（A 送出時的時鐘）；兩支手機的時鐘偏移還沒校正
 print("latency p50 (ms, 未校正偏移)", (m.t_ms_rx - m.pts).median())
 ```
 
