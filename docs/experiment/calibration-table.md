@@ -1,6 +1,6 @@
 # 模擬器校準表
 
-[ADR-0001](../adr/0001-policy-level-simulation-as-measurement-instrument.md) 決定：實機不產生 relay 策略的比較結果，只產生一份校準表，交給 JVM 模擬器（串接 N 個真實 `PacketRelayManager` 的模擬器）使用。ADR 列出的最低需求是每跳延遲、單鏈路送達率、最大同時連線數；下表另外補上模擬器建立拓撲與鏈路模型時需要的參數。
+實機量測結果的彙整表，報告直接引用。[ADR-0001](../adr/0001-policy-level-simulation-as-measurement-instrument.md) 提議（尚未定案）實機不產生 relay 策略的比較結果，只產生這份校準表，交給 JVM 模擬器（串接 N 個真實 `PacketRelayManager` 的模擬器）使用。ADR 列出的最低需求是每跳延遲、單鏈路送達率、最大同時連線數；下表另外補上模擬器建立拓撲與鏈路模型時需要的參數。不做模擬器時，這些數字仍是實地可用性的結果。
 
 實驗完成後填入「值」與「信賴區間／分布」兩欄，並註明資料來自哪幾個 run_id。
 

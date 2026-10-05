@@ -4,7 +4,7 @@
 
 量出純 flooding 在真實 BLE 上的容量：網路在多大負載下開始掉封包、延遲暴增；崩潰後多久恢復；每個封包要付出多少重複傳輸的成本。
 
-依 [ADR-0001](../adr/0001-policy-level-simulation-as-measurement-instrument.md)，7 支手機都在 relay 機率 1.0 的區間，所以這裡量到的是**模擬器的鏈路容量參數**，不是 relay 策略的比較。
+7 支手機都在 relay 機率 1.0 的區間，所以這裡量到的是**鏈路容量參數**，不是 relay 策略的比較；依 [ADR-0001](../adr/0001-policy-level-simulation-as-measurement-instrument.md) 的提案，這些參數會交給模擬器。ADR-0001 尚未定案，若最後改用實機比較 relay 策略，本實驗要在開始前重新設計。
 
 ## 依程式碼推得的預期
 

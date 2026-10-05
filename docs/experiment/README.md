@@ -4,7 +4,7 @@ CARES Mesh 以 7 支 Android 手機進行的實機實驗設計。每份文件都
 
 ## 與 ADR-0001 的關係
 
-[ADR-0001](../adr/0001-policy-level-simulation-as-measurement-instrument.md) 已決定：Severity-aware relay 與 flooding 的比較只在 JVM 模擬中進行。原因是 `networkSize <= 10` 時 relay 機率恆為 1.0，7 支手機全部落在 flooding 區間。因此這裡的實驗**不比較 relay 策略**，只回答兩類問題：
+[ADR-0001](../adr/0001-policy-level-simulation-as-measurement-instrument.md) 提議：Severity-aware relay 與 flooding 的比較只在 JVM 模擬中進行（**尚未定案**，組內還沒決定要不要做模擬器）。原因是 `networkSize <= 10` 時 relay 機率恆為 1.0，7 支手機全部落在 flooding 區間。因此這裡的實驗**不比較 relay 策略**，只回答兩類問題：
 
 1. **校準**：模擬器需要的實機參數，例如每跳延遲、單鏈路送達率、最大同時連線數，彙整於 [calibration-table.md](calibration-table.md)。
 2. **實地可用性**：手機 mesh 在真實環境能涵蓋多遠、穿得過什麼障礙、多大負載會崩潰、救援者走進範圍時看得到什麼。這些是模擬器無法自己回答、審查時一定會被問的問題。
