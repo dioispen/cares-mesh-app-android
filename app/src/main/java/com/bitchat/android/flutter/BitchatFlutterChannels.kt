@@ -9,12 +9,12 @@ import android.bluetooth.BluetoothAdapter
 import android.location.LocationManager
 import android.util.Log
 import com.bitchat.android.identity.SecureIdentityStateManager
+import com.bitchat.android.mesh.InboundPacketBridge
+import com.bitchat.android.service.HealthReportBroadcast
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
-import com.bitchat.android.protocol.BroadcastContentTag
-import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.util.toHexString
 import com.google.gson.Gson
@@ -22,23 +22,46 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * 核心橋樑：負責 Kotlin 原生功能與 Flutter UI 的通訊
+ * 核心橋樑：負責 Kotlin 原生功能與 Flutter UI 的通訊（系統狀態、權限、Health Report）。
+ *
+ * 同一個 BinaryMessenger 上，每個 channel 名稱只能有一個 handler（後設定的會覆蓋前者），
+ * 所以兩個 channel 的 handler 只由本類別註冊：
+ * - method：[BridgeMethodDispatcher] 先交給本類別，不認得的再依序交給 [additionalMethodHandlers]
+ *   （例如 [ChatBridge]），都不認得才回 `notImplemented`。
+ * - event：共用的 [events]（[BridgeEventEmitter]），各元件以 `type` 區分事件。
+ *
+ * 生命週期與一個 Flutter engine 相同，engine 清理時必須呼叫 [destroy]。
  */
 class BitchatFlutterChannels(
     private val context: Context,
     messenger: BinaryMessenger,
-    private val activity: Activity? = null
-) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
+    private val activity: Activity? = null,
+    private val events: BridgeEventEmitter = BridgeEventEmitter(),
+    additionalMethodHandlers: List<BridgeMethodHandler> = emptyList(),
+    /** 回覆 method 的執行緒（主執行緒）；[destroy] 時取消。 */
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    /** 讀加密身分儲存區（keystore 與磁碟）的地方，不在主執行緒。 */
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) : BridgeMethodHandler {
 
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL_NAME)
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL_NAME)
-    private val identityManager = SecureIdentityStateManager(context)
+
+    // 開啟 EncryptedSharedPreferences 要建 MasterKey、解開 keyset（keystore 與磁碟），所以不在 engine
+    // 建立時於主執行緒開，而是第一次用到時在 [ioDispatcher] 上開。
+    private val identityManager by lazy { SecureIdentityStateManager(context) }
     private val permissionManager = PermissionManager(context)
     private val gson = Gson()
-
-    private var eventSink: EventChannel.EventSink? = null
 
     // 監聽系統藍牙與位置狀態變更
     private val statusReceiver = object : BroadcastReceiver() {
@@ -47,30 +70,37 @@ class BitchatFlutterChannels(
         }
     }
 
+    // 監聽來自 Mesh 的封包，統一格式轉發給 Flutter 自行解析
+    // 注意：ContentTag 已經在 MessageHandler.handleTaggedBroadcast() 那一層被去除，
+    // 這裡拿到的 packet.payload 一定是「未加 tag」的原始資料，不可再嘗試偵測/剝除 tag byte
+    // （payload[0] 剛好等於 0x01 是合法資料，例如 reporterId 長度恰為 1 時，會被誤判成 tag 而遭到錯誤剝除）。
+    // 每個實例註冊自己的 listener，destroy() 只移除自己的，不會清掉重建後新實例的 listener。
+    private val packetListener: (BitchatPacket) -> Unit = { packet ->
+        Log.d("BitchatBridge", "📨 收到封包，類型: 0x${packet.type.toString(16).uppercase()}, 大小: ${packet.payload.size}")
+        emitEvent(mapOf(
+            "type"       to "packet",
+            "packetType" to packet.type.toInt(),
+            "senderId"   to packet.senderID.toHexString(),
+            "timestamp"  to packet.timestamp.toLong(),
+            "payload"    to packet.payload.map { it.toInt() and 0xFF }
+        ))
+    }
+
     init {
-        methodChannel.setMethodCallHandler(this)
-        eventChannel.setStreamHandler(this)
-        
+        methodChannel.setMethodCallHandler(
+            BridgeMethodDispatcher(listOf(this) + additionalMethodHandlers)
+        )
+        eventChannel.setStreamHandler(events)
+        // Flutter 開始監聽時先推一次目前的系統狀態
+        events.addOnListenCallback(::emitStatusUpdate)
+
         val filter = IntentFilter().apply {
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
             addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
         }
         context.registerReceiver(statusReceiver, filter)
 
-        // 監聽來自 Mesh 的封包，統一格式轉發給 Flutter 自行解析
-        // 注意：ContentTag 已經在 MessageHandler.handleTaggedBroadcast() 那一層被去除，
-        // 這裡拿到的 packet.payload 一定是「未加 tag」的原始資料，不可再嘗試偵測/剝除 tag byte
-        // （payload[0] 剛好等於 0x01 是合法資料，例如 reporterId 長度恰為 1 時，會被誤判成 tag 而遭到錯誤剝除）。
-        com.bitchat.android.mesh.InboundPacketBridge.onPacketReceived = { packet: BitchatPacket ->
-            Log.d("BitchatBridge", "📨 收到封包，類型: 0x${packet.type.toString(16).uppercase()}, 大小: ${packet.payload.size}")
-            emitEvent(mapOf(
-                "type"       to "packet",
-                "packetType" to packet.type.toInt(),
-                "senderId"   to packet.senderID.toHexString(),
-                "timestamp"  to packet.timestamp.toLong(),
-                "payload"    to packet.payload.map { it.toInt() and 0xFF }
-            ))
-        }
+        InboundPacketBridge.addListener(packetListener)
     }
 
     private fun getStatusMap(): Map<String, Any> {
@@ -99,7 +129,8 @@ class BitchatFlutterChannels(
         emitEvent(getStatusMap())
     }
 
-    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+    /** 處理系統狀態、權限與 Health Report 相關 method；不認得的回 false 交給下一個 handler。 */
+    override fun handle(call: MethodCall, result: MethodChannel.Result): Boolean {
         when (call.method) {
             "getSystemStatus" -> {
                 result.success(getStatusMap())
@@ -116,7 +147,7 @@ class BitchatFlutterChannels(
             "requestPermissions" -> {
                 if (activity == null) {
                     result.error("NO_ACTIVITY", "Cannot request permissions without an activity", null)
-                    return
+                    return true
                 }
                 // Includes the Wi‑Fi Aware permissions when that transport is on and supported;
                 // checkPermissions / areRequiredPermissionsGranted still only gate on the
@@ -130,9 +161,7 @@ class BitchatFlutterChannels(
                 result.success(true)
             }
 
-            "isRegistered" -> {
-                result.success(identityManager.hasIdentityData())
-            }
+            "isRegistered" -> answerIsRegistered(result)
 
             "startMesh" -> {
                 try {
@@ -170,7 +199,7 @@ class BitchatFlutterChannels(
                     if (payload == null) {
                         Log.e("BitchatBridge", "❌ payload 為 null，無法編碼")
                         result.error("INVALID_FORMAT", "Unsupported payload format", null)
-                        return@onMethodCall
+                        return true
                     }
                     Log.d("BitchatBridge", "✅ payload 編碼成功，大小: ${payload.size} 字節")
                     
@@ -185,38 +214,36 @@ class BitchatFlutterChannels(
                 }
             }
 
-            "getNearbyPeers" -> {
-                val service = MeshServiceHolder.meshService
-                val peers = service?.getPeerNicknames() ?: emptyMap<String, String>()
-                result.success(peers)
-            }
+            // 聊天的送出改由 ChatBridge 的 chat_sendMessage 轉呼叫 ChatViewModel（#9、#51）；
+            // 附近的 peer 改由 ChatBridge 的 chat_peers 快照提供（#53，取代舊的 getNearbyPeers）。
+            // 這裡不能再認領任何聊天 method：本類別先被詢問，會遮蔽 ChatBridge。
 
-            "sendMessage" -> {
-                val text = call.argument<String>("text") ?: ""
-                val service = MeshServiceHolder.meshService
-                service?.sendMessage(text)
-                result.success(null)
-            }
+            else -> return false
+        }
+        return true
+    }
 
-            else -> {
-                result.notImplemented()
+    /**
+     * `isRegistered`：身分儲存區裡有沒有 static key。在 [ioDispatcher] 上讀，回到主執行緒回覆；
+     * 讀不到（例如 keystore 失效）時回 error，Dart 端照舊當作 false。
+     */
+    private fun answerIsRegistered(result: MethodChannel.Result) {
+        scope.launch {
+            val registered = try {
+                withContext(ioDispatcher) { identityManager.hasIdentityData() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                result.error("IDENTITY_UNAVAILABLE", e.message, null)
+                return@launch
             }
+            result.success(registered)
         }
     }
 
-    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
-        eventSink = events
-        emitStatusUpdate()
-    }
-
-    override fun onCancel(arguments: Any?) {
-        eventSink = null
-    }
-
-    fun emitEvent(event: Map<String, Any?>) {
-        activity?.runOnUiThread {
-            eventSink?.success(event)
-        }
+    /** 經共用 emitter 走 main looper 送出，不依賴 Activity 存活；送不出去時會留下 log。 */
+    private fun emitEvent(event: Map<String, Any?>) {
+        events.emit(event)
     }
 
     /**
@@ -225,27 +252,15 @@ class BitchatFlutterChannels(
      * @return 如果發送成功返回 true，否則返回 false
      */
     private fun sendHealthReportPacket(payload: ByteArray): Boolean {
-        val service = MeshServiceHolder.meshService
-        return if (service != null) {
-            val senderIdHex = service.myPeerID
-            
-            val taggedPayload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload
-            val packet = BitchatPacket(
-                type = MessageType.HEALTH_REPORT.value,
-                ttl = 3u,
-                senderID = senderIdHex,
-                payload = taggedPayload
-            )
-            Log.d("BitchatBridge", "🔄 正在發送 HEALTH_REPORT 封包，大小: ${payload.size}，類型: ${packet.type}, TTL: 3")
-            
-            // 通過 BluetoothMeshService 廣播 HEALTH_REPORT 封包
-            service.sendBroadcastPacket(packet)
+        Log.d("BitchatBridge", "🔄 正在發送 HEALTH_REPORT 封包，大小: ${payload.size}，TTL: ${HealthReportBroadcast.DEFAULT_TTL}")
+        // 通過 BluetoothMeshService 廣播 HEALTH_REPORT 封包
+        val sent = HealthReportBroadcast.send(MeshServiceHolder.meshService, payload)
+        if (sent) {
             Log.d("BitchatBridge", "📤 HEALTH_REPORT 已提交給網格服務")
-            true
         } else {
             Log.e("BitchatBridge", "❌ Mesh 服務未啟動，無法發送 HEALTH_REPORT")
-            false
         }
+        return sent
     }
 
     /**
@@ -273,9 +288,21 @@ class BitchatFlutterChannels(
         }
     }
 
+    /**
+     * 由 engine 清理（`cleanUpFlutterEngine`）呼叫：解除 receiver、移除本實例的封包 listener、
+     * 卸下兩個 channel 的 handler 並關閉 emitter。重複呼叫無害。
+     */
     fun destroy() {
-        try { context.unregisterReceiver(statusReceiver) } catch (e: Exception) {}
-        com.bitchat.android.mesh.InboundPacketBridge.onPacketReceived = null
+        scope.cancel()
+        InboundPacketBridge.removeListener(packetListener)
+        try {
+            context.unregisterReceiver(statusReceiver)
+        } catch (e: IllegalArgumentException) {
+            Log.w("BitchatBridge", "statusReceiver 已解除註冊")
+        }
+        methodChannel.setMethodCallHandler(null)
+        eventChannel.setStreamHandler(null)
+        events.close()
     }
 
     companion object {

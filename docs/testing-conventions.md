@@ -10,6 +10,7 @@ and portable across implementations.
 | Test type | Location | Naming |
 |---|---|---|
 | JVM unit and contract tests | `app/src/test/` | `*Test.kt` |
+| JVM tests of debug-only code (`app/src/debug/`) | `app/src/testDebug/` | `*Test.kt` |
 | Shared deterministic fakes and fixtures | `app/src/test/**/testsupport/` | Descriptive fixture name |
 | Robolectric tests | `app/src/test/` | `*RobolectricTest.kt` |
 | Android instrumented tests | `app/src/androidTest/` | `*InstrumentedTest.kt` |

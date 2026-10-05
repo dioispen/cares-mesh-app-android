@@ -88,6 +88,8 @@ val sharedSourceIncludes = listOf(
     "com/bitchat/android/noise/**",
     "com/bitchat/android/crypto/**",
     "com/bitchat/android/identity/**",
+    // The mesh layer's field-experiment hook (#70); its debug implementation is phone-only.
+    "com/bitchat/android/experiment/ExperimentRecorder.kt",
     "com/bitchat/android/mesh/**",
     "com/bitchat/android/model/**",
     "com/bitchat/android/sync/**",
@@ -152,7 +154,12 @@ val syncSharedAppTests = tasks.register<Sync>("syncSharedAppTests") {
             "android/**",
             "com/bitchat/android/mesh/**",
             "com/bitchat/FileTransferTest.kt",
+            // Test double the shared mesh tests use for the experiment hook (#70).
+            "com/bitchat/android/testsupport/RecordingExperimentRecorder.kt",
         )
+        // Drives the phone's BluetoothMeshService (excluded from the watch sources above) with
+        // phone-only fixtures from app/src/test/.../testsupport.
+        exclude("com/bitchat/android/mesh/PrivateMessageWireTest.kt")
     }
     into(layout.buildDirectory.dir("sharedTestSrc"))
 }
