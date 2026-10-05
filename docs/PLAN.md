@@ -12,9 +12,9 @@
 
 **論點**：Severity-aware relay 能讓緊急 Health Report 在壅塞的 mesh 中送達，且對一般流量的代價可接受。
 
-**量測工具**：JVM 模擬（切點在 `PacketRelayManagerDelegate`），鏈路參數由 7 台實機校準。詳見 [ADR-0001](docs/adr/0001-policy-level-simulation-as-measurement-instrument.md)。
+**量測工具**：JVM 模擬（切點在 `PacketRelayManagerDelegate`），鏈路參數由 7 台實機校準。詳見 [ADR-0001](adr/0001-policy-level-simulation-as-measurement-instrument.md)。
 
-領域語彙見 [CONTEXT.md](CONTEXT.md)。**Status**（自我宣告的傷勢）與 **Severity**（衍生的繞送提示）是兩個不同的詞，不得混用「嚴重度」指涉兩者。
+領域語彙見 [CONTEXT.md](../CONTEXT.md)。**Status**（自我宣告的傷勢）與 **Severity**（衍生的繞送提示）是兩個不同的詞，不得混用「嚴重度」指涉兩者。
 
 ---
 
@@ -111,7 +111,7 @@
 
 ## 5. 已記錄的決策
 
-- [CONTEXT.md](CONTEXT.md) — 領域語彙
-- [ADR-0001](docs/adr/0001-policy-level-simulation-as-measurement-instrument.md) — 以政策層模擬作為量測工具
-- [ADR-0002](docs/adr/0002-severity-is-a-derived-transport-hint.md) — Severity 是衍生的傳輸提示
-- [ADR-0003](docs/adr/0003-tiered-disclosure-for-health-reports.md) — Health Report 分層揭露
+- [CONTEXT.md](../CONTEXT.md) — 領域語彙
+- [ADR-0001](adr/0001-policy-level-simulation-as-measurement-instrument.md) — 以政策層模擬作為量測工具
+- [ADR-0002](adr/0002-severity-is-a-derived-transport-hint.md) — Severity 是衍生的傳輸提示
+- [ADR-0003](adr/0003-tiered-disclosure-for-health-reports.md) — Health Report 分層揭露

@@ -14,7 +14,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
-import com.bitchat.android.MainActivity
+// cares-mesh (#57): the tap opens the Flutter entry, never upstream's Compose UI. Aliased so
+// upstream's `Intent(context, MainActivity::class.java)` line merges untouched.
+import com.bitchat.android.flutter.FlutterChatActivity as MainActivity
 import com.bitchat.android.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

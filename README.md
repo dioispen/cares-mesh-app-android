@@ -193,7 +193,7 @@ app/.../flutter/BitchatFlutterChannels.kt   Kotlin 端橋接
 | 文件 | 內容 |
 |---|---|
 | [CONTEXT.md](CONTEXT.md) | 領域語彙 — 專案用詞的權威定義 |
-| [PLAN.md](PLAN.md) | 專題改善計畫、實驗矩陣、時程與分工 |
+| [docs/PLAN.md](docs/PLAN.md) | 專題改善計畫、實驗矩陣、時程與分工 |
 | [NOTICE.md](NOTICE.md) | fork 來源、GPLv3 義務、第三方元件 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 分支策略與 commit 規範 |
 | [AGENTS.md](AGENTS.md) | 架構細節與開發標準 |

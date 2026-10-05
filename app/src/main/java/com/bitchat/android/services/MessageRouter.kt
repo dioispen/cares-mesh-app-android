@@ -158,15 +158,26 @@ class MessageRouter private constructor(
         if (meshTarget != null && isReady(mesh, meshTarget)) {
             Log.d(TAG, "Routing READ via mesh to ${meshTarget.take(8)}… id=${receipt.originalMessageID.take(8)}…")
             mesh.sendReadReceipt(receipt.originalMessageID, meshTarget, mesh.getPeerNicknames()[meshTarget] ?: mesh.myPeerID)
-        } else {
+        } else if (AppConstants.Nostr.ENABLED) {
             Log.d(TAG, "Routing READ via Nostr to ${toPeerID.take(8)}… id=${receipt.originalMessageID.take(8)}…")
             nostr.sendReadReceipt(receipt, nostrTarget)
+        } else {
+            // CARES runs mesh-only (see canSendViaNostr): with no relay ever connected, the receipt
+            // would only wait in NostrRelayManager's queue. Upstream does not queue receipts for the
+            // mesh either, so the peer keeps seeing the message as delivered, not read.
+            Log.d(TAG, "Read receipt for ${toPeerID.take(8)}… not sent: no mesh session, Nostr disabled")
         }
     }
 
     fun sendDeliveryAck(messageID: String, toPeerID: String) {
         // Mesh delivery ACKs are sent by the receiver automatically.
         // Only route via Nostr when mesh path isn't available or when this is a geohash alias
+        if (!AppConstants.Nostr.ENABLED) {
+            // CARES runs mesh-only (see canSendViaNostr): every path below is Nostr, and with no
+            // relay ever connected the ACK would only wait in NostrRelayManager's queue.
+            Log.d(TAG, "Delivery ACK for ${toPeerID.take(8)}… not sent: Nostr disabled")
+            return
+        }
         if (com.bitchat.android.nostr.GeohashAliasRegistry.contains(toPeerID)) {
             val recipientHex = com.bitchat.android.nostr.GeohashAliasRegistry.get(toPeerID)
             if (recipientHex != null) {
@@ -189,8 +200,13 @@ class MessageRouter private constructor(
             val content = FavoriteControlMessage.encode(isFavorite, myNpub)
             val nickname = mesh.getPeerNicknames()[meshTarget] ?: meshTarget
             mesh.sendPrivateMessage(content, meshTarget, nickname, null)
-        } else {
+        } else if (AppConstants.Nostr.ENABLED) {
             nostr.sendFavoriteNotification(resolution.noiseKeyHex ?: toPeerID, isFavorite)
+        } else {
+            // CARES runs mesh-only (see canSendViaNostr): with no relay ever connected, the notice
+            // would only wait in NostrRelayManager's queue. The peer learns of the change the next
+            // time it is toggled while they are on the mesh.
+            Log.d(TAG, "Favorite notification for ${toPeerID.take(16)}… not sent: no mesh session, Nostr disabled")
         }
     }
 
@@ -341,6 +357,10 @@ class MessageRouter private constructor(
     }
 
     private fun canSendViaNostr(peerID: String): Boolean {
+        // CARES runs mesh-only: no Nostr relay is ever connected, so a message handed to
+        // NostrTransport would be reported sent and never delivered. Keep it in the mesh outbox,
+        // which retries once the peer is back with a Noise session.
+        if (!AppConstants.Nostr.ENABLED) return false
         return try {
             val resolution = ContactDirectory.resolve(peerID)
             if (resolution.isMutualFavorite && resolution.nostrPubkey != null) return true

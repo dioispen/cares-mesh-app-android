@@ -18,7 +18,9 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.graphics.drawable.IconCompat
-import com.bitchat.android.MainActivity
+// cares-mesh (#57): every notification tap opens the Flutter entry, never upstream's Compose UI.
+// Aliased so upstream's `Intent(context, MainActivity::class.java)` lines merge untouched.
+import com.bitchat.android.flutter.FlutterChatActivity as MainActivity
 import com.bitchat.android.R
 import com.bitchat.android.service.ConversationNotificationReceiver
 import com.bitchat.android.services.ContactDirectory
@@ -56,6 +58,8 @@ class NotificationManager(
         // Intent extras for notification handling
         const val EXTRA_OPEN_PRIVATE_CHAT = "open_private_chat"
         const val EXTRA_OPEN_GEOHASH_CHAT = "open_geohash_chat"
+        // cares-mesh (#57): mention taps open the Flutter public chat.
+        const val EXTRA_OPEN_MESH_CHAT = "open_mesh_chat"
         const val EXTRA_PEER_ID = "peer_id"
         const val EXTRA_SENDER_NICKNAME = "sender_nickname"
         const val EXTRA_GEOHASH = "geohash"
@@ -776,6 +780,7 @@ class NotificationManager(
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             // No specific chat to open, just bring the app to foreground
+            putExtra(EXTRA_OPEN_MESH_CHAT, true) // cares-mesh (#57): the Flutter entry shows the public chat
         }
 
         val pendingIntent = PendingIntent.getActivity(
