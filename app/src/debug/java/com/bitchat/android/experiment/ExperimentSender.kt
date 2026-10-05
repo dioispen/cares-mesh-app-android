@@ -48,6 +48,9 @@ interface KeepAwake {
  *
  * 第 i 筆排在 `開始時刻 + i × 間隔`，不因單筆送出花的時間累積誤差。每筆交給 [transmit] 的封包
  * timestamp `pts` 嚴格遞增（突發時同一 ms 會順延 1 ms），`(src, pts)` 因此唯一。
+ *
+ * 廣播沒有回條，送出端無從得知誰收到；最接近的本機訊號是 BLE 實際寫出了幾條鏈路，由
+ * [onWritten] 回報，計入 [Status.written]／[Status.noLink]。
  */
 class ExperimentSender(
     private val scope: CoroutineScope,
@@ -63,8 +66,14 @@ class ExperimentSender(
         val state: State,
         val plan: ExperimentPlan? = null,
         val startsAtMs: Long? = null,
+        /** 交給 mesh 的筆數。 */
         val sent: Int = 0,
-        val failed: Int = 0
+        /** mesh 沒收下（例如服務沒在跑）的筆數。 */
+        val failed: Int = 0,
+        /** 已送出、且至少寫出一條 BLE 鏈路的筆數。 */
+        val written: Int = 0,
+        /** 已送出、但寫出時沒有任何鏈路可送（沒有人收得到）的筆數。 */
+        val noLink: Int = 0
     ) {
         val total: Int get() = plan?.count ?: 0
         val isRunning: Boolean get() = state == State.WAITING || state == State.SENDING
@@ -80,6 +89,8 @@ class ExperimentSender(
     private var job: Job? = null
     /** 每次 [start] 加一；舊迴圈只能更新自己那一輪的狀態。 */
     private var runId = 0
+    /** 本輪已交給 mesh、還沒回報寫出結果的封包 timestamp。 */
+    private val awaitingWrite = mutableSetOf<Long>()
 
     val status: Status get() = synchronized(lock) { current }
 
@@ -89,6 +100,7 @@ class ExperimentSender(
         val startsAt = resolveStart(now, plan.startAt)
         val run = Status(State.WAITING, plan, startsAt)
         current = run
+        awaitingWrite.clear()
         val id = ++runId
         job = scope.launch { send(id, plan, startsAt, now) }
         StartResult.Started(run)
@@ -110,7 +122,10 @@ class ExperimentSender(
                 if (plan.intervalMs == 0L && i > 0) yield()
                 val pts = maxOf(clock(), lastPts + 1)
                 lastPts = pts
+                // Registered before transmitting: the write can be reported before transmit returns.
+                synchronized(lock) { if (id == runId) awaitingWrite += pts }
                 val accepted = transmit(plan, pts)
+                if (!accepted) synchronized(lock) { awaitingWrite -= pts }
                 update(id) {
                     it.copy(
                         state = State.SENDING,
@@ -123,6 +138,15 @@ class ExperimentSender(
         } finally {
             keepAwake.release()
         }
+    }
+
+    /**
+     * BLE 寫出了本輪的封包 [pts]，交給 [fanout] 條鏈路（0 表示沒有鏈路）。每筆只算一次；不是本輪
+     * 送出的忽略。run 結束後才回報的也照算（最後一筆通常如此）。
+     */
+    fun onWritten(pts: Long, fanout: Int) = synchronized(lock) {
+        if (!awaitingWrite.remove(pts)) return@synchronized
+        current = if (fanout > 0) current.copy(written = current.written + 1) else current.copy(noLink = current.noLink + 1)
     }
 
     private suspend fun delayUntil(atMs: Long) {

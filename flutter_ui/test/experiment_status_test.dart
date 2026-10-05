@@ -8,6 +8,8 @@ Map<Object?, Object?> _sender({
   String state = 'sending',
   int sent = 12,
   int failed = 1,
+  int written = 9,
+  int noLink = 2,
   int total = 50,
   int? startsAtMs = 1700000000000,
   String? handle = 'ee0000000003',
@@ -18,6 +20,8 @@ Map<Object?, Object?> _sender({
       'state': state,
       'sent': sent,
       'failed': failed,
+      'written': written,
+      'noLink': noLink,
       'total': total,
       'startsAtMs': startsAtMs,
       'handle': handle,
@@ -29,6 +33,7 @@ Map<Object?, Object?> _sender({
 Map<Object?, Object?> _status() => {
       'links': 2,
       'powerMode': 'BALANCED',
+      'systemPowerSave': true,
       'peerId': 'a1b2c3d4',
       'rx20s': <Object?, Object?>{'ee0000000001': 4},
       'rx60s': <Object?, Object?>{'ee0000000001': 9, 'ee0000000002': 1},
@@ -37,14 +42,15 @@ Map<Object?, Object?> _status() => {
 
 void main() {
   group('ExperimentHandles', () {
-    test('device N sends with the fixed handle ee000000000N', () {
+    test('device N sends with the fixed handle: ee, then N zero-padded to 10 digits', () {
       expect(ExperimentHandles.forDevice(1), 'ee0000000001');
       expect(ExperimentHandles.forDevice(7), 'ee0000000007');
+      expect(ExperimentHandles.forDevice(10), 'ee0000000010');
       expect(ExperimentHandles.forDevice(3).length, 12);
     });
 
-    test('lists the seven devices in order', () {
-      expect(ExperimentHandles.devices, [1, 2, 3, 4, 5, 6, 7]);
+    test('lists the ten devices in order', () {
+      expect(ExperimentHandles.devices, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
       expect(ExperimentHandles.all, [
         'ee0000000001',
         'ee0000000002',
@@ -53,6 +59,9 @@ void main() {
         'ee0000000005',
         'ee0000000006',
         'ee0000000007',
+        'ee0000000008',
+        'ee0000000009',
+        'ee0000000010',
       ]);
     });
   });
@@ -64,6 +73,8 @@ void main() {
       expect(sender.state, ExperimentSenderState.sending);
       expect(sender.sent, 12);
       expect(sender.failed, 1);
+      expect(sender.written, 9);
+      expect(sender.noLink, 2);
       expect(sender.total, 50);
       expect(sender.startsAt, DateTime.fromMillisecondsSinceEpoch(1700000000000));
       expect(sender.handle, 'ee0000000003');
@@ -289,6 +300,22 @@ void main() {
 
     test('a build without the native experiment tools says so', () {
       expect(experimentErrorReason(MissingPluginException()), '原生端沒有實驗工具（不是 debug build？）');
+    });
+  });
+
+  group('the bridge fields added for the field-day bugs', () {
+    test('the system battery saver is read as given, and anything but a bool is unknown', () {
+      expect(ExperimentStatus.fromMap(_status())!.systemPowerSave, isTrue);
+      expect(ExperimentStatus.fromMap(_status()..['systemPowerSave'] = false)!.systemPowerSave, isFalse);
+      expect(ExperimentStatus.fromMap(_status()..['systemPowerSave'] = 'yes')!.systemPowerSave, isNull);
+      expect(ExperimentStatus.fromMap(_status()..remove('systemPowerSave'))!.systemPowerSave, isNull);
+    });
+
+    test('write counts missing from an older native side read as 0', () {
+      final sender = ExperimentSenderStatus.fromMap(_sender()..remove('written')..remove('noLink'))!;
+
+      expect(sender.written, 0);
+      expect(sender.noLink, 0);
     });
   });
 }

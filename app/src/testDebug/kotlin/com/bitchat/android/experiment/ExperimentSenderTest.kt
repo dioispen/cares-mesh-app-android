@@ -176,6 +176,61 @@ class ExperimentSenderTest {
         )
     }
 
+    @Test
+    fun `each sent packet is later counted as written to links or as having no link`() = runTest {
+        val sender = sender()
+        sender.start(plan(count = 3, intervalMs = 0, startAt = null))
+        runCurrent()
+
+        sender.onWritten(base, fanout = 2)
+        sender.onWritten(base + 1, fanout = 0)
+
+        assertEquals(1, sender.status.written)
+        assertEquals(1, sender.status.noLink)
+        assertEquals(ExperimentSender.State.DONE, sender.status.state)
+        sender.onWritten(base + 2, fanout = 1)
+        assertEquals("a write reported after the run finished still counts", 2, sender.status.written)
+    }
+
+    @Test
+    fun `writes of packets this run did not send are ignored, even repeated ones`() = runTest {
+        val sender = sender()
+        sender.start(plan(count = 1, startAt = null))
+        runCurrent()
+
+        sender.onWritten(base - 5_000, fanout = 3)
+        sender.onWritten(base, fanout = 3)
+        sender.onWritten(base, fanout = 3)
+
+        assertEquals(1, sender.status.written)
+        assertEquals(0, sender.status.noLink)
+    }
+
+    @Test
+    fun `packets the mesh did not take are never counted as written`() = runTest {
+        accept = false
+        val sender = sender()
+        sender.start(plan(count = 1, startAt = null))
+        runCurrent()
+
+        sender.onWritten(base, fanout = 1)
+
+        assertEquals(0, sender.status.written)
+        assertEquals(1, sender.status.failed)
+    }
+
+    @Test
+    fun `a new run starts its write counts from zero`() = runTest {
+        val sender = sender()
+        sender.start(plan(count = 1, startAt = null))
+        runCurrent()
+        sender.onWritten(base, fanout = 0)
+
+        sender.start(plan(count = 1, startAt = null))
+
+        assertEquals(0, sender.status.noLink)
+    }
+
     private class RecordingKeepAwake : KeepAwake {
         val calls = mutableListOf<String>()
         override fun acquire(timeoutMs: Long) {

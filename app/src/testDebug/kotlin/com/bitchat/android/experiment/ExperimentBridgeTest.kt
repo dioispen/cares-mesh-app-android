@@ -62,7 +62,32 @@ class ExperimentBridgeTest {
         assertEquals("00112233", status["peerId"])
         assertEquals(mapOf("ee0000000002" to 1), status["rx20s"])
         assertEquals(mapOf("ee0000000002" to 2), status["rx60s"])
+        assertEquals(false, status["systemPowerSave"])
         assertEquals("idle", (status["sender"] as Map<*, *>)["state"])
+    }
+
+    @Test
+    fun `ten phones take part, the tenth sending as ee0000000010`() = runTest {
+        installSender()
+
+        val answer = call(ExperimentBridge.METHOD_START_SENDER, validStart + ("device" to 10)).values.single() as Map<*, *>
+
+        assertEquals("ee0000000010", answer["handle"])
+    }
+
+    @Test
+    fun `the sender status separates packets written to links from those with no link`() = runTest {
+        installSender()
+        call(ExperimentBridge.METHOD_START_SENDER, validStart + ("startAt" to null) + ("count" to 2) + ("intervalMs" to 0))
+        testScheduler.runCurrent()
+        sender!!.onWritten(now, fanout = 2)
+        sender!!.onWritten(now + 1, fanout = 0)
+
+        val answer = (call(ExperimentBridge.METHOD_GET_STATUS).values.single() as Map<*, *>)["sender"] as Map<*, *>
+
+        assertEquals(2, answer["sent"])
+        assertEquals(1, answer["written"])
+        assertEquals(1, answer["noLink"])
     }
 
     @Test
@@ -96,7 +121,7 @@ class ExperimentBridgeTest {
         installSender()
         val invalid = listOf(
             validStart + ("device" to 0),
-            validStart + ("device" to 8),
+            validStart + ("device" to 11),
             validStart + ("count" to 0),
             validStart + ("intervalMs" to -1),
             validStart + ("ttl" to 5),
@@ -161,6 +186,7 @@ class ExperimentBridgeTest {
         override fun myPeerID(): String = "0011223344556677"
         override fun powerMode(): String = "BALANCED"
         override fun linkCount(): Int = 2
+        override fun systemPowerSave(): Boolean = false
         override fun peerAt(address: String): String? = null
         override fun rssiAt(address: String): Int? = null
         override fun links(): List<MeshProbe.Link> = emptyList()

@@ -319,7 +319,8 @@ class BitchatBridge {
   ///
   /// - `links`（int）：目前直連數。
   /// - `powerMode`（String）：`PowerManager.PowerMode`（`PERFORMANCE`、`BALANCED`、`POWER_SAVER`、
-  ///   `ULTRA_LOW_POWER`）。
+  ///   `ULTRA_LOW_POWER`）。這是 app 自己的模式，不受系統省電模式影響。
+  /// - `systemPowerSave`（bool?）：Android 系統省電模式是否開著。
   /// - `peerId`（String?）：本機 mesh peerID 前 8 碼；mesh 沒在跑時為 null。
   /// - `rx20s`、`rx60s`（`Map<String, int>`）：最近 20 s／60 s 內依實驗 handle 統計的 `RX` 筆數，
   ///   只列至少 1 筆的 handle。
@@ -329,15 +330,15 @@ class BitchatBridge {
   static Future<Map<dynamic, dynamic>?> getExperimentStatus() =>
       _method.invokeMethod<Map>(ExperimentMethods.getStatus);
 
-  /// 啟動實驗用自動發送器（#70，debug 限定）：裝置 [device]（1–7）以固定實驗 handle
-  /// `ee000000000<device>` 送出 [count] 筆（至少 1）Health Report Broadcast Tier，每筆間隔
+  /// 啟動實驗用自動發送器（#70，debug 限定）：裝置 [device]（1–10）以固定實驗 handle
+  /// （`ee` 加裝置編號補零成 10 位）送出 [count] 筆（至少 1）Health Report Broadcast Tier，每筆間隔
   /// [intervalMs]（0 為突發），TTL 為 [ttl]（3 或 7），Status 為 [status]（「安全」「輕傷」「重傷」）。
   /// 只走 mesh，不寫入 Firestore。發送在原生的 mesh 前景服務裡跑，畫面關掉、app 進背景仍會繼續。
   ///
   /// [startAt] 是本機牆鐘 `HH:mm:ss`：原生取它的下一次出現（今天還沒到就今天，否則明天），讓多支
   /// 手機同時開始；null 表示立即開始。實際開始時間在回傳的 `startsAtMs`。
   ///
-  /// 回傳發送器狀態 `{state: idle|waiting|sending|done|stopped, sent, failed, total, startsAtMs?,
+  /// 回傳發送器狀態 `{state: idle|waiting|sending|done|stopped, sent, failed, written, noLink, total, startsAtMs?,
   /// handle?, ttl?, intervalMs?}`。沒有啟動時以 [PlatformException] 往上拋，錯誤碼見
   /// [ExperimentErrors]。
   static Future<Map<dynamic, dynamic>?> startExperimentSender({

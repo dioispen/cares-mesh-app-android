@@ -12,7 +12,7 @@ import com.bitchat.android.util.toHexString
 /**
  * debug build 的 [ExperimentRecorder]（#70）：把插入點交來的原始資料補上 mesh 現況（上一跳 peer、
  * 電源模式、直連數），組成 [ExperimentEvent]（`exp.csv` 的一列）交給 [sink]；收到的實驗 Health Report 另外記進
- * [rxCounter] 給現場計數畫面。
+ * [rxCounter] 給現場計數畫面，自己送出的實驗 Health Report 寫出幾條鏈路則交給 [onExperimentTx]。
  *
  * 只在呼叫端的執行緒上組事件，寫檔交給 [sink]（[ExperimentLog] 的背景 writer）。
  */
@@ -20,7 +20,9 @@ class ExperimentEventRecorder(
     private val sink: (ExperimentEvent) -> Unit,
     private val probe: MeshProbe,
     private val rxCounter: ExperimentRxCounter,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** 本機發出的實驗 Health Report 已寫出：封包 timestamp 與寫出的鏈路數（發送器據此計數）。 */
+    private val onExperimentTx: (pts: Long, fanout: Int) -> Unit = { _, _ -> }
 ) : ExperimentRecorder {
 
     override fun onReceived(packet: BitchatPacket, ingressAddress: String?) {
@@ -36,6 +38,9 @@ class ExperimentEventRecorder(
     override fun onBroadcastWritten(packet: BitchatPacket, wireBytes: Int, fanout: Int) {
         val kind = if (packet.senderID.toHexString() == probe.myPeerID()) Kind.TX else Kind.RELAY
         emit(packetEvent(kind, clock(), packet, wireBytes, fanout = fanout))
+        if (kind == Kind.TX && experimentHandleOf(packet) != null) {
+            onExperimentTx(packet.timestamp.toLong(), fanout)
+        }
     }
 
     override fun onSendQueueFull(deviceAddress: String, data: ByteArray) {
@@ -78,7 +83,7 @@ class ExperimentEventRecorder(
     }
 
     private fun emit(event: ExperimentEvent) {
-        sink(event.copy(mode = probe.powerMode(), nLinks = probe.linkCount()))
+        sink(event.copy(mode = probe.powerMode(), nLinks = probe.linkCount(), sysSaver = probe.systemPowerSave()))
     }
 
     private fun packetEvent(

@@ -50,7 +50,9 @@ object ExperimentTools {
         val probe = LiveMeshProbe(app)
         val rxCounter = ExperimentRxCounter(System::currentTimeMillis)
         val log = ExperimentLog(File(app.filesDir, ExperimentLog.FILE_NAME))
-        val recorder = ExperimentEventRecorder(log::write, probe, rxCounter)
+        val recorder = ExperimentEventRecorder(log::write, probe, rxCounter) { pts, fanout ->
+            sender?.onWritten(pts, fanout)
+        }
         installed = Installed(app, probe, rxCounter, recorder)
 
         CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {

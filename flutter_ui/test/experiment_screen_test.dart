@@ -29,6 +29,8 @@ void main() {
     String state = 'idle',
     int sent = 0,
     int failed = 0,
+    int written = 0,
+    int noLink = 0,
     int total = 0,
     DateTime? startsAt,
     String? handle,
@@ -39,6 +41,8 @@ void main() {
         'state': state,
         'sent': sent,
         'failed': failed,
+        'written': written,
+        'noLink': noLink,
         'total': total,
         'startsAtMs': startsAt?.millisecondsSinceEpoch,
         'handle': handle,
@@ -49,6 +53,7 @@ void main() {
   Map<String, Object?> statusMap({
     int links = 2,
     String powerMode = 'BALANCED',
+    bool? systemPowerSave = false,
     String? peerId = 'a1b2c3d4',
     Map<String, int> rx20s = const {},
     Map<String, int> rx60s = const {},
@@ -57,6 +62,7 @@ void main() {
       {
         'links': links,
         'powerMode': powerMode,
+        'systemPowerSave': systemPowerSave,
         'peerId': peerId,
         'rx20s': rx20s,
         'rx60s': rx60s,
@@ -132,14 +138,32 @@ void main() {
       expect(textOf(tester, 'experiment-links'), '3');
       expect(textOf(tester, 'experiment-power-mode'), 'POWER_SAVER（省電）');
       expect(textOf(tester, 'experiment-peer-id'), 'a1b2c3d4');
-      for (var device = 1; device <= 7; device++) {
-        expect(find.text('ee000000000$device'), findsOneWidget, reason: 'device $device listed');
+      for (var device = 1; device <= 10; device++) {
+        expect(find.text('ee${device.toString().padLeft(10, '0')}'), findsOneWidget, reason: 'device $device listed');
       }
       expect(textOf(tester, 'experiment-rx20-ee0000000002'), '5');
       expect(textOf(tester, 'experiment-rx60-ee0000000002'), '12');
       expect(textOf(tester, 'experiment-rx20-ee0000000003'), '0');
       expect(textOf(tester, 'experiment-rx60-ee0000000003'), '1');
-      expect(textOf(tester, 'experiment-rx60-ee0000000007'), '0');
+      expect(textOf(tester, 'experiment-rx60-ee0000000010'), '0');
+      expect(textOf(tester, 'experiment-system-power-save'), '關');
+    });
+
+    testWidgets('a phone with the system battery saver on is flagged, whatever the app mode says', (tester) async {
+      status = statusMap(powerMode: 'BALANCED', systemPowerSave: true);
+
+      await pumpScreen(tester);
+
+      expect(textOf(tester, 'experiment-power-mode'), 'BALANCED（平衡）');
+      expect(textOf(tester, 'experiment-system-power-save'), '開（會影響實驗）');
+    });
+
+    testWidgets('an unknown battery saver state is shown as unknown', (tester) async {
+      status = statusMap(systemPowerSave: null);
+
+      await pumpScreen(tester);
+
+      expect(textOf(tester, 'experiment-system-power-save'), '—');
     });
 
     testWidgets('follows native, polling about once a second', (tester) async {
@@ -194,13 +218,15 @@ void main() {
 
     testWidgets('shows how far the sender got', (tester) async {
       status = statusMap(
-        senderStatus: sender(state: 'sending', sent: 12, failed: 1, total: 50, startsAt: now, handle: 'ee0000000003', ttl: 7, intervalMs: 200),
+        senderStatus: sender(
+            state: 'sending', sent: 12, failed: 1, written: 9, noLink: 2, total: 50, startsAt: now, handle: 'ee0000000003', ttl: 7, intervalMs: 200),
       );
 
       await pumpScreen(tester);
 
       expect(textOf(tester, 'experiment-sender-state'), '發送中');
-      expect(textOf(tester, 'experiment-sender-progress'), '12 / 50（失敗 1）');
+      expect(textOf(tester, 'experiment-sender-progress'), '12 / 50');
+      expect(textOf(tester, 'experiment-sender-outcome'), '有鏈路 9・無鏈路 2・mesh 未收下 1');
       expect(textOf(tester, 'experiment-sender-job'), 'ee0000000003・TTL 7・間隔 200 ms');
     });
   });

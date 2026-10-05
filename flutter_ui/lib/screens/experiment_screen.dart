@@ -173,6 +173,13 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
       _Field('目前直連數', live?.links?.toString() ?? '—', valueKey: 'experiment-links'),
       _Field('電源模式', powerMode == null ? '—' : (label == null ? powerMode : '$powerMode（$label）'),
           valueKey: 'experiment-power-mode'),
+      // app 的電源模式不看系統省電模式，所以另外列出；開著時標出來，它會影響實驗結果。
+      _Field(
+        '系統省電',
+        switch (live?.systemPowerSave) { true => '開（會影響實驗）', false => '關', null => '—' },
+        valueKey: 'experiment-system-power-save',
+        style: live?.systemPowerSave == true ? TextStyle(color: Colors.orange.shade800, fontWeight: FontWeight.bold) : null,
+      ),
       _Field('本機 peerId', live == null ? '—' : (live.peerId ?? 'mesh 未啟動'),
           valueKey: 'experiment-peer-id', style: _monospace),
     ];
@@ -188,7 +195,16 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
     return [
       _Field('狀態', sender.state.label, valueKey: 'experiment-sender-state'),
       if (sender.state != ExperimentSenderState.idle) ...[
-        _Field('已送出', '${sender.sent} / ${sender.total}（失敗 ${sender.failed}）', valueKey: 'experiment-sender-progress'),
+        _Field('已送出', '${sender.sent} / ${sender.total}', valueKey: 'experiment-sender-progress'),
+        // 廣播沒有回條；寫出時有沒有鏈路是送出端唯一看得到的結果。無鏈路或未收下都代表沒人收得到。
+        _Field(
+          '寫出結果',
+          '有鏈路 ${sender.written}・無鏈路 ${sender.noLink}・mesh 未收下 ${sender.failed}',
+          valueKey: 'experiment-sender-outcome',
+          style: sender.noLink > 0 || sender.failed > 0
+              ? TextStyle(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.bold)
+              : null,
+        ),
         _Field(
           '本次',
           '${sender.handle ?? '—'}・TTL ${sender.ttl ?? '—'}・間隔 ${sender.intervalMs ?? '—'} ms',
@@ -227,7 +243,7 @@ class _ExperimentScreenState extends State<ExperimentScreen> {
           DropdownButtonFormField<int>(
             key: const ValueKey('experiment-device'),
             decoration: const InputDecoration(labelText: '裝置編號'),
-            hint: const Text('選擇 1–7'),
+            hint: Text('選擇 1–${ExperimentHandles.devices.last}'),
             items: [
               for (final d in ExperimentHandles.devices)
                 DropdownMenuItem(value: d, child: Text('$d（${ExperimentHandles.forDevice(d)}）')),

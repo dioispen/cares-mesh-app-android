@@ -14,9 +14,9 @@ import java.time.format.DateTimeParseException
  * debug build 才註冊的 bridge method（#70），給 Flutter 的現場計數畫面用；release build 沒有這個
  * 類別，這些 method 一律 `notImplemented`。Dart 端對應 `ExperimentMethods`／`ExperimentErrors`。
  *
- * - [METHOD_GET_STATUS]：直連數、電源模式、本機 peerID 前 8 碼、最近 20 s／60 s 依實驗 handle 的
- *   `RX` 筆數，以及發送器狀態（[senderStatus]）。
- * - [METHOD_START_SENDER]：`{device: 1..7, count: >=1, intervalMs: >=0, ttl: 3|7,
+ * - [METHOD_GET_STATUS]：直連數、電源模式、系統省電模式、本機 peerID 前 8 碼、最近 20 s／60 s 依
+ *   實驗 handle 的 `RX` 筆數，以及發送器狀態（[senderStatus]）。
+ * - [METHOD_START_SENDER]：`{device: 1..10, count: >=1, intervalMs: >=0, ttl: 3|7,
  *   startAt: "HH:mm:ss"|null, status: Status label}`，回傳發送器狀態。
  * - [METHOD_STOP_SENDER]：停止發送器，回傳發送器狀態。
  *
@@ -41,6 +41,7 @@ class ExperimentBridge(
     private fun status(): Map<String, Any?> = mapOf(
         "links" to probe.linkCount(),
         "powerMode" to probe.powerMode(),
+        "systemPowerSave" to probe.systemPowerSave(),
         "peerId" to probe.myPeerID()?.let(::id8),
         "rx20s" to rxCounter.countsWithin(20_000),
         "rx60s" to rxCounter.countsWithin(60_000),
@@ -51,7 +52,7 @@ class ExperimentBridge(
         val plan = planFrom(call.arguments as? Map<*, *>)
             ?: return result.invalidArguments(
                 call,
-                "{device: 1..7, count: >=1, intervalMs: >=0, ttl: 3|7, startAt: HH:mm:ss|null, status: String}"
+                "{device: 1..10, count: >=1, intervalMs: >=0, ttl: 3|7, startAt: HH:mm:ss|null, status: String}"
             )
         val sender = sender()
             ?: return result.error(ERROR_SERVICE_NOT_READY, "Mesh foreground service is not running", null)
@@ -117,6 +118,8 @@ class ExperimentBridge(
                 "state" to current.state.name.lowercase(),
                 "sent" to current.sent,
                 "failed" to current.failed,
+                "written" to current.written,
+                "noLink" to current.noLink,
                 "total" to current.total,
                 "startsAtMs" to current.startsAtMs,
                 "handle" to current.plan?.handle,

@@ -32,7 +32,7 @@ class ExperimentLogTest {
         assertEquals(emptyList<String>(), logcat)
         assertEquals(false, file.exists())
         runWriter()
-        assertEquals(listOf("1,LINK_DOWN,,,,,,88990011,,,,,,"), logcat)
+        assertEquals(listOf("1,LINK_DOWN,,,,,,88990011,,,,,,,"), logcat)
     }
 
     @Test
@@ -45,7 +45,7 @@ class ExperimentLogTest {
         runWriter()
 
         assertEquals(
-            listOf(ExperimentEvent.CSV_HEADER, "1,LINK_DOWN,,,,,,88990011,,,,,,", "2,LINK_DOWN,,,,,,88990011,,,,,,"),
+            listOf(ExperimentEvent.CSV_HEADER, "1,LINK_DOWN,,,,,,88990011,,,,,,,", "2,LINK_DOWN,,,,,,88990011,,,,,,,"),
             file.readLines()
         )
     }
@@ -60,7 +60,7 @@ class ExperimentLogTest {
         runWriter()
 
         assertEquals(
-            listOf(ExperimentEvent.CSV_HEADER, "1,LINK_DOWN,,,,,,88990011,,,,,,", "2,LINK_DOWN,,,,,,88990011,,,,,,"),
+            listOf(ExperimentEvent.CSV_HEADER, "1,LINK_DOWN,,,,,,88990011,,,,,,,", "2,LINK_DOWN,,,,,,88990011,,,,,,,"),
             file.readLines()
         )
     }

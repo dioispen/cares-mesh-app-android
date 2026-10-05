@@ -26,14 +26,16 @@ data class ExperimentEvent(
     val fanout: Int? = null,
     /** `LINK_UP`／`STAT`：連線 RSSI，取得到才有。 */
     val rssi: Int? = null,
-    /** 當下的 `PowerManager.PowerMode`。 */
+    /** 當下 app 的 `PowerManager.PowerMode`（不受系統省電模式影響，見 [sysSaver]）。 */
     val mode: String? = null,
     /** 當下的直連數。 */
     val nLinks: Int? = null,
     /** `STAT`：電量（%）。 */
     val batt: Int? = null,
     /** `STAT`：電池溫度（°C）。 */
-    val temp: Double? = null
+    val temp: Double? = null,
+    /** Android 系統省電模式是否開著，輸出為 `1`／`0`。 */
+    val sysSaver: Boolean? = null
 ) {
     enum class Kind { TX, RX, DUP, RELAY, QFULL, LINK_UP, LINK_DOWN, STAT }
 
@@ -51,11 +53,12 @@ data class ExperimentEvent(
         mode,
         nLinks,
         batt,
-        temp?.let { "%.1f".format(Locale.ROOT, it) }
+        temp?.let { "%.1f".format(Locale.ROOT, it) },
+        sysSaver?.let { if (it) 1 else 0 }
     ).joinToString(",") { it?.toString() ?: "" }
 
     companion object {
-        const val CSV_HEADER = "t_ms,ev,type,src,pts,ttl,len,peer,fanout,rssi,mode,n_links,batt,temp"
+        const val CSV_HEADER = "t_ms,ev,type,src,pts,ttl,len,peer,fanout,rssi,mode,n_links,batt,temp,sys_saver"
 
         /** peerID、senderID 只留前 8 碼（`docs/device-transport-test-matrix.md` 的隱私規範）。 */
         fun id8(id: String): String = id.take(8)

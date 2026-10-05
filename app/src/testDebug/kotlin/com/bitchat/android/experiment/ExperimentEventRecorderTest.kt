@@ -36,7 +36,7 @@ class ExperimentEventRecorderTest {
     @Test
     fun `the header names the columns in row order`() {
         assertEquals(
-            "t_ms,ev,type,src,pts,ttl,len,peer,fanout,rssi,mode,n_links,batt,temp",
+            "t_ms,ev,type,src,pts,ttl,len,peer,fanout,rssi,mode,n_links,batt,temp,sys_saver",
             ExperimentEvent.CSV_HEADER
         )
     }
@@ -51,8 +51,8 @@ class ExperimentEventRecorderTest {
         val len = packet.bleLength()
         assertEquals(
             listOf(
-                "$now,RX,0x30,a1b2c3d4,1700000000123,6,$len,88990011,,,BALANCED,2,,",
-                "$now,DUP,0x30,a1b2c3d4,1700000000123,6,$len,,,,BALANCED,2,,"
+                "$now,RX,0x30,a1b2c3d4,1700000000123,6,$len,88990011,,,BALANCED,2,,,0",
+                "$now,DUP,0x30,a1b2c3d4,1700000000123,6,$len,,,,BALANCED,2,,,0"
             ),
             rows
         )
@@ -65,8 +65,8 @@ class ExperimentEventRecorderTest {
 
         assertEquals(
             listOf(
-                "$now,TX,0x30,00112233,1700000000123,7,256,,3,,BALANCED,2,,",
-                "$now,RELAY,0x30,a1b2c3d4,1700000000123,5,256,,1,,BALANCED,2,,"
+                "$now,TX,0x30,00112233,1700000000123,7,256,,3,,BALANCED,2,,,0",
+                "$now,RELAY,0x30,a1b2c3d4,1700000000123,5,256,,1,,BALANCED,2,,,0"
             ),
             rows
         )
@@ -81,8 +81,8 @@ class ExperimentEventRecorderTest {
 
         assertEquals(
             listOf(
-                "$now,QFULL,0x30,a1b2c3d4,1700000000123,6,${data.size},88990011,,,BALANCED,2,,",
-                "$now,QFULL,,,,,1,,,,BALANCED,2,,"
+                "$now,QFULL,0x30,a1b2c3d4,1700000000123,6,${data.size},88990011,,,BALANCED,2,,,0",
+                "$now,QFULL,,,,,1,,,,BALANCED,2,,,0"
             ),
             rows
         )
@@ -95,8 +95,8 @@ class ExperimentEventRecorderTest {
 
         assertEquals(
             listOf(
-                "$now,LINK_UP,,,,,,88990011,,-61,BALANCED,2,,",
-                "$now,LINK_DOWN,,,,,,88990011,,,BALANCED,2,,"
+                "$now,LINK_UP,,,,,,88990011,,-61,BALANCED,2,,,0",
+                "$now,LINK_DOWN,,,,,,88990011,,,BALANCED,2,,,0"
             ),
             rows
         )
@@ -111,9 +111,9 @@ class ExperimentEventRecorderTest {
 
         assertEquals(
             listOf(
-                "$now,STAT,,,,,,88990011,,-61,BALANCED,2,87,31.5",
-                "$now,STAT,,,,,,,,,BALANCED,2,87,31.5",
-                "$now,STAT,,,,,,,,,BALANCED,0,,"
+                "$now,STAT,,,,,,88990011,,-61,BALANCED,2,87,31.5,0",
+                "$now,STAT,,,,,,,,,BALANCED,2,87,31.5,0",
+                "$now,STAT,,,,,,,,,BALANCED,0,,,0"
             ),
             rows
         )
@@ -123,10 +123,11 @@ class ExperimentEventRecorderTest {
     fun `context the mesh cannot give yet is left empty`() {
         probe.powerMode = null
         probe.linkCount = null
+        probe.systemPowerSave = null
 
         recorder.onLinkDown(LINK_A, NEIGHBOUR)
 
-        assertEquals(listOf("$now,LINK_DOWN,,,,,,88990011,,,,,,"), rows)
+        assertEquals(listOf("$now,LINK_DOWN,,,,,,88990011,,,,,,,"), rows)
     }
 
     @Test
@@ -143,9 +144,37 @@ class ExperimentEventRecorderTest {
         assertEquals(mapOf("ee0000000003" to 1), counter.countsWithin(20_000))
     }
 
+    @Test
+    fun `every row says whether the system battery saver was on`() {
+        probe.systemPowerSave = true
+
+        recorder.onLinkDown(LINK_A, NEIGHBOUR)
+
+        assertEquals(listOf("$now,LINK_DOWN,,,,,,88990011,,,BALANCED,2,,,1"), rows)
+    }
+
+    @Test
+    fun `our experiment Health Report writes are reported with their fanout`() {
+        val written = mutableListOf<Pair<Long, Int>>()
+        val reporting = ExperimentEventRecorder(
+            sink = { },
+            probe = probe,
+            rxCounter = counter,
+            clock = { now },
+            onExperimentTx = { pts, fanout -> written += pts to fanout }
+        )
+
+        reporting.onBroadcastWritten(healthReport(ME, handle = "ee0000000003", ttl = 7u), wireBytes = 256, fanout = 0)
+        reporting.onBroadcastWritten(healthReport(ME, handle = "abcdef012345", ttl = 7u), wireBytes = 256, fanout = 2)
+        reporting.onBroadcastWritten(healthReport(OTHER, handle = "ee0000000004", ttl = 6u), wireBytes = 256, fanout = 2)
+
+        assertEquals(listOf(1_700_000_000_123L to 0), written)
+    }
+
     private class FakeProbe : MeshProbe {
         var powerMode: String? = "BALANCED"
         var linkCount: Int? = 2
+        var systemPowerSave: Boolean? = false
         var links = listOf(
             MeshProbe.Link(LINK_A, NEIGHBOUR, -61),
             MeshProbe.Link(LINK_B, null, null)
@@ -154,6 +183,7 @@ class ExperimentEventRecorderTest {
         override fun myPeerID(): String = ME
         override fun powerMode(): String? = powerMode
         override fun linkCount(): Int? = linkCount
+        override fun systemPowerSave(): Boolean? = systemPowerSave
         override fun peerAt(address: String): String? = links.firstOrNull { it.address == address }?.peerID
         override fun rssiAt(address: String): Int? = links.firstOrNull { it.address == address }?.rssi
         override fun links(): List<MeshProbe.Link> = links

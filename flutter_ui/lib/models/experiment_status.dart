@@ -10,15 +10,16 @@ import 'package:flutter/services.dart';
 
 import '../bridge/bitchat_bridge.dart';
 
-/// 裝置編號與固定實驗 handle：裝置 N 一律以 `ee000000000N` 送 Health Report，接收端依 handle 計數。
+/// 裝置編號與固定實驗 handle：裝置 N 一律以 `ee` 加 N 補零成 10 位（`ee0000000001`～`ee0000000010`）
+/// 送 Health Report，接收端依 handle 計數。
 abstract final class ExperimentHandles {
-  /// 可選的裝置編號（一次實驗最多 7 支手機）。
-  static const devices = [1, 2, 3, 4, 5, 6, 7];
+  /// 可選的裝置編號（一次實驗最多 10 支手機），與 Kotlin `ExperimentHandles.DEVICES` 一致。
+  static const devices = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
   /// 裝置 [device] 的實驗 handle（12 碼 hex）。
   static String forDevice(int device) => 'ee${device.toString().padLeft(10, '0')}';
 
-  /// 七支裝置的 handle，依裝置編號排序。
+  /// 所有裝置的 handle，依裝置編號排序。
   static final List<String> all = List.unmodifiable([for (final device in devices) forDevice(device)]);
 }
 
@@ -58,6 +59,8 @@ class ExperimentSenderStatus {
     this.state = ExperimentSenderState.idle,
     this.sent = 0,
     this.failed = 0,
+    this.written = 0,
+    this.noLink = 0,
     this.total = 0,
     this.startsAt,
     this.handle,
@@ -70,11 +73,17 @@ class ExperimentSenderStatus {
 
   final ExperimentSenderState state;
 
-  /// 本次已送出的筆數。
+  /// 本次交給 mesh 的筆數。
   final int sent;
 
-  /// 本次交給 mesh 失敗的筆數。
+  /// 本次 mesh 沒收下（例如服務沒在跑）的筆數。
   final int failed;
+
+  /// 已送出、且 BLE 至少寫出一條鏈路的筆數。廣播沒有回條，這是送出端看得到最接近「有送出去」的訊號。
+  final int written;
+
+  /// 已送出、但寫出時沒有任何鏈路（附近沒有連上的手機，沒有人收得到）的筆數。
+  final int noLink;
 
   /// 本次要送的總筆數；閒置時是 0。
   final int total;
@@ -100,6 +109,8 @@ class ExperimentSenderStatus {
       state: ExperimentSenderState.fromWire(raw['state']),
       sent: _count(raw['sent']) ?? 0,
       failed: _count(raw['failed']) ?? 0,
+      written: _count(raw['written']) ?? 0,
+      noLink: _count(raw['noLink']) ?? 0,
       total: _count(raw['total']) ?? 0,
       startsAt: startsAtMs is int ? DateTime.fromMillisecondsSinceEpoch(startsAtMs) : null,
       handle: handle is String && handle.isNotEmpty ? handle : null,
@@ -114,6 +125,7 @@ class ExperimentStatus {
   const ExperimentStatus({
     this.links,
     this.powerMode,
+    this.systemPowerSave,
     this.peerId,
     this.rx20s = const {},
     this.rx60s = const {},
@@ -123,8 +135,13 @@ class ExperimentStatus {
   /// 目前直連數；原生沒給（或型別不符）時是 null，畫面顯示不知道，不顯示 0。
   final int? links;
 
-  /// 目前的 `PowerManager.PowerMode`（原樣，例如 `BALANCED`）；中文見 [powerModeLabel]。
+  /// app 目前的 `PowerManager.PowerMode`（原樣，例如 `BALANCED`）；中文見 [powerModeLabel]。
+  /// 它只看前景／背景、充電與電量，**不受系統省電模式影響**，系統省電見 [systemPowerSave]。
   final String? powerMode;
+
+  /// Android 系統省電模式是否開著；原生沒給（或型別不符）時是 null。開著會限制背景與掃描，
+  /// 除了刻意測它的實驗以外都要關掉。
+  final bool? systemPowerSave;
 
   /// 本機 mesh peerID 前 8 碼；mesh 沒在跑時是 null。
   final String? peerId;
@@ -137,7 +154,7 @@ class ExperimentStatus {
 
   final ExperimentSenderStatus sender;
 
-  /// 接收計數表的列：七支裝置的 handle 依序列出（沒收到時是 0），再接原生計到、但不在七支之內的
+  /// 接收計數表的列：所有裝置的 handle 依序列出（沒收到時是 0），再接原生計到、但不在其中的
   /// handle（依字母序），一筆都不漏。
   List<String> get rxHandles {
     final extra = {...rx20s.keys, ...rx60s.keys}.difference(ExperimentHandles.all.toSet()).toList()..sort();
@@ -149,10 +166,12 @@ class ExperimentStatus {
     if (raw is! Map) return null;
     final links = raw['links'];
     final powerMode = raw['powerMode'];
+    final systemPowerSave = raw['systemPowerSave'];
     final peerId = raw['peerId'];
     return ExperimentStatus(
       links: links is int && links >= 0 ? links : null,
       powerMode: powerMode is String && powerMode.isNotEmpty ? powerMode : null,
+      systemPowerSave: systemPowerSave is bool ? systemPowerSave : null,
       peerId: peerId is String && peerId.isNotEmpty ? peerId : null,
       rx20s: _counts(raw['rx20s']),
       rx60s: _counts(raw['rx60s']),

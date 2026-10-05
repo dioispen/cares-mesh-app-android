@@ -4,7 +4,7 @@
 
 ## 1. 裝置登錄
 
-7 支手機的代號 A–G 全程固定。peerID 只出現在本機原始 log 與這張表中，對外報告一律使用代號。電子檔樣板：[templates/devices.csv](templates/devices.csv)。
+手機的代號 A–J（最多 10 支）全程固定。peerID 只出現在本機原始 log 與這張表中，對外報告一律使用代號。電子檔樣板：[templates/devices.csv](templates/devices.csv)。
 
 | 代號 | 型號 | Android 版本 | 藍牙版本 | 電池健康度 | 電池最佳化設定 | peerID 前 8 碼（僅內部） | E1-A 排名 | 備註 |
 |---|---|---|---|---|---|---|---|---|
@@ -15,8 +15,11 @@
 | E | | | | | | | | |
 | F | | | | | | | | |
 | G | | | | | | | | |
+| H | | | | | | | | |
+| I | | | | | | | | |
+| J | | | | | | | | |
 
-注意兩組代號不要混用：**裝置代號 A–G** 是手機本身；**位置代號 N1–N7** 是拓撲中的位置（例如線性鏈的第 1～7 個點）。每個 run 都要記下「哪支手機放在哪個位置」。
+注意兩組代號不要混用：**裝置代號 A–J** 是手機本身；**位置代號 N1–N7** 是拓撲中的位置（例如線性鏈的第 1～7 個點）。每個 run 都要記下「哪支手機放在哪個位置」。
 
 ## 2. 控制變因
 
@@ -91,6 +94,7 @@
 | `mode` | 當下的電源模式 |
 | `n_links` | 當下的直連數 |
 | `batt` / `temp` | `STAT` 時的電量（%）與電池溫度（°C） |
+| `sys_saver` | 當下 Android 系統省電模式是否開著（`1`／`0`）。`mode` 是 app 自己的電源模式，不受它影響 |
 
 | `ev` | 意義 | 建議插入點 |
 |---|---|---|
@@ -114,7 +118,7 @@ Debug 限定的畫面，可設定的參數：
 | 開始時間 | 牆鐘 `HH:mm:ss`，讓多支手機在同一時刻開始 |
 | Status | 預設「安全」 |
 
-- Payload 使用與 `sendHealthReport` 相同的 Health Report Broadcast Tier 編碼。每支手機用固定的實驗 handle（`ee0000000001`～`ee0000000007` 對應 A～G），走的路徑與真實 Health Report 相同。
+- Payload 使用與 `sendHealthReport` 相同的 Health Report Broadcast Tier 編碼。每支手機用固定的實驗 handle（`ee0000000001`～`ee0000000010` 對應 A～J），走的路徑與真實 Health Report 相同。
 - 每一筆都寫一個 `TX` 事件。
 - 發送迴圈要跑在 `MeshForegroundService` 的 scope 裡，螢幕關閉後也要繼續送（E4 需要）。
 - 只走 mesh，不寫入 Firestore。
@@ -172,7 +176,7 @@ adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 ```
 
 - 檢查 `exp.csv` 第一筆的時間是否早於 session 開始時間，最後一筆是否晚於 session 結束時間。不符合就代表資料不完整，該 run 要重做。
-- `raw/` 含 peerID，**不進 repo**。整理後只保留以 A–G 表示的彙總結果。
+- `raw/` 含 peerID，**不進 repo**。整理後只保留以 A–J 表示的彙總結果。
 
 ### 3.6 Run 記錄
 
