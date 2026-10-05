@@ -15,7 +15,10 @@ interface ExperimentRecorder {
     /** `RX`：第一次收到 [packet]，已通過去重與簽章驗證。[ingressAddress] 是送來的那條 BLE 鏈路。 */
     fun onReceived(packet: BitchatPacket, ingressAddress: String?)
 
-    /** `DUP`：[packet] 已經收過而被丟棄（自己發出的封包不算）。 */
+    /**
+     * `DUP`：[packet] 已經收過（自己發出的封包不算）。只比對 message ID、不驗簽章。通常隨即丟棄；
+     * 直連的 ANNOUNCE 例外會在驗簽後再處理一次，也記 `DUP`，所以 `RX` 每個封包只有一列。
+     */
     fun onDuplicate(packet: BitchatPacket, ingressAddress: String?)
 
     /**

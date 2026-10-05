@@ -85,8 +85,9 @@ class SecurityManager(
 
         // Duplicate detection
         val messageID = generateMessageID(packet, peerID)
-        
-        if (processedMessages.contains(messageID)) {
+        val alreadyProcessed = processedMessages.contains(messageID)
+
+        if (alreadyProcessed) {
             // Check for ANNOUNCE exception: allow if it looks like a direct neighbor (max TTL)
             // This ensures we observe the same peer on a new direct transport connection,
             // while still dropping looped/relayed duplicates.
@@ -94,6 +95,8 @@ class SecurityManager(
                     packet.ttl >= com.bitchat.android.util.AppConstants.MESSAGE_TTL_HOPS
 
             if (!isFreshAnnounce) {
+                // Matched by message ID only: verifying every dropped copy would add a signature
+                // check per duplicate on the flood path.
                 experimentRecorder.onDuplicate(packet, ingressAddress)
                 return false
             }
@@ -110,7 +113,12 @@ class SecurityManager(
         processedMessages.add(messageID)
         messageTimestamps[messageID] = currentTime
 
-        experimentRecorder.onReceived(packet, ingressAddress)
+        // A direct ANNOUNCE let through again above is still a copy of one already received.
+        if (alreadyProcessed) {
+            experimentRecorder.onDuplicate(packet, ingressAddress)
+        } else {
+            experimentRecorder.onReceived(packet, ingressAddress)
+        }
         return true
     }
     

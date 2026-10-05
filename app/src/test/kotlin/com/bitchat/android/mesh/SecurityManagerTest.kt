@@ -728,6 +728,33 @@ class SecurityManagerTest {
     }
 
     @Test
+    fun `a direct ANNOUNCE accepted again records DUP, not a second RX`() {
+        whenever(mockDelegate.getPeerInfo(unknownPeerID)).thenReturn(null)
+        val (manager, recorder) = recordingSecurityManager()
+        val announce = BitchatPacket(
+            type = MessageType.ANNOUNCE.value,
+            ttl = com.bitchat.android.util.AppConstants.MESSAGE_TTL_HOPS,
+            senderID = unknownPeerID,
+            payload = IdentityAnnouncement(
+                nickname = "New User",
+                noisePublicKey = otherNoiseKey,
+                signingPublicKey = otherSigningKey
+            ).encode()!!
+        ).also { it.signature = validSignature }
+
+        assertTrue(manager.validatePacket(announce, unknownPeerID, "AA:00:00:00:00:01"))
+        assertTrue(manager.validatePacket(announce, unknownPeerID, "AA:00:00:00:00:02"))
+
+        assertEquals(
+            listOf(
+                "RX:${announce.timestamp}:AA:00:00:00:00:01",
+                "DUP:${announce.timestamp}:AA:00:00:00:00:02"
+            ),
+            recorder.events
+        )
+    }
+
+    @Test
     fun `own packets echoed back record neither RX nor DUP`() {
         val (manager, recorder) = recordingSecurityManager()
         val own = signedHealthReport(myPeerID)
