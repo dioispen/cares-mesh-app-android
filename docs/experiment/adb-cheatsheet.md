@@ -71,7 +71,7 @@ adb logcat -s CARES_EXP | tee live.txt
 adb logcat --pid=$(adb shell pidof com.bitchat.droid)
 ```
 
-每一行 `CARES_EXP:` 後面就是 `exp.csv` 的一列，欄位依序是 `t_ms,ev,type,src,pts,ttl,len,peer,fanout,rssi,mode,n_links,batt,temp,sys_saver`，意思見 [00 §3.2](00-setup-and-instrumentation.md#32-需要補上的實驗工具)。
+每一行 `CARES_EXP:` 後面就是 `exp.csv` 的一列，欄位依序是 `t_ms,ev,type,src,pts,ttl,len,peer,fanout,rssi,mode,n_links,batt,temp,sys_saver`，意思見 [00 §3.2](00-setup-and-instrumentation.md#32-實驗工具)。
 
 ## 看手機上的 exp.csv（不用拉回筆電）
 

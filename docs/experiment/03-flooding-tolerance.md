@@ -14,7 +14,7 @@
 | 每鏈路送出佇列 | 256 筆或 1 MiB（`MAX_PENDING_SENDS_PER_LINK`／`MAX_PENDING_BYTES_PER_LINK`） | 超過就拒收，出現 `BLE send queue full` |
 | 廣播 actor 佇列 | 256（`BluetoothPacketBroadcaster`） | 突發時的第一個瓶頸候選 |
 | 去重快取 | 10,000 筆，每 5 分鐘清理（`MAX_PROCESSED_MESSAGES`） | 5 分鐘內的唯一封包數接近 10,000 時，會從最舊的開始移除；遲到的重複封包可能被再次接受 |
-| Health Report 大小 | Broadcast Tier payload 約 20 bytes | 不會觸發壓縮（> 100 bytes）或分片。本實驗量的是**小封包**的極限 |
+| Health Report 大小 | Broadcast Tier payload 約 20 bytes；加上標頭、sender 與 64 bytes 簽章，整個封包約 100 bytes（實際值見 `exp.csv` 的 `len`） | payload 不到 100 bytes，不會觸發壓縮，也不會分片。本實驗量的是**小封包**的極限 |
 
 **團簇拓撲中每個唯一封包的成本**：來源送出 1 次，6 個鄰居各轉發 1 次（之後再收到的都是重複，會被丟棄），所以：
 

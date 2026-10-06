@@ -41,8 +41,8 @@
 
 - App 保持在前景，螢幕不關：螢幕逾時設成最長，亮度調到最低並固定。
 - **不接充電線、不接行動電源**。一接上就會切到 PERFORMANCE，發射功率變成 HIGH，量到的距離會被高估。
-- 開始時電量 ≥ 50%，任何一支低於 25% 就暫停，換機或充電後再繼續（充電完要拔掉才能開始下一個 run）。
-- 每個 run 的開始與結束都記一次電量。
+- 不要求充滿電，記下每個 run 開始與結束時的電量即可。
+- 任何一支低於 25% 就暫停，換機或充電後再繼續（充電完要拔掉才能開始下一個 run）：電量 ≤ 20% 會切到 POWER_SAVER，留 5% 緩衝。
 
 ### 2.2 其他固定條件
 
@@ -58,7 +58,7 @@
 
 ## 3. 量測工具
 
-### 3.1 現況能取得的資料
+### 3.1 沒有實驗工具時能取得的資料
 
 | 來源 | 內容 | 限制 |
 |---|---|---|
@@ -66,14 +66,14 @@
 | logcat `BitchatBridge` | `📨 收到封包，類型: 0x30, 大小: N` | 沒有 sender、封包時間戳、TTL，無法對到發送端 |
 | logcat `PacketRelayManager` | `Evaluating relay ... (TTL: n)`、`🔄 Relaying packet ...` | 可以數轉發次數，但一樣無法對齊 |
 | logcat `BluetoothPacketBroadcaster` | `BLE send queue full ...` | E3 可以直接使用 |
-| Setup 畫面的附近節點 | `getNearbyPeers` 回傳的 peer 清單 | 只看得到「有沒有」，看不到跳數 |
+| 聊天室的「附近的人」 | 目前看得到的 mesh peer | 只看得到「有沒有」，看不到跳數 |
 | nRF Connect（第三方 app） | 對方廣播封包的 RSSI | 與實驗 log 的 `RSSI` 事件量的是同一種東西（廣播 RSSI），可用來交叉檢查 |
 
-結論：只靠現有工具，只能觀察「有收到／沒收到」。**送達率、延遲、跳數三個核心指標都算不出來。**
+結論：只靠這些，只能觀察「有收到／沒收到」，**送達率、延遲、跳數三個核心指標都算不出來**，所以才有 3.2 的實驗工具。
 
-### 3.2 需要補上的實驗工具
+### 3.2 實驗工具
 
-已實作於 [#70](https://github.com/dioispen/cares-mesh-app-android/issues/70)。只在 debug build 啟用。不改封包格式，不影響與 iOS 的相容性。實作與下列規格的差異（`TX` 涵蓋本機所有廣播、`LINK_UP` 的時機、`STAT` 每條直連一列等）與操作方式見 [field-day-runbook.md](field-day-runbook.md)。
+實作於 [#70](https://github.com/dioispen/cares-mesh-app-android/issues/70)。只在 debug build 啟用。不改封包格式，不影響與 iOS 的相容性。操作方式與讀資料時要注意的細節見 [field-day-runbook.md](field-day-runbook.md)。
 
 **(a) 結構化實驗 log**
 
@@ -88,20 +88,20 @@
 | `pts` | 封包標頭的 timestamp（發送端時鐘，ms）。**`(src, pts)` 可以唯一識別一個封包** |
 | `ttl` | 收到或送出時的 TTL |
 | `len` | 封包長度（bytes） |
-| `peer` | `RX`／`DUP`：上一跳的 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居的 peerID 前 8 碼 |
-| `fanout` | `TX`／`RELAY`：實際寫出的鏈路數 |
+| `peer` | `RX`／`DUP`：上一跳的 peerID 前 8 碼；`QFULL`：那條鏈路的 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居的 peerID 前 8 碼 |
+| `fanout` | `TX`／`RELAY`：實際寫出的鏈路數；0 代表沒有鏈路可送，或藍牙傳輸沒在跑而直接丟棄 |
 | `rssi` | `RSSI`：這次掃描收到對方廣播的強度（dBm）；`LINK_UP`／`STAT`：該鄰居最近 60 s 內最新的一筆，沒有就留空。程式不讀連線中的 RSSI（連線的值只在連上時抄一次，不會更新），所以一律用廣播 RSSI |
-| `mode` | 當下的電源模式 |
+| `mode` | 當下 app 自己的電源模式（見 2.1） |
 | `n_links` | 當下的直連數 |
 | `batt` / `temp` | `STAT` 時的電量（%）與電池溫度（°C） |
 | `sys_saver` | 當下 Android 系統省電模式是否開著（`1`／`0`）。`mode` 是 app 自己的電源模式，不受它影響 |
 
-| `ev` | 意義 | 建議插入點 |
+| `ev` | 意義 | 記錄的地方 |
 |---|---|---|
-| `TX` | 本機發出原始封包 | 實驗發送器 |
-| `RX` | 第一次收到某封包（已去重） | `SecurityManager.validatePacket` 通過之後 |
-| `DUP` | 收到重複封包而丟棄 | `validatePacket` 的重複判斷分支 |
-| `RELAY` | 轉發 | `PacketRelayManager.relayPacket` |
+| `TX` | 本機發出的廣播（**所有類型**，ANNOUNCE 等也算；只看 Health Report 要篩 `type == 0x30`） | `BluetoothPacketBroadcaster` 實際寫出時（只有這裡知道寫出幾條鏈路） |
+| `RX` | 第一次收到某封包（已去重、已驗簽），每個封包只有一列 | `SecurityManager.validatePacket` 通過之後 |
+| `DUP` | 之後收到的副本（只比對封包 ID，不驗簽；直連鄰居重送的 ANNOUNCE 也記在這裡） | `validatePacket` 的重複判斷分支 |
+| `RELAY` | 轉發別人的封包 | `BluetoothPacketBroadcaster` 實際寫出時 |
 | `QFULL` | 單一鏈路的送出佇列已滿 | `BluetoothPacketBroadcaster.enqueueSend` |
 | `LINK_UP` / `LINK_DOWN` | 與直連鄰居建立或中斷連線 | 連線追蹤（`BluetoothConnectionTracker`） |
 | `STAT` | 每 60 s 一筆狀態快照 | 計時器 |
@@ -121,15 +121,15 @@ Debug 限定的畫面，可設定的參數：
 | 保持喚醒 | 預設開：run 期間持有 wake lock，螢幕關閉也照排程送。**E4 要關掉**，否則手機無法休眠，背景存活與耗電會偏樂觀。關掉時 CPU 休眠會讓排程延後，醒來後不補送錯過的筆數 |
 
 - Payload 使用與 `sendHealthReport` 相同的 Health Report Broadcast Tier 編碼。每支手機用固定的實驗 handle（`ee0000000001`～`ee0000000010` 對應 A～J），走的路徑與真實 Health Report 相同。
-- 每一筆都寫一個 `TX` 事件。
-- 發送迴圈要跑在 `MeshForegroundService` 的 scope 裡，螢幕關閉後也要繼續送（E4 需要）。
+- 每一筆交給 mesh 的都會有一個 `TX` 事件；mesh 服務沒在跑而沒收下的筆數沒有 `TX`，畫面上記為「mesh 未收下」。
+- 發送迴圈跑在 `MeshForegroundService` 的 scope 裡，app 進背景、離開實驗畫面都會繼續送。
 - 只走 mesh，不寫入 Firestore。
 
 **為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 3（[BitchatFlutterChannels.kt](../../app/src/main/java/com/bitchat/android/flutter/BitchatFlutterChannels.kt) 的 `sendHealthReportPacket`），依程式碼推算最遠只到第 4 跳。要量 7 支手機線性鏈（6 跳）的物理極限，必須用 TTL 7。
 
 **(c) 現場即時計數**
 
-在發送器畫面上顯示「最近 N 秒內收到的實驗封包數（依來源）」與目前的直連數。這是現場用的回饋：放置中繼（E2-C）、判斷要不要重做某個 run，都靠這個畫面，不必等回去拉 log 才發現資料是壞的。
+實驗畫面顯示最近 20 s／60 s 內依實驗 handle 收到的筆數、目前的直連數、電源模式與系統省電模式，以及發送器的「寫出結果」。只算實驗 handle，一般 Health 畫面送出的 Health Report 不會出現在這裡。這是現場用的回饋：放置中繼（E2-C）、判斷要不要重做某個 run，都靠這個畫面，不必等回去拉 log 才發現資料是壞的。
 
 ### 3.3 跳數與延遲的推算
 
@@ -228,7 +228,7 @@ adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 | 衰減 | ΔRSSI | 同距離下，對照組 RSSI − 實驗組 RSSI（dB） | — |
 | 發現時間 | T_disc | 兩機進入範圍（或打開藍牙）到 `LINK_UP` 的時間 | 開始時刻以碼錶記牆鐘，結束時刻取自 log |
 | 重複率 | R_dup | (RX + DUP) ÷ RX | 每個節點平均每個唯一封包收到幾份 |
-| 傳輸成本 | C_tx | 全網的 (TX + RELAY) ÷ 唯一封包數 | flooding 的代價；乘上 `fanout` 即為鏈路層傳輸次數 |
+| 傳輸成本 | C_tx | 全網的 (TX + RELAY) ÷ 唯一封包數 | 只算同一種 `type`（例如 0x30）。flooding 的代價；乘上 `fanout` 即為鏈路層傳輸次數 |
 | 重複交付 | — | 同一個 `(src, pts)` 在同一節點出現兩次以上 `RX` | 應為 0 |
 
 ## 5. 統計慣例
@@ -248,7 +248,7 @@ adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 ## 7. 出發前檢查清單
 
 - [ ] 7 支手機都安裝了同一個 commit 的 debug build，已記錄 commit hash
-- [ ] 電量 ≥ 80%，充電線與行動電源已拔除
+- [ ] 每支的電量已記下（低於 25% 的已充電），充電線與行動電源已拔除
 - [ ] 飛航模式開、藍牙開、定位開、Wi-Fi 關
 - [ ] 螢幕逾時設為最長，亮度調到最低
 - [ ] 時鐘偏移已量測（session 前）
