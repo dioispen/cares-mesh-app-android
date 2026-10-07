@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
+import '../widgets/user_avatar.dart';
 import 'verify_email_screen.dart';
 import 'login_screen.dart';
 
@@ -35,6 +36,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _phoneCtrl = TextEditingController();
   final _areaCtrl = TextEditingController();
   final _step1Key = GlobalKey<FormState>();
+  String _avatar = avatarPresets.first.id;
+  String? _avatarPhoto;
+
+  Future<void> _pickAvatarPhoto() async {
+    final photo = await pickAvatarPhoto(context);
+    if (photo == null || !mounted) return;
+    setState(() {
+      _avatarPhoto = photo;
+      _avatar = photoAvatarId;
+    });
+  }
 
   // Step 2：緊急聯絡人
   final _ecNameCtrl = TextEditingController();
@@ -113,6 +125,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         bloodType: _bloodType,
         medicalInfo: _medicalCtrl.text.trim().isEmpty ? null : _medicalCtrl.text.trim(),
         registeredAt: DateTime.now(),
+        avatar: _avatar,
+        avatarPhoto: _avatar == photoAvatarId ? _avatarPhoto : null,
       );
 
       final prefs = await SharedPreferences.getInstance();
@@ -192,6 +206,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     nameCtrl: _nameCtrl,
                     phoneCtrl: _phoneCtrl,
                     areaCtrl: _areaCtrl,
+                    avatar: _avatar,
+                    avatarPhoto: _avatarPhoto,
+                    onAvatarChanged: (v) => setState(() => _avatar = v),
+                    onPickAvatarPhoto: _pickAvatarPhoto,
                   ),
                   _Step2EmergencyContact(
                     formKey: _step2Key,
@@ -418,7 +436,20 @@ class _Step0Account extends StatelessWidget {
 class _Step1BasicInfo extends StatelessWidget {
   final GlobalKey<FormState> formKey;
   final TextEditingController nameCtrl, phoneCtrl, areaCtrl;
-  const _Step1BasicInfo({required this.formKey, required this.nameCtrl, required this.phoneCtrl, required this.areaCtrl});
+  final String avatar;
+  final String? avatarPhoto;
+  final ValueChanged<String> onAvatarChanged;
+  final VoidCallback onPickAvatarPhoto;
+  const _Step1BasicInfo({
+    required this.formKey,
+    required this.nameCtrl,
+    required this.phoneCtrl,
+    required this.areaCtrl,
+    required this.avatar,
+    required this.avatarPhoto,
+    required this.onAvatarChanged,
+    required this.onPickAvatarPhoto,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -430,6 +461,19 @@ class _Step1BasicInfo extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const _SectionTitle('基本個人資料', '管理端在緊急狀況時將透過此資料聯繫你'),
+            const SizedBox(height: 20),
+            const Text('選一個大頭貼',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF3D2C1E))),
+            const SizedBox(height: 4),
+            const Text('可以用自己的照片，之後也能在個人資料裡更換',
+                style: TextStyle(fontSize: 12, color: Color(0xFF8C7B6E))),
+            const SizedBox(height: 12),
+            AvatarPicker(
+              selectedId: avatar,
+              onSelected: onAvatarChanged,
+              photo: avatarPhoto,
+              onPickPhoto: onPickAvatarPhoto,
+            ),
             const SizedBox(height: 24),
             _InputField(
               label: '姓名',

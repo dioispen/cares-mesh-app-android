@@ -54,6 +54,9 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     /** The notification tap Dart has yet to act on; kept across Activity recreation. */
     private val pendingNavigation: PendingChatNavigation by viewModels()
 
+    /** 大頭貼選圖；registerForActivityResult 必須在 STARTED 之前，所以在欄位初始化時建立。 */
+    private val avatarPhotoPicker = AvatarPhotoPicker(this)
+
     private var channels: BitchatFlutterChannels? = null
     private var chatBridge: ChatBridge? = null
 
@@ -117,7 +120,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             messenger = flutterEngine.dartExecutor.binaryMessenger,
             activity = this,
             events = events,
-            additionalMethodHandlers = listOf(chat)
+            additionalMethodHandlers = listOf(chat),
+            avatarPhotoPicker = avatarPhotoPicker
         )
     }
 
