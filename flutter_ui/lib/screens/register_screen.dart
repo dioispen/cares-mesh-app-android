@@ -168,13 +168,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 鍵盤打開時（Android 的鍵盤約佔半個螢幕），上方標題與下方次要按鈕都固定不捲動，
+    // 若不收起來，中間的表單只剩一欄高，下一個輸入框會被「下一步」蓋住。
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
         child: Column(
           children: [
             // ── 頂部進度列 ──
-            _StepHeader(currentStep: _currentStep),
+            _StepHeader(currentStep: _currentStep, compact: keyboardOpen),
 
             // ── 頁面內容 ──
             Expanded(
@@ -210,12 +214,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
             // ── 底部按鈕 ──
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              padding: EdgeInsets.fromLTRB(24, keyboardOpen ? 8 : 0, 24, keyboardOpen ? 10 : 24),
               child: Column(
                 children: [
                   SizedBox(
                     width: double.infinity,
-                    height: 52,
+                    height: keyboardOpen ? 46 : 52,
                     child: ElevatedButton(
                       onPressed: _isSaving ? null : _nextStep,
                       style: ElevatedButton.styleFrom(
@@ -236,14 +240,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             ),
                     ),
                   ),
-                  if (_currentStep > 0) ...[
+                  // 打字時只留「下一步」，其他次要按鈕等鍵盤收起再出現。
+                  if (_currentStep > 0 && !keyboardOpen) ...[
                     const SizedBox(height: 10),
                     TextButton(
                       onPressed: _prevStep,
                       child: const Text('返回上一步', style: TextStyle(color: _textSecondary)),
                     ),
                   ],
-                  if (_currentStep == 3) ...[
+                  if (_currentStep == 3 && !keyboardOpen) ...[
                     const SizedBox(height: 4),
                     TextButton(
                       onPressed: _isSaving ? null : _submit,
@@ -251,25 +256,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           style: TextStyle(color: _textSecondary.withAlpha(178), fontSize: 13)),
                     ),
                   ],
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('已有帳號？',
-                          style: TextStyle(color: _textSecondary, fontSize: 14)),
-                      TextButton(
-                        onPressed: _isSaving
-                            ? null
-                            : () => Navigator.of(context).pushReplacement(
-                                  MaterialPageRoute(
-                                      builder: (_) => const LoginScreen()),
-                                ),
-                        child: const Text('返回登入',
-                            style: TextStyle(
-                                color: _brown, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  ),
+                  if (!keyboardOpen) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text('已有帳號？',
+                            style: TextStyle(color: _textSecondary, fontSize: 14)),
+                        TextButton(
+                          onPressed: _isSaving
+                              ? null
+                              : () => Navigator.of(context).pushReplacement(
+                                    MaterialPageRoute(
+                                        builder: (_) => const LoginScreen()),
+                                  ),
+                          child: const Text('返回登入',
+                              style: TextStyle(
+                                  color: _brown, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -283,7 +290,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
 // ── 步驟標題列 ───────────────────────────────────────────
 class _StepHeader extends StatelessWidget {
   final int currentStep;
-  const _StepHeader({required this.currentStep});
+
+  /// 鍵盤打開時收起標題列、縮小留白，只留步驟進度。
+  final bool compact;
+  const _StepHeader({required this.currentStep, this.compact = false});
 
   static const _steps = ['帳號', '基本資料', '緊急聯絡', '健康資訊'];
   static const _icons = [Icons.vpn_key_rounded, Icons.person_rounded, Icons.contact_phone_rounded, Icons.favorite_rounded];
@@ -294,20 +304,23 @@ class _StepHeader extends StatelessWidget {
     const green = Color(0xFF7AA67A);
     const textSecondary = Color(0xFF8C7B6E);
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 200),
+      padding: EdgeInsets.fromLTRB(24, compact ? 8 : 20, 24, compact ? 6 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Image.asset('assets/images/mascot_hi.png', width: 32, height: 32),
-              const SizedBox(width: 8),
-              const Text('防災 APP 註冊',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: brown)),
-            ],
-          ),
-          const SizedBox(height: 20),
+          if (!compact) ...[
+            Row(
+              children: [
+                Image.asset('assets/images/mascot_hi.png', width: 32, height: 32),
+                const SizedBox(width: 8),
+                const Text('防災 APP 註冊',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: brown)),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
           Row(
             children: List.generate(_steps.length, (i) {
               final isDone = i < currentStep;
