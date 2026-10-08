@@ -77,6 +77,7 @@ The application follows a clean architecture pattern, heavily modularized by fea
 
 ## 6. Common Tasks
 - **Build Debug APK**: `./gradlew assembleDebug`
+- **Install on connected device**: `./gradlew :app:installDebug` (phone app only; unqualified `installDebug` also targets `:wear`)
 - **Lint Check**: `./gradlew lint`
 - **Clean Build**: `./gradlew clean`
 
