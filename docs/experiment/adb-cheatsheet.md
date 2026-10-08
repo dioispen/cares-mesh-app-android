@@ -52,6 +52,38 @@ adb -s "$S" shell getprop ro.product.model
 
 只接一支手機時可以省略 `-s`。下面的範例都省略，接多支時記得自己補上。
 
+```bash
+# 只接一支時，直接把它的序號存進 S
+S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+```
+
+## 安裝 app
+
+在 repo 根目錄執行。完整流程（先解除安裝、再登入）見 runbook 的「前一天」。
+
+```bash
+# 建 debug build 並裝到所有接著的手機；要寫 :app:，不建也不裝 :wear（手錶版）
+./gradlew :app:installDebug
+
+# 解除安裝（連同 app 資料與 mesh 身分一起清掉，peerID 會換新的）
+adb uninstall com.bitchat.droid
+```
+
+## 填 devices.csv
+
+各欄的意思見 [00 §1](00-setup-and-instrumentation.md#1-裝置登錄)。
+
+```bash
+# 型號、Android 版本
+adb shell getprop ro.product.model
+adb shell getprop ro.build.version.release
+
+# 電池最佳化：有輸出＝不限制（已加入白名單），沒輸出＝最佳化（預設）
+adb shell dumpsys deviceidle whitelist | grep bitchat
+```
+
+peerID 從實驗工具畫面的「本機 peerId」抄；藍牙版本查型號規格頁；電池健康度看手機的「設定 → 電池」。
+
 ## 即時看 log
 
 ```bash

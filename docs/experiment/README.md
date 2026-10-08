@@ -104,5 +104,6 @@ E1-B 量出的**可靠單跳距離 `d_rel`** 是後續所有實驗的間距基�
 | [calibration-table.md](calibration-table.md) | 交給模擬器的校準表 |
 | [templates/devices.csv](templates/devices.csv) | 裝置登錄樣板 |
 | [templates/runs.csv](templates/runs.csv) | 每次 run 的條件記錄樣板 |
+| [templates/stations.csv](templates/stations.csv) | 距離類實驗的點位記錄樣板：每個點位的距離與起訖時間 |
 
 原始 log 含 peerID，**不進 repo**。整理後以裝置代號 A–G 表示的結果放在 `docs/experiment/results/<日期>_<實驗代號>.md`。
