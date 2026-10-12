@@ -9,6 +9,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/sos_service.dart';
 
+/// 一次送出 SOS 的結果。
+enum _SendOutcome {
+  /// 伺服器已確認收到。
+  sent,
+
+  /// 離線，已進本機佇列，恢復連線才會送出。
+  queued,
+
+  /// 沒送出（沒有個人資料、寫入被拒）。
+  failed,
+}
+
 class SOSScreen extends StatefulWidget {
   const SOSScreen({super.key});
 
@@ -34,8 +46,16 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   final AudioPlayer _chargePlayer = AudioPlayer();
   final AudioPlayer _alertPlayer = AudioPlayer();
 
+  /// 蓄力音效先載好：play() 要先載入音檔才開始播，快速點一下就放開時，
+  /// stop() 會在還沒開始播之前就呼叫，等載入完音效還是整段播完。
+  late final Future<void> _chargeReady;
+
   /// 上一次觸發震動時已經過的整秒數，用來每滿一秒震一下。
   int _lastHapticSecond = 0;
+
+  /// 正在長按的那根手指。長按期間不理其他手指：慌張時第二根手指或手掌碰到
+  /// 按鈕，不該讓計時重來，也不該因為那根手指放開就取消。
+  int? _activePointer;
 
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
@@ -81,6 +101,13 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 120),
       reverseDuration: const Duration(milliseconds: 220),
     );
+    _chargeReady = _chargePlayer
+        // 預設的 ReleaseMode.release 在 stop() 後會釋放音檔，下次按就得重新載入。
+        .setReleaseMode(ReleaseMode.stop)
+        .then(
+          (_) => _chargePlayer.setSource(AssetSource('sounds/sos_charge.wav')),
+        )
+        .catchError((Object e) => debugPrint('load charge sound failed: $e'));
     _loadUser();
     _fetchLocation();
   }
@@ -97,18 +124,45 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   bool get _canHold => !_sosSent && !_isSending;
 
+  bool get _isHolding => _holdController.status == AnimationStatus.forward;
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (_activePointer != null) return;
+    _activePointer = event.pointer;
+    _onHoldStart();
+  }
+
+  /// 放開與取消都走這裡，只認當初按下的那根手指。
+  void _onPointerEnd(PointerEvent event) {
+    if (event.pointer != _activePointer) return;
+    _activePointer = null;
+    _onHoldEnd();
+  }
+
   void _onHoldStart() {
     if (!_canHold) return;
     _lastHapticSecond = 0;
     HapticFeedback.mediumImpact();
     _pressController.forward();
     _holdController.forward(from: 0);
-    _chargePlayer.play(AssetSource('sounds/sos_charge.wav'));
+    unawaited(_startChargeSound());
+  }
+
+  /// 音檔載好、真的開始播之後再確認一次手指還按著，否則馬上停掉。
+  Future<void> _startChargeSound() async {
+    try {
+      await _chargeReady;
+      if (!_isHolding) return;
+      await _chargePlayer.resume();
+      if (!_isHolding) await _chargePlayer.stop();
+    } catch (e) {
+      debugPrint('play charge sound failed: $e');
+    }
   }
 
   void _onHoldEnd() {
     _pressController.reverse();
-    if (_holdController.status != AnimationStatus.forward) return;
+    if (!_isHolding) return;
     _holdController.reverse();
     _chargePlayer.stop();
     _showMessage('請持續按住 3 秒才會送出求救', _sosRed);
@@ -125,15 +179,29 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   }
 
   void _onHoldComplete() {
+    // 按滿 3 秒時只震動，表示「收到、正在送」；還不知道有沒有送成功。
     HapticFeedback.heavyImpact();
     _chargePlayer.stop();
-    // 沒有個人資料時送不出去（_sendSOS 會提示原因），不能播「成功」音誤導人。
-    if (_currentUser != null) {
-      _alertPlayer.play(AssetSource('sounds/sos_success.wav'));
-    }
     _pressController.reverse();
     _holdController.value = 0;
-    _sendSOS();
+    unawaited(_sendAndAnnounce());
+  }
+
+  /// 送出 SOS，確定伺服器收到了才播「成功」音效。
+  ///
+  /// 求救的人很可能沒在看螢幕，聽到「成功」就會以為救援要來了。所以送出失敗
+  /// 不播；離線暫存也還沒到後端，先不播，等之後真的送到再播
+  /// （[_followQueuedSend]）。
+  Future<void> _sendAndAnnounce() async {
+    final outcome = await _sendSOS();
+    if (outcome == _SendOutcome.sent) _playSuccessSound();
+  }
+
+  void _playSuccessSound() {
+    if (!mounted) return;
+    _alertPlayer
+        .play(AssetSource('sounds/sos_success.wav'))
+        .catchError((Object e) => debugPrint('play success sound failed: $e'));
   }
 
   Future<void> _loadUser() async {
@@ -174,8 +242,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> _sendSOS() async {
-    if (_isSending) return;
+  Future<_SendOutcome> _sendSOS() async {
+    if (_isSending) return _SendOutcome.failed;
 
     // 先前這裡是 `if (_currentUser == null) return;`：本機沒有個人資料時，
     // 按下 SOS 完全沒有反應 —— 不送出、不報錯、也沒有任何提示。求救的人
@@ -183,7 +251,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     final user = _currentUser;
     if (user == null) {
       _showMessage('找不到你的個人資料，無法送出求救。請重新登入後再試。', _sosRed);
-      return;
+      return _SendOutcome.failed;
     }
 
     setState(() => _isSending = true);
@@ -216,7 +284,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         unawaited(_followQueuedSend(send));
       }
 
-      if (!mounted) return;
+      final outcome = queuedOffline ? _SendOutcome.queued : _SendOutcome.sent;
+      if (!mounted) return outcome;
       setState(() {
         _sosSent = true;
         _sentAt = DateTime.now();
@@ -232,10 +301,12 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       // 等待確認的期間定位已經回來的話，現在補寫。
       final arrived = _position;
       if (arrived != null) _attachLateLocation(arrived);
+      return outcome;
     } catch (e) {
       debugPrint('sendSOS failed: $e');
       _sosDocId = null;
       if (mounted) _showMessage('發送失敗，請再試一次。', _sosRed);
+      return _SendOutcome.failed;
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
@@ -248,7 +319,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   Future<void> _followQueuedSend(Future<void> send) async {
     try {
       await send;
-      if (mounted) setState(() => _queuedOffline = false);
+      if (!mounted) return;
+      setState(() => _queuedOffline = false);
+      _playSuccessSound();
     } catch (e) {
       debugPrint('queued SOS failed: $e');
       _sosDocId = null;
@@ -280,15 +353,19 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   void _showMessage(String message, Color color) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: color,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 5),
-      ),
-    );
+    // SnackBar 是排隊一個一個顯示的。慌張連點時每次都會跳「請持續按住」，
+    // 不先收掉舊的，送出結果要等前面那串播完才看得到。
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: color,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 5),
+        ),
+      );
   }
 
   /// 上方橫幅的顏色。送出但「有但書」（離線暫存、沒有位置）時不給全綠 ——
@@ -380,12 +457,12 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 button: true,
                 label: _sosSent ? 'SOS 已發送' : 'SOS 緊急求救，長按 3 秒送出',
                 // 讀螢幕軟體沒有「按住 3 秒」的手勢，改用長按動作直接送出。
-                onLongPress: _canHold ? _sendSOS : null,
+                onLongPress: _canHold ? _sendAndAnnounce : null,
                 excludeSemantics: true,
                 child: Listener(
-                  onPointerDown: (_) => _onHoldStart(),
-                  onPointerUp: (_) => _onHoldEnd(),
-                  onPointerCancel: (_) => _onHoldEnd(),
+                  onPointerDown: _onPointerDown,
+                  onPointerUp: _onPointerEnd,
+                  onPointerCancel: _onPointerEnd,
                   child: SizedBox(
                     width: 280,
                     height: 280,
