@@ -18,6 +18,9 @@ class MutualAidTask {
   final String injury;
   final String location;
 
+  /// 對方的居住區域（Detail Tier）。BLE 任務與沒填的回報為 null。
+  final String? area;
+
   /// 對方的座標。沒有回報位置時為 null —— 導航按鈕要據此決定能不能按。
   /// BLE 任務放的是 geohash 還原的概略中心，不是精確位置（ADR-0003）。
   final double? lat;
@@ -38,6 +41,7 @@ class MutualAidTask {
     required this.userId,
     required this.injury,
     required this.location,
+    this.area,
     this.lat,
     this.lng,
     required this.distanceKm,
@@ -54,6 +58,7 @@ class MutualAidTask {
         userId: userId,
         injury: injury,
         location: location,
+        area: area,
         lat: lat,
         lng: lng,
         distanceKm: distanceKm ?? this.distanceKm,
@@ -66,6 +71,38 @@ class MutualAidTask {
   /// 距離未知時不編故事：顯示「距離未知」而不是 0 公里。
   String get distanceLabel =>
       distanceKm == null ? '距離未知' : '${distanceKm!.toStringAsFixed(1)} km';
+}
+
+/// 詳情畫面的 Sensitive Tier（電話、血型、病史、緊急聯絡人）那一區該怎麼呈現（ADR-0005）。
+enum SensitiveAccess {
+  /// 沒有 Sensitive Tier 可看：BLE 任務只有 Broadcast Tier；舊版隨機 ID 的回報也沒有對應的
+  /// health_report_sensitive 文件。
+  none,
+
+  /// 讀得到：自己是 Verified Rescuer，而且此刻正接著這筆任務。
+  granted,
+
+  /// 自己是 Verified Rescuer，但沒有接著這筆任務（還沒接、被別人接走或已完成）。
+  acceptFirst,
+
+  /// 不是 Verified Rescuer：就算接了任務也讀不到。
+  verificationRequired,
+}
+
+/// 與 firestore.rules 的 health_report_sensitive 讀取條件一致；畫面先用它判斷，
+/// 不去讀一定會被規則擋下的文件。
+SensitiveAccess sensitiveAccessFor(
+  MutualAidTask task, {
+  required String? currentUserId,
+  required bool isVerifiedRescuer,
+}) {
+  // 規則是看 health_reports/{reporter uid} 的任務狀態，文件 ID 不是 uid 的舊回報對不上。
+  if (task.isBle || task.id != task.userId) return SensitiveAccess.none;
+  if (!isVerifiedRescuer) return SensitiveAccess.verificationRequired;
+  final helpingNow = currentUserId != null &&
+      task.status == TaskStatus.accepted &&
+      task.helperId == currentUserId;
+  return helpingNow ? SensitiveAccess.granted : SensitiveAccess.acceptFirst;
 }
 
 /// Firestore 文件字串 → [TaskStatus]。
@@ -126,6 +163,9 @@ List<MutualAidTask> buildMutualAidTasks({
         location: hasLocation
             ? '緯度 ${lat.toStringAsFixed(4)}, 經度 ${lng.toStringAsFixed(4)}'
             : '位置未提供',
+        area: (data['area'] as String?)?.trim().isNotEmpty == true
+            ? data['area'] as String
+            : null,
         lat: lat,
         lng: lng,
         distanceKm: distanceKmBetween(myLat, myLng, lat, lng),

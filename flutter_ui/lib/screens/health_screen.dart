@@ -52,6 +52,10 @@ class _HealthScreenState extends State<HealthScreen>
 
   Position? _currentPosition;
   String? _currentUserId;
+
+  /// 自己是不是 Verified Rescuer（rescuers/{uid} 存在）。只用來決定詳情畫面怎麼說明，
+  /// 真正的把關在 firestore.rules。
+  bool _isVerifiedRescuer = false;
   String? _myBroadcastHandle;
   Future<String>? _broadcastHandleFuture;
   List<ReportEntry> _reports = [];
@@ -281,6 +285,7 @@ class _HealthScreenState extends State<HealthScreen>
       // 監聽只是掛上去、不等網路，所以搶在定位之前接好：位置權限對話框停在
       // 那裡的時候，「我的狀態」不該跟著卡住。
       _subscribeToOwnReport(uid);
+      unawaited(_loadVerifiedRescuer(uid));
     }
 
     try {
@@ -295,6 +300,20 @@ class _HealthScreenState extends State<HealthScreen>
         if (mounted) setState(() => _currentPosition = position);
       }
     } catch (_) {}
+  }
+
+  /// 讀不到（離線、逾時）就當作不是：詳情畫面頂多少顯示聯絡資訊，不會多顯示。
+  Future<void> _loadVerifiedRescuer(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('rescuers')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      if (mounted) setState(() => _isVerifiedRescuer = doc.exists);
+    } catch (e) {
+      debugPrint('load rescuer status failed: $e');
+    }
   }
 
   /// 訂閱自己那份回報文件，讓「我的狀態」以後端為準。
@@ -583,13 +602,18 @@ class _HealthScreenState extends State<HealthScreen>
       final report = HealthReport(
         reporterId: user.id,
         name: user.name,
-        phone: user.phone,
-        bloodType: user.bloodType,
+        area: user.area,
         status: status,
         description: subInjury,
         lat: _currentPosition?.latitude,
         lng: _currentPosition?.longitude,
         reportTime: DateTime.now(),
+        phone: user.phone,
+        bloodType: user.bloodType,
+        medicalInfo: user.medicalInfo,
+        emergencyContactName: user.emergencyContactName,
+        emergencyContactPhone: user.emergencyContactPhone,
+        emergencyContactRelation: user.emergencyContactRelation,
       );
 
       // BLE 廣播只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標
@@ -609,8 +633,9 @@ class _HealthScreenState extends State<HealthScreen>
         broadcastFailure = HealthReportDelivery.broadcastFailureReason(e);
       }
 
-      // 附近廣播失敗也照樣上傳。Firestore 仍寫入完整回報（Reporter 對後端的自願揭露，另由
-      // firestore.rules 治理）。
+      // 附近廣播失敗也照樣上傳。後端拆成兩份文件（ADR-0005）：Detail Tier 寫進大家都讀得到
+      // 的 health_reports，電話、血型、病史、緊急聯絡人寫進 health_report_sensitive。
+      // 同一個 batch：兩份要嘛一起寫進去，要嘛都沒有。
       //
       // 一人一筆：文件 ID 就用 uid，改狀態是直接覆寫同一份文件，不再 add() 新增。
       // 舊做法每回報一次就多一筆，同一個人會在後端留下一串過期狀態（回報安全之後，
@@ -619,16 +644,24 @@ class _HealthScreenState extends State<HealthScreen>
       // 傷勢一改就回到「等待中／無人認領」：內容已經不一樣了，沿用舊的認領紀錄會讓
       // 協助者看到對不上的任務。但重送一模一樣的狀態（例如不小心再點一次）不算改，
       // 這時清掉認領，已經在路上的協助者會無聲無息地丟掉任務，還可能被別人接走。
-      // toJson() 每個欄位都會寫（含 null），所以 merge 只會保留 taskStatus／helperId。
+      // toDetailJson() 每個欄位都會寫（含 null），所以 merge 只會保留 taskStatus／helperId。
       final contentChanged =
           status != previousStatus || subInjury != previousSubInjury;
-      final write = FirebaseFirestore.instance
-          .collection('health_reports')
-          .doc(user.id)
-          .set({
-        ...report.toJson(),
-        if (contentChanged) ...{'taskStatus': 'waiting', 'helperId': null},
-      }, SetOptions(merge: true));
+      final db = FirebaseFirestore.instance;
+      final write = (db.batch()
+            ..set(
+              db.collection('health_reports').doc(user.id),
+              {
+                ...report.toDetailJson(),
+                if (contentChanged) ...{'taskStatus': 'waiting', 'helperId': null},
+              },
+              SetOptions(merge: true),
+            )
+            ..set(
+              db.collection('health_report_sensitive').doc(user.id),
+              report.toSensitiveJson(),
+            ))
+          .commit();
 
       // set() 的 Future 要等伺服器確認才完成，離線時會一直不完成（資料已進本機佇列，
       // 恢復連線會自動送出）。所以不無限等待——災難時離線是常態，使用者需要立刻得到
@@ -754,13 +787,19 @@ class _HealthScreenState extends State<HealthScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _TaskDetailSheet(
+      // 加上聯絡與醫療資訊後內容變長，小螢幕或大字體時要能捲動。
+      builder: (_) => SingleChildScrollView(child: _TaskDetailSheet(
         task: task,
         injuryColor: _injuryColor(task.injury),
         // 任務同步之後，看到「進行中」不代表是自己接的。BLE 任務只存在本機，
         // 沒有被別人先接走的問題。
         canComplete: task.isBle ||
             (_currentUserId != null && task.helperId == _currentUserId),
+        sensitiveAccess: sensitiveAccessFor(
+          task,
+          currentUserId: _currentUserId,
+          isVerifiedRescuer: _isVerifiedRescuer,
+        ),
         // 沒有座標就沒得導航，按鈕不該出現在那裡讓人白按。
         onNavigate: task.lat != null && task.lng != null
             ? () => _openNavigation(task)
@@ -781,7 +820,7 @@ class _HealthScreenState extends State<HealthScreen>
           _updateTaskStatus(task, TaskStatus.waiting,
               '已放棄協助 ${task.name}，任務回到待救援', _orange);
         },
-      ),
+      )),
     );
   }
 
@@ -1429,6 +1468,9 @@ class _TaskDetailSheet extends StatelessWidget {
   /// 開啟地圖導航；對方沒有回報座標時為 null。
   final VoidCallback? onNavigate;
 
+  /// 電話、血型、病史、緊急聯絡人那一區怎麼呈現（ADR-0005）。
+  final SensitiveAccess sensitiveAccess;
+
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -1444,6 +1486,7 @@ class _TaskDetailSheet extends StatelessWidget {
     required this.onDone,
     required this.onRelease,
     required this.onNavigate,
+    required this.sensitiveAccess,
   });
 
   @override
@@ -1529,6 +1572,12 @@ class _TaskDetailSheet extends StatelessWidget {
                 _infoRow(Icons.location_on_rounded, '位置', task.location),
                 const Divider(height: 18, color: Color(0xFFE8E0D5)),
                 _infoRow(Icons.near_me_rounded, '距離', task.distanceLabel),
+                if (!task.isBle) ...[
+                  const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                  _infoRow(Icons.healing_rounded, '傷勢細項', task.note),
+                  const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                  _infoRow(Icons.home_rounded, '居住區域', task.area ?? '未提供'),
+                ],
                 if (task.isBle) ...[
                   const Divider(height: 18, color: Color(0xFFE8E0D5)),
                   _infoRow(Icons.bluetooth_audio_rounded, '來源', 'BLE 現場廣播'),
@@ -1568,6 +1617,11 @@ class _TaskDetailSheet extends StatelessWidget {
               text: '${task.lat}, ${task.lng}',
               color: _textSecondary,
             ),
+          ],
+
+          if (sensitiveAccess != SensitiveAccess.none) ...[
+            const SizedBox(height: 12),
+            _SensitiveTierSection(reporterUid: task.userId, access: sensitiveAccess),
           ],
 
           const SizedBox(height: 20),
@@ -1664,6 +1718,153 @@ class _TaskDetailSheet extends StatelessWidget {
       ],
     );
   }
+}
+
+/// 詳情畫面的 Sensitive Tier：電話、血型、病史、緊急聯絡人（ADR-0005）。
+///
+/// 只有正接著這筆任務的 Verified Rescuer 才去讀 health_report_sensitive；其他情況照實
+/// 說明為什麼看不到，而不是讓人以為對方沒填。
+class _SensitiveTierSection extends StatefulWidget {
+  final String reporterUid;
+  final SensitiveAccess access;
+
+  const _SensitiveTierSection({required this.reporterUid, required this.access});
+
+  @override
+  State<_SensitiveTierSection> createState() => _SensitiveTierSectionState();
+}
+
+class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
+  static const _card = Color(0xFFFEFDF9);
+  static const _textPrimary = Color(0xFF3D2C1E);
+  static const _textSecondary = Color(0xFF8C7B6E);
+
+  Future<DocumentSnapshot<Map<String, dynamic>>>? _sensitive;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.access == SensitiveAccess.granted) {
+      _sensitive = FirebaseFirestore.instance
+          .collection('health_report_sensitive')
+          .doc(widget.reporterUid)
+          .get();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE8E0D5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.lock_rounded, size: 16, color: _textSecondary),
+              SizedBox(width: 6),
+              Text(
+                '聯絡與醫療資訊',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _textPrimary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          switch (widget.access) {
+            SensitiveAccess.granted => _granted(),
+            SensitiveAccess.acceptFirst =>
+              _note('電話、血型、病史與緊急聯絡人，只在你接下並協助這筆任務期間看得到。'),
+            SensitiveAccess.verificationRequired =>
+              _note('電話、血型、病史與緊急聯絡人只提供給經過認證、並且接下這筆任務的救援者。'),
+            SensitiveAccess.none => const SizedBox.shrink(),
+          },
+        ],
+      ),
+    );
+  }
+
+  Widget _granted() => FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        future: _sensitive,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final denied = error is FirebaseException && error.code == 'permission-denied';
+            return _note(denied
+                ? '讀不到：你的救援者認證或這筆任務的狀態可能已經改變。'
+                : '讀取失敗，請稍後再試。');
+          }
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
+          final data = snapshot.data?.data();
+          if (data == null) return _note('對方沒有提供聯絡與醫療資訊。');
+
+          return Column(
+            children: [
+              _row('電話', _text(data['phone'])),
+              _row('血型', _text(data['bloodType'])),
+              _row('病史', _text(data['medicalInfo'])),
+              _row('緊急聯絡人', _emergencyContact(data)),
+            ],
+          );
+        },
+      );
+
+  static String _text(Object? value) =>
+      value is String && value.trim().isNotEmpty ? value : '未提供';
+
+  /// 「王大明（父親） 0987654321」；缺的部分省略，全缺就是「未提供」。
+  static String _emergencyContact(Map<String, dynamic> data) {
+    String? part(String key) {
+      final v = data[key];
+      return v is String && v.trim().isNotEmpty ? v.trim() : null;
+    }
+
+    final name = part('emergencyContactName');
+    final relation = part('emergencyContactRelation');
+    final phone = part('emergencyContactPhone');
+    final who = [?name, if (relation != null) '（$relation）'].join();
+    final text = [if (who.isNotEmpty) who, ?phone].join(' ');
+    return text.isEmpty ? '未提供' : text;
+  }
+
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 76,
+              child: Text(label, style: const TextStyle(fontSize: 13, color: _textSecondary)),
+            ),
+            Expanded(
+              child: SelectableText(
+                value,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  Widget _note(String text) =>
+      Text(text, style: const TextStyle(fontSize: 12, color: _textSecondary));
 }
 
 // ── 傷況細項選單 ──────────────────────────────────────────

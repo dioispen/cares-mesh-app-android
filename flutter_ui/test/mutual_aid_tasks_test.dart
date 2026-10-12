@@ -18,12 +18,14 @@ ReportEntry _report({
   String? taskStatus,
   String? helperId,
   String? reportTime,
+  String? area,
 }) =>
     (
       id: id,
       data: <String, dynamic>{
         'reporterId': reporterId ?? id,
         'name': name,
+        'area': ?area,
         'status': status,
         'description': description,
         'lat': lat,
@@ -268,6 +270,21 @@ void main() {
 
       expect(tasks.map((t) => (t.id, t.injury)), [('alice', '輕傷')]);
     });
+
+    test('居住區域是 Detail Tier，會帶進任務；沒填就是 null', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(id: 'a', area: '台北市中正區'),
+          _report(id: 'b', area: '  '),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      expect({for (final t in tasks) t.id: t.area}, {'a': '台北市中正區', 'b': null});
+    });
   });
 
   group('latestReportPerReporter', () {
@@ -380,6 +397,78 @@ void main() {
       );
 
       expect(uris.first.toString(), isNot(contains('()')));
+    });
+  });
+
+  group('sensitiveAccessFor', () {
+    MutualAidTask task({
+      String id = 'alice',
+      String userId = 'alice',
+      TaskStatus status = TaskStatus.waiting,
+      String? helperId,
+      bool isBle = false,
+    }) =>
+        MutualAidTask(
+          id: id,
+          name: 'Alice',
+          userId: userId,
+          injury: '重傷',
+          location: '',
+          distanceKm: null,
+          note: '',
+          status: status,
+          helperId: helperId,
+          isBle: isBle,
+        );
+
+    test('Verified Rescuer 正接著這筆任務：讀得到', () {
+      expect(
+        sensitiveAccessFor(
+          task(status: TaskStatus.accepted, helperId: 'me'),
+          currentUserId: 'me',
+          isVerifiedRescuer: true,
+        ),
+        SensitiveAccess.granted,
+      );
+    });
+
+    test('Verified Rescuer 還沒接、被別人接走或已完成：要先接下任務', () {
+      for (final t in [
+        task(),
+        task(status: TaskStatus.accepted, helperId: 'someone-else'),
+        task(status: TaskStatus.done, helperId: 'me'),
+      ]) {
+        expect(
+          sensitiveAccessFor(t, currentUserId: 'me', isVerifiedRescuer: true),
+          SensitiveAccess.acceptFirst,
+        );
+      }
+    });
+
+    test('沒認證的協助者：接了任務也讀不到', () {
+      expect(
+        sensitiveAccessFor(
+          task(status: TaskStatus.accepted, helperId: 'me'),
+          currentUserId: 'me',
+          isVerifiedRescuer: false,
+        ),
+        SensitiveAccess.verificationRequired,
+      );
+    });
+
+    test('BLE 任務與舊版隨機 ID 的回報沒有 Sensitive Tier', () {
+      expect(
+        sensitiveAccessFor(task(isBle: true), currentUserId: 'me', isVerifiedRescuer: true),
+        SensitiveAccess.none,
+      );
+      expect(
+        sensitiveAccessFor(
+          task(id: 'legacy-random-id', status: TaskStatus.accepted, helperId: 'me'),
+          currentUserId: 'me',
+          isVerifiedRescuer: true,
+        ),
+        SensitiveAccess.none,
+      );
     });
   });
 
