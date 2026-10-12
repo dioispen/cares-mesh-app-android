@@ -554,49 +554,70 @@ class _ProfileSheetState extends State<_ProfileSheet> {
   late String? _photo = widget.user.avatarPhoto;
 
   void _pickAvatar() {
+    // 選照片失敗的原因直接寫在這個 sheet 裡：SnackBar 會出現在最底下的首頁，
+    // 被個人資料與這個 sheet 兩層擋住。
+    String? pickError;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) => Container(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-        decoration: const BoxDecoration(
-          color: Color(0xFFFEFDF9),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36, height: 4,
-              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
-            ),
-            const SizedBox(height: 18),
-            const Text('更換大頭貼',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF3D2C1E))),
-            const SizedBox(height: 18),
-            AvatarPicker(
-              selectedId: _avatar,
-              photo: _photo,
-              onSelected: (id) {
-                setState(() {
-                  _avatar = id;
-                  _photo = null;
-                });
-                widget.onAvatarChanged(id, null);
-                Navigator.pop(sheetContext);
-              },
-              onPickPhoto: () async {
-                final photo = await pickAvatarPhoto(sheetContext);
-                if (photo == null || !mounted) return;
-                setState(() {
-                  _avatar = photoAvatarId;
-                  _photo = photo;
-                });
-                widget.onAvatarChanged(photoAvatarId, photo);
-                if (sheetContext.mounted) Navigator.pop(sheetContext);
-              },
-            ),
-          ],
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => Container(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+          decoration: const BoxDecoration(
+            color: Color(0xFFFEFDF9),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+              ),
+              const SizedBox(height: 18),
+              const Text('更換大頭貼',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF3D2C1E))),
+              const SizedBox(height: 18),
+              if (pickError != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Text(pickError!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
+                ),
+                const SizedBox(height: 14),
+              ],
+              AvatarPicker(
+                selectedId: _avatar,
+                photo: _photo,
+                onSelected: (id) {
+                  setState(() {
+                    _avatar = id;
+                    _photo = null;
+                  });
+                  widget.onAvatarChanged(id, null);
+                  Navigator.pop(sheetContext);
+                },
+                onPickPhoto: () async {
+                  final result = await pickAvatarPhoto();
+                  if (!mounted || !sheetContext.mounted) return;
+                  setSheetState(() => pickError = result.error);
+                  final photo = result.photo;
+                  if (photo == null) return;
+                  setState(() {
+                    _avatar = photoAvatarId;
+                    _photo = photo;
+                  });
+                  widget.onAvatarChanged(photoAvatarId, photo);
+                  Navigator.pop(sheetContext);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -40,8 +40,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? _avatarPhoto;
 
   Future<void> _pickAvatarPhoto() async {
-    final photo = await pickAvatarPhoto(context);
-    if (photo == null || !mounted) return;
+    final result = await pickAvatarPhoto();
+    if (!mounted) return;
+    // 註冊頁沒有疊 sheet，SnackBar 看得到。
+    if (result.error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(result.error!),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+      ));
+    }
+    final photo = result.photo;
+    if (photo == null) return;
     setState(() {
       _avatarPhoto = photo;
       _avatar = photoAvatarId;

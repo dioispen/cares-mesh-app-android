@@ -49,26 +49,24 @@ Uint8List? _photoBytes(String? base64) {
   return _cachedPhotoBytes;
 }
 
-/// 開啟裝置相簿挑一張照片，回傳 base64 的 JPEG 縮圖；取消或失敗時為 null。
-/// 失敗原因會用 SnackBar 告訴使用者，呼叫端不必再提示。
-Future<String?> pickAvatarPhoto(BuildContext context) async {
-  final messenger = ScaffoldMessenger.of(context);
-  void tell(String msg) => messenger.showSnackBar(SnackBar(
-        content: Text(msg),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-      ));
+/// 選照片的結果：成功時 [photo] 是 base64 的 JPEG 縮圖；失敗時 [error] 是給使用者看的原因；
+/// 使用者取消時兩者都是 null。
+typedef AvatarPhotoPick = ({String? photo, String? error});
+
+/// 開啟裝置相簿挑一張照片。
+///
+/// 錯誤不在這裡顯示，而是交回呼叫端：從疊了 bottom sheet 的畫面呼叫時，SnackBar 會出現在
+/// 最底下的 Scaffold，被 sheet 和遮罩擋住，使用者什麼都看不到。由呼叫端決定在哪裡呈現。
+Future<AvatarPhotoPick> pickAvatarPhoto() async {
   try {
     final bytes = await BitchatBridge.pickAvatarPhoto();
-    if (bytes == null) return null; // 使用者取消
-    return base64Encode(bytes);
+    return (photo: bytes == null ? null : base64Encode(bytes), error: null);
   } on MissingPluginException {
-    tell('這個裝置目前不支援從相簿選照片');
+    return (photo: null, error: '這個裝置目前不支援從相簿選照片');
   } on PlatformException catch (e) {
     debugPrint('pickAvatarPhoto failed: ${e.code} ${e.message}');
-    tell('讀取照片失敗，請換一張再試');
+    return (photo: null, error: '讀取照片失敗，請換一張再試');
   }
-  return null;
 }
 
 AvatarPreset? avatarPresetById(String? id) {
