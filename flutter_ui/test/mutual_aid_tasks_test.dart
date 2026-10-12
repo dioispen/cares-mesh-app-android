@@ -354,6 +354,8 @@ void main() {
 
       expect(uris.first.scheme, 'geo');
       expect(uris.first.toString(), startsWith('geo:25.0478,121.517'));
+      // q= 裡的逗號照文件格式不編碼。
+      expect(uris.first.toString(), contains('?q=25.0478,121.517('));
       expect(uris.first.toString(), contains('%E5%B0%8F%20%E6%98%8E'));
       expect(uris.last.host, 'www.google.com');
     });

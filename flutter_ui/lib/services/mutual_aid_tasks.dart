@@ -232,7 +232,8 @@ List<Uri> navigationUris({
     if (platform == TargetPlatform.iOS)
       Uri.parse('maps://?daddr=$coords')
     else if (platform == TargetPlatform.android)
-      Uri.parse('geo:$coords?q=${Uri.encodeComponent(coords)}'
+      // 照 Android 文件的 geo:0,0?q=lat,lng(label) 格式，q= 裡的逗號不編碼。
+      Uri.parse('geo:$coords?q=$coords'
           '${name == null ? '' : '(${Uri.encodeComponent(name)})'}'),
     Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$coords'),
   ];

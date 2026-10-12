@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show compute, defaultTargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -696,7 +697,9 @@ class _HealthScreenState extends State<HealthScreen>
       lat: lat,
       lng: lng,
       platform: defaultTargetPlatform,
-      label: task.name,
+      // 不帶求助者姓名：姓名是 Detail Tier，交給外部地圖 App 可能被存進搜尋紀錄
+      // （ADR-0003），而導航本身用不到它。
+      label: '求助者',
     )) {
       try {
         if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
@@ -704,7 +707,25 @@ class _HealthScreenState extends State<HealthScreen>
         debugPrint('launch $uri failed: $e');
       }
     }
-    _showTaskSnackBar('這台裝置打不開地圖 App，座標為 $lat, $lng', _red);
+    if (!mounted) return;
+    // 這裡是從詳情 sheet 呼叫的，SnackBar 會出現在 sheet 底下被擋住，先把 sheet 關掉。
+    Navigator.of(context).popUntil((route) => route is! ModalBottomSheetRoute);
+    final coords = '$lat, $lng';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('這台裝置打不開地圖 App，座標為 $coords'),
+        backgroundColor: _red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: '複製',
+          textColor: Colors.white,
+          onPressed: () => Clipboard.setData(ClipboardData(text: coords)),
+        ),
+      ),
+    );
   }
 
   void _showTaskDetail(MutualAidTask task) {
@@ -1203,6 +1224,39 @@ class _HealthScreenState extends State<HealthScreen>
   }
 }
 
+/// 複製座標：不用裝任何 App、離線也能用，開不了地圖時至少能貼到別處或念給別人聽。
+///
+/// 複製成功的提示寫在按鈕上——它在詳情 sheet 裡，SnackBar 會被 sheet 擋住。
+class _CopyCoordsButton extends StatefulWidget {
+  final String text;
+  final Color color;
+
+  const _CopyCoordsButton({required this.text, required this.color});
+
+  @override
+  State<_CopyCoordsButton> createState() => _CopyCoordsButtonState();
+}
+
+class _CopyCoordsButtonState extends State<_CopyCoordsButton> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: () async {
+          await Clipboard.setData(ClipboardData(text: widget.text));
+          if (mounted) setState(() => _copied = true);
+        },
+        icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 16),
+        label: Text(_copied ? '已複製座標' : '複製座標'),
+        style: TextButton.styleFrom(foregroundColor: widget.color),
+      ),
+    );
+  }
+}
+
 class _TaskDetailSheet extends StatelessWidget {
   final MutualAidTask task;
   final Color injuryColor;
@@ -1350,6 +1404,10 @@ class _TaskDetailSheet extends StatelessWidget {
                   style: TextStyle(fontSize: 12, color: _textSecondary),
                 ),
               ),
+            _CopyCoordsButton(
+              text: '${task.lat}, ${task.lng}',
+              color: _textSecondary,
+            ),
           ],
 
           const SizedBox(height: 20),
