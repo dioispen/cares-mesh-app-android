@@ -410,3 +410,46 @@ describe('health_reports 互助任務狀態', () => {
     await assertFails(deleteDoc(doc(dbFor(BOB), 'health_reports/report-alice')));
   });
 });
+
+// 一人一筆：health_reports 的文件 ID 就是回報者的 uid（health_screen.dart 的 _select）。
+describe('health_reports 一人一筆', () => {
+  const ownReport = (uid) => ({
+    id: 'report-uuid',
+    reporterId: uid,
+    name: 'Alice',
+    phone: '0912345678',
+    bloodType: 'O',
+    status: '輕傷',
+    description: '割傷',
+    lat: null,
+    lng: null,
+    reportTime: '2026-10-04T10:00:00.000Z',
+  });
+
+  it('可以在自己的 uid 底下建立回報', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), ownReport(ALICE)));
+  });
+
+  it('★ 不能先搶走別人的文件 ID（即使 reporterId 填自己）', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `health_reports/${ALICE}`), ownReport(BOB)));
+  });
+
+  it('不能用隨機 ID 建立回報（舊版 add() 的寫法）', async () => {
+    await assertFails(setDoc(doc(dbFor(ALICE), 'health_reports/random-id'), ownReport(ALICE)));
+  });
+
+  it('還沒回報過的人可以監聽自己 uid 的文件（文件不存在）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`)));
+  });
+
+  it('本人可以覆寫自己的回報', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), ownReport(ALICE));
+    });
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), {
+      ...ownReport(ALICE),
+      status: '安全',
+      description: null,
+    }));
+  });
+});
