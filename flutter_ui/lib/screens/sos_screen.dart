@@ -36,6 +36,9 @@ class _SOSScreenState extends State<SOSScreen> {
   /// 定位晚到時 [_position] 會有值，但已經送出的 SOS 裡其實沒有座標。
   bool _sentWithoutLocation = false;
 
+  /// 已送出 SOS 的文件 ID，定位晚到時用來補寫座標。
+  String? _sosDocId;
+
   @override
   void initState() {
     super.initState();
@@ -74,6 +77,7 @@ class _SOSScreenState extends State<SOSScreen> {
         ),
       );
       if (mounted) setState(() => _position = pos);
+      _attachLateLocation(pos);
     } catch (_) {
     } finally {
       if (mounted) setState(() => _isLoadingLocation = false);
@@ -97,8 +101,7 @@ class _SOSScreenState extends State<SOSScreen> {
       // 拿不到定位就送 null。座標是救援端唯一能用來找人的欄位，寧可明確地
       // 「沒有位置」，也不要送一個看起來合理、實際上錯得離譜的 0, 0。
       final position = _position;
-      _sentWithoutLocation = position == null;
-      final send = _sosService.sendSOS(
+      final submission = _sosService.sendSOS(
         userId: user.id,
         userName: user.name,
         phone: user.phone,
@@ -107,6 +110,10 @@ class _SOSScreenState extends State<SOSScreen> {
         bloodType: user.bloodType,
         medicalInfo: user.medicalInfo,
       );
+      // 文件 ID 一拿到就記下來：等待伺服器確認的這段時間裡定位也可能回來。
+      _sosDocId = submission.id;
+      _sentWithoutLocation = position == null;
+      final send = submission.write;
 
       // Firestore 的寫入要等伺服器確認才完成，離線時永遠不會完成（資料已進
       // 本機佇列，恢復連線會自動送出）。求救的人不能對著一顆轉不停的按鈕等，
@@ -116,10 +123,7 @@ class _SOSScreenState extends State<SOSScreen> {
         await send.timeout(const Duration(seconds: 8));
       } on TimeoutException {
         queuedOffline = true;
-        unawaited(send.catchError((Object e) {
-          debugPrint('queued SOS failed: $e');
-          return '';
-        }));
+        unawaited(_followQueuedSend(send));
       }
 
       if (!mounted) return;
@@ -134,12 +138,54 @@ class _SOSScreenState extends State<SOSScreen> {
       } else if (_sentWithoutLocation) {
         _showMessage('求救已送出，但沒有附上位置。請盡量用其他方式告知所在地。', const Color(0xFFBF7A5A));
       }
+
+      // 等待確認的期間定位已經回來的話，現在補寫。
+      final arrived = _position;
+      if (arrived != null) _attachLateLocation(arrived);
     } catch (e) {
       debugPrint('sendSOS failed: $e');
+      _sosDocId = null;
       if (mounted) _showMessage('發送失敗，請再試一次。', _sosRed);
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
+  }
+
+  /// 離線排隊的 SOS 之後送到或失敗，畫面都要跟著更新。
+  ///
+  /// 送到了：橫幅不能一直停在「已暫存」。失敗了（例如權限被擋）：只記 log 的話，
+  /// 求救的人會一直以為恢復連線就會送出，所以要說出來並讓按鈕可以再按。
+  Future<void> _followQueuedSend(Future<void> send) async {
+    try {
+      await send;
+      if (mounted) setState(() => _queuedOffline = false);
+    } catch (e) {
+      debugPrint('queued SOS failed: $e');
+      _sosDocId = null;
+      if (!mounted) return;
+      setState(() {
+        _sosSent = false;
+        _queuedOffline = false;
+        _sentAt = null;
+      });
+      _showMessage('暫存的求救沒有送出，請再按一次 SOS。', _sosRed);
+    }
+  }
+
+  /// 送出時還沒有位置、之後定位才回來：把座標補寫進同一筆 SOS。
+  ///
+  /// 補寫確認之後橫幅才拿掉「沒有附上位置」；失敗就維持原樣，不假裝已補上。
+  void _attachLateLocation(Position pos) {
+    final id = _sosDocId;
+    if (id == null || !_sentWithoutLocation) return;
+    _sosDocId = null; // 只補一次
+    _sosService
+        .attachLocation(id, lat: pos.latitude, lng: pos.longitude)
+        .then((_) {
+      if (mounted) setState(() => _sentWithoutLocation = false);
+    }, onError: (Object e) {
+      debugPrint('attach late SOS location failed: $e');
+    });
   }
 
   void _showMessage(String message, Color color) {
