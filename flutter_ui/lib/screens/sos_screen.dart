@@ -32,6 +32,10 @@ class _SOSScreenState extends State<SOSScreen> {
   bool _isLoadingLocation = true;
   DateTime? _sentAt;
 
+  /// 送出的那一刻有沒有位置。橫幅要看這個，不能看即時的 [_position]：
+  /// 定位晚到時 [_position] 會有值，但已經送出的 SOS 裡其實沒有座標。
+  bool _sentWithoutLocation = false;
+
   @override
   void initState() {
     super.initState();
@@ -92,12 +96,14 @@ class _SOSScreenState extends State<SOSScreen> {
     try {
       // 拿不到定位就送 null。座標是救援端唯一能用來找人的欄位，寧可明確地
       // 「沒有位置」，也不要送一個看起來合理、實際上錯得離譜的 0, 0。
+      final position = _position;
+      _sentWithoutLocation = position == null;
       final send = _sosService.sendSOS(
         userId: user.id,
         userName: user.name,
         phone: user.phone,
-        lat: _position?.latitude,
-        lng: _position?.longitude,
+        lat: position?.latitude,
+        lng: position?.longitude,
         bloodType: user.bloodType,
         medicalInfo: user.medicalInfo,
       );
@@ -125,7 +131,7 @@ class _SOSScreenState extends State<SOSScreen> {
 
       if (queuedOffline) {
         _showMessage('目前離線，求救已暫存，恢復連線後會自動送出。', const Color(0xFFBF7A5A));
-      } else if (_position == null) {
+      } else if (_sentWithoutLocation) {
         _showMessage('求救已送出，但沒有附上位置。請盡量用其他方式告知所在地。', const Color(0xFFBF7A5A));
       }
     } catch (e) {
@@ -153,7 +159,7 @@ class _SOSScreenState extends State<SOSScreen> {
   /// 綠色會讓人以為救援端已經完整收到，包含位置。
   Color get _statusColor {
     if (!_sosSent) return _sosRed;
-    if (_queuedOffline || _position == null) return const Color(0xFFBF7A5A);
+    if (_queuedOffline || _sentWithoutLocation) return const Color(0xFFBF7A5A);
     return const Color(0xFF7AA67A);
   }
 
@@ -162,7 +168,7 @@ class _SOSScreenState extends State<SOSScreen> {
   String get _statusMessage {
     if (!_sosSent) return '點擊下方按鈕發出求救訊號';
     if (_queuedOffline) return '目前離線，求救已暫存，恢復連線後會自動送出。';
-    if (_position == null) return 'SOS 已發送，但沒有附上位置，請設法告知所在地。';
+    if (_sentWithoutLocation) return 'SOS 已發送，但沒有附上位置，請設法告知所在地。';
     return 'SOS 已發送，請保持冷靜等待救援。';
   }
 
@@ -210,7 +216,7 @@ class _SOSScreenState extends State<SOSScreen> {
                     Icon(
                       !_sosSent
                           ? Icons.info_outline_rounded
-                          : (_queuedOffline || _position == null
+                          : (_queuedOffline || _sentWithoutLocation
                               ? Icons.warning_amber_rounded
                               : Icons.check_circle_rounded),
                       color: _statusColor,
