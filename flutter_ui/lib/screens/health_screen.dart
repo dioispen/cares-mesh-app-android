@@ -422,7 +422,10 @@ class _HealthScreenState extends State<HealthScreen>
     Color successColor,
   ) async {
     if (task.isBle) {
-      setState(() => _taskStatusOverrides[task.id] = next);
+      setState(() {
+        _taskStatusOverrides[task.id] = next;
+        _taskFilter = next;
+      });
       _showTaskSnackBar(successMessage, successColor);
       return;
     }
@@ -442,7 +445,9 @@ class _HealthScreenState extends State<HealthScreen>
         'taskStatus': next.name,
         'helperId': next == TaskStatus.waiting ? null : _currentUserId,
       });
-      // 不必 setState：snapshots() 監聽會帶回新狀態並重繪。
+      // 任務會從原本的分頁移走，畫面要跟著切過去，不然剛接的任務看起來像不見了，
+      // 會讓人以為接受失敗或被別人接走。清單本身由 snapshots() 監聽帶回新狀態重繪。
+      if (mounted) setState(() => _taskFilter = next);
       _showTaskSnackBar(successMessage, successColor);
     } catch (e) {
       debugPrint('updateTaskStatus failed: $e');
