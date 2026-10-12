@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -93,11 +94,11 @@ class _LoginScreenState extends State<LoginScreen> {
           msg = '找不到此帳號，請確認電子郵件是否正確。';
           break;
         case 'wrong-password':
-          msg = '密碼不正確，請重新輸入。';
+          msg = '密碼不正確，請重新輸入；忘記密碼可以點「忘記密碼？」重設。';
           break;
         case 'invalid-credential':
         case 'invalid-email':
-          msg = '帳號或密碼不正確，請重新確認。';
+          msg = '帳號或密碼不正確，請重新確認；忘記密碼可以點「忘記密碼？」重設。';
           break;
         case 'user-disabled':
           msg = '此帳號已被停用，請聯絡管理員。';
@@ -114,6 +115,15 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showForgotPassword() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ForgotPasswordSheet(initialEmail: _emailCtrl.text.trim()),
+    );
   }
 
   @override
@@ -206,7 +216,21 @@ class _LoginScreenState extends State<LoginScreen> {
                         return null;
                       },
                     ),
-                    const SizedBox(height: 14),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _isLoading ? null : _showForgotPassword,
+                        style: TextButton.styleFrom(
+                          foregroundColor: _brownLight,
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                        ),
+                        child: const Text(
+                          '忘記密碼？',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
 
                     // 錯誤訊息
                     if (_errorMessage != null) ...[
@@ -345,6 +369,228 @@ class _TopHeader extends StatelessWidget {
               style: TextStyle(fontSize: 13, color: Color(0xFF8C7B6E)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── 忘記密碼：寄重設密碼信 ────────────────────────────────
+/// 用 Firebase Auth 的 sendPasswordResetEmail 寄出重設連結；使用者點信中的連結，
+/// 在 Firebase 的頁面設定新密碼，再回來用新密碼登入。App 端不經手新密碼。
+class _ForgotPasswordSheet extends StatefulWidget {
+  final String initialEmail;
+  const _ForgotPasswordSheet({required this.initialEmail});
+
+  @override
+  State<_ForgotPasswordSheet> createState() => _ForgotPasswordSheetState();
+}
+
+class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
+  static const _brown = Color(0xFF5C3D2E);
+  static const _green = Color(0xFF7AA67A);
+  static const _textPrimary = Color(0xFF3D2C1E);
+  static const _textSecondary = Color(0xFF8C7B6E);
+
+  /// 兩次寄送之間至少隔這麼久，避免連點把信箱塞爆、也避免觸發 Firebase 的頻率限制。
+  static const _resendCooldown = 60;
+
+  final _formKey = GlobalKey<FormState>();
+  late final _emailCtrl = TextEditingController(text: widget.initialEmail);
+  bool _sending = false;
+  String? _sentTo;
+  String? _error;
+  int _cooldown = 0;
+  Timer? _cooldownTimer;
+
+  @override
+  void dispose() {
+    _cooldownTimer?.cancel();
+    _emailCtrl.dispose();
+    super.dispose();
+  }
+
+  void _startCooldown() {
+    _cooldownTimer?.cancel();
+    setState(() => _cooldown = _resendCooldown);
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return t.cancel();
+      setState(() => _cooldown--);
+      if (_cooldown <= 0) t.cancel();
+    });
+  }
+
+  Future<void> _send() async {
+    if (!_formKey.currentState!.validate()) return;
+    final email = _emailCtrl.text.trim();
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+    try {
+      // 讓重設信與 Firebase 的重設頁面都用繁體中文。
+      await FirebaseAuth.instance.setLanguageCode('zh-TW');
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (!mounted) return;
+      setState(() => _sentTo = email);
+      _startCooldown();
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = switch (e.code) {
+            'invalid-email' => '電子郵件格式不正確',
+            // 專案若關閉了 email enumeration protection，Firebase 才會回這個；
+            // 開著的話不論帳號存不存在都當作成功，畫面上的說明也照此寫。
+            'user-not-found' => '找不到使用這個信箱的帳號，請確認是否輸入正確',
+            'too-many-requests' => '寄送次數過多，請稍後再試',
+            'network-request-failed' => '網路連線失敗，請確認網路後再試',
+            _ => '寄送失敗（${e.code}），請稍後再試',
+          });
+    } catch (e) {
+      if (mounted) setState(() => _error = '寄送失敗，請稍後再試');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sent = _sentTo != null;
+    return Padding(
+      // 鍵盤彈出時把面板往上推，輸入框才不會被蓋住。
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        decoration: const BoxDecoration(
+          color: Color(0xFFFEFDF9),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                '忘記密碼',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _textPrimary),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                '輸入註冊時使用的電子郵件，我們會寄一封重設密碼的信給你。點信中的連結即可設定新密碼。',
+                style: TextStyle(fontSize: 13, color: _textSecondary, height: 1.5),
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                autofocus: widget.initialEmail.isEmpty,
+                enabled: !_sending,
+                decoration: InputDecoration(
+                  labelText: '電子郵件',
+                  prefixIcon: const Icon(Icons.email_outlined, color: _brown),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: _brown.withValues(alpha: 0.15)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: _brown, width: 2),
+                  ),
+                ),
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return '請輸入電子郵件';
+                  if (!v.contains('@')) return '請輸入正確的電子郵件格式';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 14),
+
+              if (_error != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Text(_error!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
+                ),
+                const SizedBox(height: 14),
+              ],
+
+              if (sent) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _green.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _green.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.mark_email_read_rounded, color: _green, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          // 不說「已寄到你的帳號」：Firebase 為了不洩漏哪些信箱有註冊，
+                          // 對不存在的帳號也會回成功。
+                          '如果 $_sentTo 有註冊過帳號，重設密碼的信已經寄出。\n'
+                          '請到信箱點連結設定新密碼；沒看到的話也找找垃圾郵件匣。',
+                          style: const TextStyle(fontSize: 13, color: Color(0xFF4F7A4F), height: 1.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
+
+              ElevatedButton(
+                onPressed: _sending || _cooldown > 0 ? null : _send,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _brown,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  disabledBackgroundColor: _brown.withValues(alpha: 0.4),
+                  disabledForegroundColor: Colors.white,
+                ),
+                child: _sending
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : Text(
+                        _cooldown > 0
+                            ? '重新寄送（$_cooldown 秒後）'
+                            : (sent ? '重新寄送' : '寄送重設密碼信'),
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+              ),
+              if (sent) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: TextButton.styleFrom(foregroundColor: _brown),
+                  child: const Text('設定好新密碼了，回到登入'),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
