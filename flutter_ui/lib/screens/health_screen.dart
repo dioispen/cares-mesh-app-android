@@ -302,6 +302,12 @@ class _HealthScreenState extends State<HealthScreen>
         .snapshots()
         .listen((doc) async {
       final data = doc.data();
+      // 文件 ID 是 uid 不代表內容是自己寫的：規則補上「ID 必須是自己 uid」之前，
+      // 別人可以搶先建立這份文件。reporterId 對不上就不能當成自己的狀態顯示。
+      if (doc.exists && data?['reporterId'] != uid) {
+        debugPrint('health_reports/$uid has a foreign reporterId, ignoring');
+        return;
+      }
       final status = data?['status'] as String?;
       if (!doc.exists || status == null) {
         // 後端沒有這份文件：可能是舊版 add() 留下隨機 ID 的回報，補查一次。

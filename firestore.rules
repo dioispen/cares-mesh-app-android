@@ -13,8 +13,16 @@ service cloud.firestore {
       function curHelper() { return resource.data.get('helperId', null); }
       function newHelper() { return request.resource.data.get('helperId', null); }
 
+      // NOTE: 與 main 合併、讀取改為「本人與救援者」（issue #33）時，必須保留
+      //       `docId == request.auth.uid` 這條：還沒回報過的人監聽自己的
+      //       health_reports/{uid} 時文件不存在，resource 是 null，只靠
+      //       resource.data.reporterId 判斷會被拒，監聽一出錯就停掉。
       allow read: if request.auth != null;
+      // 一人一筆：文件 ID 必須是自己的 uid。只檢查 reporterId 的話，任何人都能先建立
+      // health_reports/{別人的 uid}，讓對方之後的 set() 變成「改別人的文件」而一直被擋。
+      // 舊版 App 用 add() 產生隨機 ID，會因此無法再新增回報。
       allow create: if request.auth != null
+                    && docId == request.auth.uid
                     && request.resource.data.reporterId == request.auth.uid;
       allow update, delete: if request.auth != null
                              && resource.data.reporterId == request.auth.uid;
