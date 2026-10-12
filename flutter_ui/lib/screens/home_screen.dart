@@ -683,6 +683,10 @@ class _ProfileSheet extends StatelessWidget {
                 await FirebaseAuth.instance.signOut();
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.remove('app_user');
+                // 健康狀態的快取刻意保留：鍵值綁 uid，不可能被別的帳號讀到，
+                // 留著才能在重新登入、而且當下連不上 Firestore 時，立刻看到
+                // 自己回報過的狀態。登出就清掉的話，離線重新登入會變成一片空白。
+                // broadcast_handle 同樣保留：它綁裝置而非帳號（ADR-0003）。
 
                 if (context.mounted) {
                   Navigator.of(context).pushAndRemoveUntil(

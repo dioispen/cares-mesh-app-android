@@ -41,7 +41,9 @@ class HealthReport {
         'description': description,
         'lat': lat,
         'lng': lng,
-        'reportTime': reportTime.toIso8601String(),
+        // 一律存 UTC（結尾帶 Z）。存本地時間的字串沒有時區資訊，不同時區的裝置
+        // 混在同一個 collection 裡就無法比較先後，字典序也不再等於時間序。
+        'reportTime': reportTime.toUtc().toIso8601String(),
       };
 
   factory HealthReport.fromJson(Map<String, dynamic> json) => HealthReport(
@@ -54,7 +56,9 @@ class HealthReport {
         description: json['description'] as String?,
         lat: (json['lat'] as num?)?.toDouble(),
         lng: (json['lng'] as num?)?.toDouble(),
-        reportTime: DateTime.parse(json['reportTime'] as String),
+        // 舊文件是沒有時區的本地時間字串，parse 後當成本地時間；帶 Z 的新文件
+        // 會解析成 UTC，這裡統一轉回本地時間再交給 UI。
+        reportTime: DateTime.parse(json['reportTime'] as String).toLocal(),
       );
 }
 
