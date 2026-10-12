@@ -869,7 +869,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       Text('SOS 緊急求救',
                           style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900)),
                       SizedBox(height: 4),
-                      Text('一鍵傳送 GPS 位置・即刻求援',
+                      Text('長按 3 秒・傳送 GPS 位置求援',
                           style: TextStyle(color: Colors.white70, fontSize: 12)),
                     ],
                   ),
