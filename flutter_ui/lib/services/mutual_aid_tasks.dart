@@ -77,6 +77,7 @@ typedef ReportEntry = ({String id, Map<String, dynamic> data});
 /// 把 Firestore 回報與 BLE 廣播組成互救任務清單。
 ///
 /// 規則：
+/// * 同一位回報者只留最新的一筆（[latestReportPerReporter]）。
 /// * 只留需要協助的傷勢（[mutualAidInjuries]），安全的回報不是任務。
 /// * 排除自己的回報——自己的狀態在「我的狀態」頁，不該出現在待救援清單。
 ///   [currentUserId] 還沒讀到時一律不顯示任何 Firestore 任務，否則會閃出自己那筆。
@@ -93,7 +94,7 @@ List<MutualAidTask> buildMutualAidTasks({
   final tasks = <MutualAidTask>[];
 
   if (currentUserId != null) {
-    for (final report in reports) {
+    for (final report in latestReportPerReporter(reports)) {
       final data = report.data;
       final reporterId = data['reporterId'] as String?;
       if (reporterId == null || reporterId == currentUserId) continue;
@@ -142,6 +143,49 @@ List<MutualAidTask> buildMutualAidTasks({
     return ad.compareTo(bd);
   });
   return tasks;
+}
+
+/// 每位回報者只留最新的一筆，維持原本的先後順序。
+///
+/// 改成一人一筆（文件 ID = uid）之後的過渡期，同一個人可能同時有舊版 add() 留下的
+/// 隨機 ID 文件和新的 `{uid}` 文件。舊文件要等本人再回報一次才會被清掉，所以之後
+/// 不再回報的人、還在用舊版 App 的人，都會在清單上留下重複或過期的任務。
+///
+/// reportTime 要先 parse 再比：舊文件是沒有 `Z` 的本地時間、新文件是 UTC，
+/// 字串直接比大小會錯。時間相同或讀不出來時，優先留文件 ID 等於 uid 的那筆。
+///
+/// 只能在拿到的文件裡挑：查詢若已過濾掉「安全」，本人改回安全之後舊的傷勢文件
+/// 仍會留在清單上，要等舊文件被清掉。
+List<ReportEntry> latestReportPerReporter(List<ReportEntry> reports) {
+  final latest = <String, ReportEntry>{};
+  final order = <String>[];
+  for (final report in reports) {
+    final reporterId = report.data['reporterId'];
+    // 沒有 reporterId 的文件交給呼叫端自己排除，這裡不去重也不吞掉。
+    final key = reporterId is String ? reporterId : '\u0000${report.id}';
+    final current = latest[key];
+    if (current == null) {
+      order.add(key);
+      latest[key] = report;
+    } else if (_isNewer(report, current, reporterId)) {
+      latest[key] = report;
+    }
+  }
+  return [for (final key in order) latest[key]!];
+}
+
+bool _isNewer(ReportEntry candidate, ReportEntry current, Object? reporterId) {
+  final ct = _reportTime(candidate);
+  final cur = _reportTime(current);
+  if (ct != null && cur != null && ct != cur) return ct.isAfter(cur);
+  if (ct != null && cur == null) return true;
+  if (ct == null && cur != null) return false;
+  return candidate.id == reporterId && current.id != reporterId;
+}
+
+DateTime? _reportTime(ReportEntry report) {
+  final raw = report.data['reportTime'];
+  return raw is String ? DateTime.tryParse(raw) : null;
 }
 
 /// 兩點間距離（公里）。任一端缺座標就回 null。

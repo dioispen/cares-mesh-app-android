@@ -16,6 +16,7 @@ ReportEntry _report({
   double? lng,
   String? taskStatus,
   String? helperId,
+  String? reportTime,
 }) =>
     (
       id: id,
@@ -28,6 +29,7 @@ ReportEntry _report({
         'lng': lng,
         'taskStatus': ?taskStatus,
         'helperId': ?helperId,
+        'reportTime': ?reportTime,
       },
     );
 
@@ -220,6 +222,88 @@ void main() {
       );
 
       expect(ble.status, TaskStatus.waiting);
+    });
+
+    test('交接期間同一個人有舊（隨機 ID）與新（uid）兩份文件時，只出現最新那筆', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(
+            id: 'legacy-random-id',
+            reporterId: 'alice',
+            status: '重傷',
+            reportTime: '2026-10-01T09:00:00.000',
+          ),
+          _report(
+            id: 'alice',
+            status: '輕傷',
+            reportTime: '2026-10-03T01:00:00.000Z',
+          ),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(tasks.map((t) => (t.id, t.injury)), [('alice', '輕傷')]);
+    });
+  });
+
+  group('latestReportPerReporter', () {
+    test('比的是時間點，不是字串：沒有 Z 的本地時間與 UTC 混在一起也排得對', () {
+      // 新文件晚一小時寫入。在台灣（UTC+8），新文件的 UTC 字串是 "…T05:00…Z"，
+      // 舊文件的本地字串是 "…T12:00…"，直接比字串會誤把舊的當成最新。
+      final legacyLocal = DateTime(2026, 10, 3, 12);
+      final newerUtc = legacyLocal.toUtc().add(const Duration(hours: 1));
+      final reports = [
+        _report(
+          id: 'legacy',
+          reporterId: 'alice',
+          reportTime: legacyLocal.toIso8601String(),
+        ),
+        _report(
+          id: 'alice',
+          reportTime: newerUtc.toIso8601String(),
+        ),
+      ];
+
+      expect(latestReportPerReporter(reports).map((r) => r.id), ['alice']);
+    });
+
+    test('時間相同或讀不出來時，留文件 ID 等於 uid 的那筆', () {
+      final reports = [
+        _report(id: 'legacy', reporterId: 'alice'),
+        _report(id: 'alice'),
+      ];
+
+      expect(latestReportPerReporter(reports).map((r) => r.id), ['alice']);
+    });
+
+    test('讀得到時間的那筆優先於讀不到的', () {
+      final reports = [
+        _report(
+          id: 'legacy',
+          reporterId: 'alice',
+          reportTime: '2026-10-01T09:00:00.000Z',
+        ),
+        _report(id: 'alice', reportTime: 'not-a-date'),
+      ];
+
+      expect(latestReportPerReporter(reports).map((r) => r.id), ['legacy']);
+    });
+
+    test('不同回報者各留一筆，維持原本順序；沒有 reporterId 的不合併', () {
+      final reports = [
+        _report(id: 'b'),
+        _report(id: 'a'),
+        (id: 'x', data: <String, dynamic>{'status': '輕傷'}),
+        (id: 'y', data: <String, dynamic>{'status': '輕傷'}),
+      ];
+
+      expect(
+        latestReportPerReporter(reports).map((r) => r.id),
+        ['b', 'a', 'x', 'y'],
+      );
     });
   });
 

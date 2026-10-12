@@ -480,9 +480,14 @@ class _HealthScreenState extends State<HealthScreen>
       debugPrint('health_reports stream failed: $e');
       if (!mounted) return;
       // 讀取失敗要說出來。沿用「附近目前無求助任務」會讓人以為現場沒人需要幫忙。
+      // 離線時監聽不會報錯，而是給本機快取，所以會跑到這裡的多半是權限問題；
+      // 一律叫人檢查網路會讓人找錯方向。
+      final denied = e is FirebaseException && e.code == 'permission-denied';
       setState(() {
         _tasksLoaded = true;
-        _tasksError = '任務清單載入失敗，請檢查網路後重新進入此頁';
+        _tasksError = denied
+            ? '你的帳號目前沒有權限查看互救任務清單'
+            : '任務清單載入失敗，請稍後重新進入此頁';
       });
     });
   }
@@ -550,7 +555,9 @@ class _HealthScreenState extends State<HealthScreen>
         // 不知道這筆狀態屬於哪個帳號時，既不快取也不送出；畫面也要還原，
         // 否則會顯示一個其實沒有回報成功的狀態。
         _revertStatus(previousStatus, previousSubInjury);
-        _showTaskSnackBar('尚未登入，無法回報健康狀態', _red);
+        // 有可能其實已經登入（uid 可以從 FirebaseAuth 拿到），只是手機裡沒有
+        // app_user，所以不說「尚未登入」。說法與 SOS 頁一致。
+        _showTaskSnackBar('找不到你的個人資料，無法回報健康狀態。請重新登入後再試。', _red);
         return;
       }
       final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
@@ -595,13 +602,19 @@ class _HealthScreenState extends State<HealthScreen>
       // 舊做法每回報一次就多一筆，同一個人會在後端留下一串過期狀態（回報安全之後，
       // 之前那筆「輕傷」還在互救任務清單上）。
       //
-      // 這裡刻意用不帶 merge 的 set()：taskStatus／helperId 不在 toJson() 裡，會一併被
-      // 清掉，等於傷勢一改就回到「等待中／無人認領」。傷勢內容已經不一樣了，沿用舊的
-      // 認領紀錄會讓協助者看到對不上的任務。
+      // 傷勢一改就回到「等待中／無人認領」：內容已經不一樣了，沿用舊的認領紀錄會讓
+      // 協助者看到對不上的任務。但重送一模一樣的狀態（例如不小心再點一次）不算改，
+      // 這時清掉認領，已經在路上的協助者會無聲無息地丟掉任務，還可能被別人接走。
+      // toJson() 每個欄位都會寫（含 null），所以 merge 只會保留 taskStatus／helperId。
+      final contentChanged =
+          status != previousStatus || subInjury != previousSubInjury;
       final write = FirebaseFirestore.instance
           .collection('health_reports')
           .doc(user.id)
-          .set(report.toJson());
+          .set({
+        ...report.toJson(),
+        if (contentChanged) ...{'taskStatus': 'waiting', 'helperId': null},
+      }, SetOptions(merge: true));
 
       // set() 的 Future 要等伺服器確認才完成，離線時會一直不完成（資料已進本機佇列，
       // 恢復連線會自動送出）。所以不無限等待——災難時離線是常態，使用者需要立刻得到
