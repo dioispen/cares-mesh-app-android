@@ -27,10 +27,25 @@ service cloud.firestore {
     // NOTE: 這條路徑是對「全體救援者」整批開放，比 CONTEXT.md 對 Detail Tier 的
     //       「逐一請求、經 secure session 釋出」寬鬆；兩條揭露路徑並存是既有設計。
     match /health_reports/{docId} {
+      // 任務狀態欄位缺席時一律視為「等待中／無人認領」，讓規則能相容
+      // 既有那批沒有 taskStatus 的舊文件。
+      function curStatus() { return resource.data.get('taskStatus', 'waiting'); }
+      function newStatus() { return request.resource.data.get('taskStatus', 'waiting'); }
+      function curHelper() { return resource.data.get('helperId', null); }
+      function newHelper() { return request.resource.data.get('helperId', null); }
+
+      // docId == uid 這條不能省：還沒回報過的人監聽自己的 health_reports/{uid} 時
+      // 文件不存在，resource 是 null，只靠 resource.data.reporterId 判斷會被拒，
+      // 監聽一出錯就停掉。
       allow read: if isRescuer()
                   || (request.auth != null
-                      && resource.data.reporterId == request.auth.uid);
+                      && (docId == request.auth.uid
+                          || resource.data.reporterId == request.auth.uid));
+      // 一人一筆：文件 ID 必須是自己的 uid。只檢查 reporterId 的話，任何人都能先建立
+      // health_reports/{別人的 uid}，讓對方之後的 set() 變成「改別人的文件」而一直被擋。
+      // 舊版 App 用 add() 產生隨機 ID，會因此無法再新增回報。
       allow create: if request.auth != null
+                    && docId == request.auth.uid
                     && request.resource.data.reporterId == request.auth.uid;
       // 救援者身分只放寬讀取，不能竄改或刪除他人的回報。
       // update 不得改動 reporterId：轉手給他人等於把讀取權交給對方。
@@ -39,6 +54,34 @@ service cloud.firestore {
                     && request.resource.data.reporterId == resource.data.reporterId;
       allow delete: if request.auth != null
                     && resource.data.reporterId == request.auth.uid;
+
+      // 互助任務狀態：協助者不是回報者，卻必須能改動「別人的文件」才能認領任務。
+      //
+      // 這裡不能放寬成整份文件可寫——姓名、電話、血型、傷勢、座標都在同一份文件裡。
+      // 因此比照 supply_items 的 pledgedQty 做欄位層級限制：只開放 taskStatus 與
+      // helperId 兩個欄位，其餘一律不可竄改。
+      //
+      // 狀態機同時擋掉三種搗亂：搶走別人已認領的任務、冒名把 helperId 填成第三人、
+      // 把任務從「已完成」翻回去。
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['taskStatus', 'helperId'])
+                    && (
+                         // 認領：等待中 → 已接受，且只能把自己填為協助者
+                         (curStatus() == 'waiting'
+                          && newStatus() == 'accepted'
+                          && newHelper() == request.auth.uid)
+                         // 完成：已接受 → 已完成，限當初認領的本人
+                         || (curStatus() == 'accepted'
+                             && newStatus() == 'done'
+                             && curHelper() == request.auth.uid
+                             && newHelper() == request.auth.uid)
+                         // 放棄：已接受 → 等待中，限本人，並且要把 helperId 清掉
+                         || (curStatus() == 'accepted'
+                             && newStatus() == 'waiting'
+                             && curHelper() == request.auth.uid
+                             && newHelper() == null)
+                       );
     }
 
     // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS

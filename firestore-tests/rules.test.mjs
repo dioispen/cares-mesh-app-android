@@ -39,6 +39,7 @@ import {
 
 const ALICE = 'uid-alice';
 const BOB = 'uid-bob';
+const CAROL = 'uid-carol';
 const RESCUER = 'uid-rescuer';
 
 let testEnv;
@@ -362,8 +363,8 @@ describe('health_reports（issue #33：Detail Tier 只給 Reporter 本人與救�
     )));
   });
 
-  it('可以建立自己的回報', async () => {
-    await assertSucceeds(setDoc(doc(dbFor(BOB), 'health_reports/report-bob'), newReport(BOB)));
+  it('可以建立自己的回報（文件 ID 是自己的 uid）', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(BOB), `health_reports/${BOB}`), newReport(BOB)));
   });
 
   it('不可冒用他人 reporterId 建立回報', async () => {
@@ -441,5 +442,179 @@ describe('users（issue #33：個人檔案含 PII，只能讀自己的）', () =
 
   it('未登入不可讀', async () => {
     await assertFails(getDoc(doc(anonDb(), `users/${ALICE}`)));
+  });
+});
+
+// health_reports 的任務狀態欄位（taskStatus / helperId）。
+//
+// 這裡的關鍵是：協助者**不是**回報者，卻必須能改動別人的文件才能認領任務——
+// 跟 supply_items 認領流程同一類問題。而 health_reports 文件裡有姓名、電話、
+// 血型、精確座標，所以放寬的範圍必須嚴格限制在那兩個欄位上。
+describe('health_reports 互助任務狀態', () => {
+  const seedReport = {
+    id: 'report-uuid',
+    reporterId: ALICE,
+    name: 'Alice',
+    phone: '0912345678',
+    bloodType: 'O',
+    status: '重傷',
+    description: '頭部受傷',
+    lat: 25.033,
+    lng: 121.5654,
+    reportTime: '2026-09-24T10:00:00.000Z',
+  };
+
+  const seed = async (extra = {}) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'health_reports/report-alice'), {
+        ...seedReport,
+        ...extra,
+      });
+    });
+  };
+
+  it('未登入不能改任務狀態', async () => {
+    await seed();
+    await assertFails(updateDoc(doc(anonDb(), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+    }));
+  });
+
+  it('協助者可以認領別人的回報（含還沒有 taskStatus 欄位的舊文件）', async () => {
+    await seed();
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+    }));
+  });
+
+  it('不能冒名把 helperId 填成第三人', async () => {
+    await seed();
+    await assertFails(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: CAROL,
+    }));
+  });
+
+  it('認領時不得順手竄改傷勢或聯絡資訊', async () => {
+    await seed();
+    const db = dbFor(BOB);
+    await assertFails(updateDoc(doc(db, 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+      status: '安全',
+    }));
+    await assertFails(updateDoc(doc(db, 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+      phone: '0900000000',
+    }));
+  });
+
+  it('已被接走的任務不能被別人搶走', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertFails(updateDoc(doc(dbFor(CAROL), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: CAROL,
+    }));
+  });
+
+  it('只有當初認領的人能標記完成', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertFails(updateDoc(doc(dbFor(CAROL), 'health_reports/report-alice'), {
+      taskStatus: 'done',
+      helperId: CAROL,
+    }));
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'done',
+      helperId: BOB,
+    }));
+  });
+
+  it('認領者可以放棄任務，任務回到等待中', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'waiting',
+      helperId: null,
+    }));
+  });
+
+  it('放棄之後，另一位夥伴可以接手（helperId 明確為 null 的狀態）', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'waiting',
+      helperId: null,
+    }));
+    await assertSucceeds(updateDoc(doc(dbFor(CAROL), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: CAROL,
+    }));
+  });
+
+  it('已完成的任務不能被翻回等待中', async () => {
+    await seed({ taskStatus: 'done', helperId: BOB });
+    await assertFails(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'waiting',
+      helperId: null,
+    }));
+  });
+
+  it('回報者本人仍然可以完整更新與刪除自己的回報', async () => {
+    await seed();
+    const db = dbFor(ALICE);
+    await assertSucceeds(updateDoc(doc(db, 'health_reports/report-alice'), {
+      status: '輕傷',
+      description: '已包紮',
+    }));
+    await assertSucceeds(deleteDoc(doc(db, 'health_reports/report-alice')));
+  });
+
+  it('協助者不能刪除別人的回報', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertFails(deleteDoc(doc(dbFor(BOB), 'health_reports/report-alice')));
+  });
+});
+
+// 一人一筆：health_reports 的文件 ID 就是回報者的 uid（health_screen.dart 的 _select）。
+describe('health_reports 一人一筆', () => {
+  const ownReport = (uid) => ({
+    id: 'report-uuid',
+    reporterId: uid,
+    name: 'Alice',
+    phone: '0912345678',
+    bloodType: 'O',
+    status: '輕傷',
+    description: '割傷',
+    lat: null,
+    lng: null,
+    reportTime: '2026-10-04T10:00:00.000Z',
+  });
+
+  it('可以在自己的 uid 底下建立回報', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), ownReport(ALICE)));
+  });
+
+  it('★ 不能先搶走別人的文件 ID（即使 reporterId 填自己）', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `health_reports/${ALICE}`), ownReport(BOB)));
+  });
+
+  it('不能用隨機 ID 建立回報（舊版 add() 的寫法）', async () => {
+    await assertFails(setDoc(doc(dbFor(ALICE), 'health_reports/random-id'), ownReport(ALICE)));
+  });
+
+  it('還沒回報過的人可以監聽自己 uid 的文件（文件不存在）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`)));
+  });
+
+  it('本人可以覆寫自己的回報', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), ownReport(ALICE));
+    });
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), {
+      ...ownReport(ALICE),
+      status: '安全',
+      description: null,
+    }));
   });
 });
