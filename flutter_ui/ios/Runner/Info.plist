@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- 定位權限說明。iOS 規定沒有這兩個鍵就不會跳出授權對話框，
+	     CLLocationManager 一律回 notDetermined／denied，於是健康回報與 SOS
+	     都拿不到座標（Android 端的權限宣告在 AndroidManifest.xml）。 -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>災害發生時，App 需要你的位置才能把求助標在地圖上，讓附近的人找得到你，也用來計算最近的避難所。</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>災害發生時，App 需要你的位置才能把求助標在地圖上，讓附近的人找得到你，也用來計算最近的避難所。</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
