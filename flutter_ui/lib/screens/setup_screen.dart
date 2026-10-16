@@ -54,12 +54,15 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 回到前景只重新檢查，不自動要求權限：被永久拒絕的權限系統會直接回拒絕，但仍會讓 App 暫停又回到
+    // 前景，自動要求就會一直重來，畫面不停閃爍。
     if (state == AppLifecycleState.resumed && _hasError) {
-      _startSetup();
+      _startSetup(requestMissingPermissions: false);
     }
   }
 
-  Future<void> _startSetup() async {
+  /// [requestMissingPermissions]：缺權限時是否直接跳出系統詢問（初次進入與使用者按按鈕時）。
+  Future<void> _startSetup({bool requestMissingPermissions = true}) async {
     if (_isChecking) return;
 
     setState(() {
@@ -90,9 +93,9 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
         _hasError = true;
         _needsPermissions = true;
         _isChecking = false;
-        _statusText = '藍牙與位置權限未開啟。\n請授權後點擊「授權權限」繼續。';
+        _statusText = '藍牙與位置權限未開啟。\n請點擊「授權權限」；沒有跳出詢問時，請到系統設定開啟。';
       });
-      await _requestPermissions();
+      if (requestMissingPermissions) await _requestPermissions();
       return;
     }
 
@@ -149,6 +152,17 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     } on PlatformException catch (e) {
       if (!mounted) return;
       setState(() => _statusText = _nativeFailureText('無法跳出權限請求', e));
+    }
+  }
+
+  /// 開啟系統設定裡本 App 的頁面，讓使用者打開已被永久拒絕的權限；回來時 [didChangeAppLifecycleState]
+  /// 會重新檢查。開不了時把原因顯示出來。
+  Future<void> _openAppSettings() async {
+    try {
+      await BitchatBridge.openAppSettings();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() => _statusText = _nativeFailureText('無法開啟系統設定', e));
     }
   }
 
@@ -369,6 +383,16 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
                   padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
                 ),
               ),
+              // 永久拒絕的權限系統不會再詢問，「授權權限」不會有反應，只能到系統設定開啟。
+              if (_needsPermissions && !_isChecking) ...[
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: _openAppSettings,
+                  icon: const Icon(Icons.settings_rounded),
+                  label: const Text('前往系統設定'),
+                  style: TextButton.styleFrom(foregroundColor: brown),
+                ),
+              ],
             ],
           ),
         ),

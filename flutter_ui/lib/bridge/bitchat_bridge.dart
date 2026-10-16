@@ -157,6 +157,13 @@ class BitchatBridge {
         return result ?? false;
       });
 
+  /// 開啟系統設定裡本 App 的資訊頁：使用者永久拒絕的權限系統不會再詢問，只能在那裡打開。
+  /// 回傳是否已開啟；沒有原生實作時回傳 false。原生開不了時（例如 `NO_ACTIVITY`）以 [PlatformException] 往上拋。
+  static Future<bool> openAppSettings() => _degradeWithoutNative('openAppSettings', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('openAppSettings');
+        return result ?? false;
+      });
+
   /// 檢查原生端是否已有身分資料（已註冊）。沒有原生實作時回傳 false（iOS 的 setup 流程依賴它）；
   /// 原生讀不到身分資料時（例如 `IDENTITY_UNAVAILABLE`）以 [PlatformException] 往上拋，不當成「尚未註冊」。
   static Future<bool> isRegistered() => _degradeWithoutNative('isRegistered', false, () async {

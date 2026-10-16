@@ -102,4 +102,75 @@ void main() {
 
     expect(find.textContaining('no activity now'), findsOneWidget);
   });
+
+  testWidgets('coming back to the app re-checks permissions without asking again', (tester) async {
+    // A permission denied for good: the system answers at once without a prompt, and the app
+    // pauses and resumes. Asking again on every resume looped forever and made the screen flicker.
+    var checks = 0;
+    var requests = 0;
+    native({
+      'checkPermissions': () {
+        checks++;
+        return false;
+      },
+      'requestPermissions': () {
+        requests++;
+        return true;
+      },
+    });
+    await pumpSetup(tester);
+    expect(requests, 1);
+
+    for (var i = 0; i < 3; i++) {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump();
+    }
+
+    expect(checks, 4);
+    expect(requests, 1);
+    expect(find.text('授權權限'), findsOneWidget);
+  });
+
+  testWidgets('前往系統設定 opens the app settings for permissions the system no longer asks for', (tester) async {
+    var opened = 0;
+    native({
+      'checkPermissions': () => false,
+      'requestPermissions': () => true,
+      'openAppSettings': () {
+        opened++;
+        return true;
+      },
+    });
+    await pumpSetup(tester);
+
+    await tester.tap(find.text('前往系統設定'));
+    await tester.pump();
+
+    expect(opened, 1);
+  });
+
+  testWidgets('前往系統設定 reports why the settings could not be opened', (tester) async {
+    native({
+      'checkPermissions': () => false,
+      'requestPermissions': () => true,
+      'openAppSettings': () => throw PlatformException(code: 'NO_ACTIVITY', message: 'no activity for settings'),
+    });
+    await pumpSetup(tester);
+
+    await tester.tap(find.text('前往系統設定'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('no activity for settings'), findsOneWidget);
+  });
+
+  testWidgets('with every permission granted there is no 前往系統設定', (tester) async {
+    native({'checkPermissions': () => true});
+
+    await pumpSetup(tester);
+
+    expect(find.text('前往系統設定'), findsNothing);
+  });
 }

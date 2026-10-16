@@ -140,11 +140,11 @@ class BitchatFlutterChannels(
             }
 
             "checkPermissions" -> {
-                val requiredGranted = permissionManager.areRequiredPermissionsGranted()
-                val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
-                } else true
-                result.success(requiredGranted && notificationGranted)
+                // Only Bluetooth and location gate the setup screen. POST_NOTIFICATIONS is optional
+                // (PermissionManager.getRequiredPermissions, MeshForegroundService): once the user
+                // turns it off in the system settings the system never prompts for it again, so
+                // gating on it kept the setup screen re-requesting forever.
+                result.success(permissionManager.areRequiredPermissionsGranted())
             }
 
             "requestPermissions" -> {
@@ -161,6 +161,22 @@ class BitchatFlutterChannels(
                     permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
                 activity.requestPermissions(permissions.toTypedArray(), 1001)
+                result.success(true)
+            }
+
+            "openAppSettings" -> {
+                // A permission the user denied for good is never prompted again; only the app's
+                // page in the system settings can switch it on.
+                if (activity == null) {
+                    result.error("NO_ACTIVITY", "Cannot open the app settings without an activity", null)
+                    return true
+                }
+                activity.startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.fromParts("package", context.packageName, null)
+                    )
+                )
                 result.success(true)
             }
 
