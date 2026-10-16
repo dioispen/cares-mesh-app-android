@@ -15,6 +15,9 @@ class MascotAssistant extends StatefulWidget {
 }
 
 class _MascotAssistantState extends State<MascotAssistant> {
+  /// 對話泡泡底部離畫面底部的距離（在小助理頭上）。
+  static const _bubbleBottom = 184.0;
+
   _MascotState _state = _MascotState.idle;
   MascotOption? _selected;
 
@@ -67,6 +70,11 @@ class _MascotAssistantState extends State<MascotAssistant> {
       valueListenable: mascotOptionsNotifier,
       builder: (context, options, _) {
         // Hide entirely on screens with no defined options (login, register, etc.)
+        // 鍵盤彈出時不顯示：小助理會被鍵盤蓋住，對話泡泡則會擋在輸入框上（#79）。
+        // 狀態保留，鍵盤收起後照原樣出現。
+        final media = MediaQuery.of(context);
+        if (media.viewInsets.bottom > 0) return const SizedBox.shrink();
+
         if (options.isEmpty) {
           if (_state != _MascotState.idle) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -83,8 +91,10 @@ class _MascotAssistantState extends State<MascotAssistant> {
               Positioned(
                 key: const ValueKey('speech_bubble'),
                 right: 62,
-                bottom: 184,
+                bottom: _bubbleBottom,
                 child: _SpeechBubble(
+                  // 泡泡從小助理上方長到狀態列下方為止，內容再多就在泡泡裡捲動（#79）。
+                  maxHeight: media.size.height - _bubbleBottom - media.padding.top - 8,
                   state: _state,
                   selected: _selected,
                   options: options,
@@ -141,6 +151,7 @@ class _MascotAssistantState extends State<MascotAssistant> {
 // ─── Speech bubble ────────────────────────────────────────────────────────────
 
 class _SpeechBubble extends StatelessWidget {
+  final double maxHeight;
   final _MascotState state;
   final MascotOption? selected;
   final List<MascotOption> options;
@@ -149,6 +160,7 @@ class _SpeechBubble extends StatelessWidget {
   final VoidCallback onClose;
 
   const _SpeechBubble({
+    required this.maxHeight,
     required this.state,
     required this.selected,
     required this.options,
@@ -166,6 +178,7 @@ class _SpeechBubble extends StatelessWidget {
         children: [
           Container(
             width: 248,
+            constraints: BoxConstraints(maxHeight: maxHeight.clamp(0.0, double.infinity)),
             padding: const EdgeInsets.fromLTRB(16, 14, 14, 16),
             decoration: BoxDecoration(
               color: Colors.white,
@@ -178,17 +191,19 @@ class _SpeechBubble extends StatelessWidget {
                 ),
               ],
             ),
-            child: state == _MascotState.greeting
-                ? _Greeting(
-                    options: options,
-                    onOptionTap: onOptionTap,
-                    onClose: onClose,
-                  )
-                : _Talking(
-                    option: selected,
-                    onBack: onBack,
-                    onClose: onClose,
-                  ),
+            child: SingleChildScrollView(
+              child: state == _MascotState.greeting
+                  ? _Greeting(
+                      options: options,
+                      onOptionTap: onOptionTap,
+                      onClose: onClose,
+                    )
+                  : _Talking(
+                      option: selected,
+                      onBack: onBack,
+                      onClose: onClose,
+                    ),
+            ),
           ),
           // Tail pointing toward mascot (bottom-right)
           Positioned(

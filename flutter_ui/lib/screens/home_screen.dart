@@ -631,170 +631,176 @@ class _ProfileSheetState extends State<_ProfileSheet> {
     final user = widget.user;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
       decoration: const BoxDecoration(
         color: Color(0xFFFEFDF9),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 拖曳條
-          Container(
-            width: 36, height: 4,
-            decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
-          ),
-          const SizedBox(height: 24),
-
-          // 頭像 + 姓名 + ID
-          GestureDetector(
-            onTap: _pickAvatar,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                UserAvatarCircle(avatarId: _avatar, photo: _photo, name: user.name, size: 76),
-                Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Container(
-                    padding: const EdgeInsets.all(5),
-                    decoration: BoxDecoration(
-                      color: brown,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                    child: const Icon(Icons.edit_rounded, size: 13, color: Colors.white),
-                  ),
-                ),
-              ],
+      // 小螢幕、大字體時資料放不下，改成可以捲動（#79）。
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 拖曳條
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
             ),
-          ),
-          const SizedBox(height: 12),
-          Text(user.name,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: textPrimary)),
-          const SizedBox(height: 6),
+            const SizedBox(height: 24),
 
-          // User ID 顯示 + 複製
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: user.id));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('User ID 已複製'),
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  margin: const EdgeInsets.all(16),
-                  backgroundColor: brown,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: brown.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
+            // 頭像 + 姓名 + ID
+            GestureDetector(
+              onTap: _pickAvatar,
+              child: Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  const Icon(Icons.fingerprint_rounded, size: 15, color: brown),
-                  const SizedBox(width: 6),
-                  Text(user.id,
-                      style: const TextStyle(fontSize: 12, color: brown, fontWeight: FontWeight.w700,
-                          fontFamily: 'monospace')),
-                  const SizedBox(width: 6),
-                  const Icon(Icons.copy_rounded, size: 13, color: brown),
+                  UserAvatarCircle(avatarId: _avatar, photo: _photo, name: user.name, size: 76),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(5),
+                      decoration: BoxDecoration(
+                        color: brown,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: const Icon(Icons.edit_rounded, size: 13, color: Colors.white),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ),
+            const SizedBox(height: 12),
+            Text(user.name,
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: textPrimary)),
+            const SizedBox(height: 6),
 
-          const SizedBox(height: 24),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-
-          // 基本資料
-          _ProfileRow(Icons.phone_outlined, '手機號碼', user.phone),
-          _ProfileRow(Icons.location_on_outlined, '居住區域', user.area),
-          _ProfileRow(Icons.people_outline_rounded,
-              '緊急聯絡人', '${user.emergencyContactName}（${user.emergencyContactRelation}）・${user.emergencyContactPhone}'),
-          if (user.bloodType != null)
-            _ProfileRow(Icons.favorite_outline_rounded, '血型', user.bloodType!),
-          if (user.medicalInfo != null && user.medicalInfo!.isNotEmpty)
-            _ProfileRow(Icons.medical_information_outlined, '醫療資訊', user.medicalInfo!),
-
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: green.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline_rounded, size: 15, color: green),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '此 ID 為你在防災系統中的唯一識別碼，管理端透過此 ID 識別你的身份',
-                    style: const TextStyle(fontSize: 12, color: green),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 登出按鈕
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('登出'),
-                    content: const Text('確定要登出嗎？'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('取消'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('登出', style: TextStyle(color: Colors.red)),
-                      ),
-                    ],
+            // User ID 顯示 + 複製
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: user.id));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Text('User ID 已複製'),
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    margin: const EdgeInsets.all(16),
+                    backgroundColor: brown,
+                    duration: const Duration(seconds: 2),
                   ),
                 );
-                if (confirm != true) return;
-
-                await FirebaseAuth.instance.signOut();
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.remove('app_user');
-                // 健康狀態的快取刻意保留：鍵值綁 uid，不可能被別的帳號讀到，
-                // 留著才能在重新登入、而且當下連不上 Firestore 時，立刻看到
-                // 自己回報過的狀態。登出就清掉的話，離線重新登入會變成一片空白。
-                // broadcast_handle 同樣保留：它綁裝置而非帳號（ADR-0003）。
-
-                if (context.mounted) {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                    (_) => false,
-                  );
-                }
               },
-              icon: const Icon(Icons.logout_rounded, color: Colors.red),
-              label: const Text('登出', style: TextStyle(color: Colors.red, fontSize: 15)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.red),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: brown.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.fingerprint_rounded, size: 15, color: brown),
+                    const SizedBox(width: 6),
+                    // ID 要完整看得到（管理端靠它認人），太長時換行而不是超出畫面（#79）。
+                    Flexible(
+                      child: Text(user.id,
+                          style: const TextStyle(fontSize: 12, color: brown, fontWeight: FontWeight.w700,
+                              fontFamily: 'monospace')),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.copy_rounded, size: 13, color: brown),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+
+            const SizedBox(height: 24),
+            const Divider(height: 1),
+            const SizedBox(height: 16),
+
+            // 基本資料
+            _ProfileRow(Icons.phone_outlined, '手機號碼', user.phone),
+            _ProfileRow(Icons.location_on_outlined, '居住區域', user.area),
+            _ProfileRow(Icons.people_outline_rounded,
+                '緊急聯絡人', '${user.emergencyContactName}（${user.emergencyContactRelation}）・${user.emergencyContactPhone}'),
+            if (user.bloodType != null)
+              _ProfileRow(Icons.favorite_outline_rounded, '血型', user.bloodType!),
+            if (user.medicalInfo != null && user.medicalInfo!.isNotEmpty)
+              _ProfileRow(Icons.medical_information_outlined, '醫療資訊', user.medicalInfo!),
+
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: green.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, size: 15, color: green),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '此 ID 為你在防災系統中的唯一識別碼，管理端透過此 ID 識別你的身份',
+                      style: const TextStyle(fontSize: 12, color: green),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // 登出按鈕
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('登出'),
+                      content: const Text('確定要登出嗎？'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('取消'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('登出', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirm != true) return;
+
+                  await FirebaseAuth.instance.signOut();
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.remove('app_user');
+                  // 健康狀態的快取刻意保留：鍵值綁 uid，不可能被別的帳號讀到，
+                  // 留著才能在重新登入、而且當下連不上 Firestore 時，立刻看到
+                  // 自己回報過的狀態。登出就清掉的話，離線重新登入會變成一片空白。
+                  // broadcast_handle 同樣保留：它綁裝置而非帳號（ADR-0003）。
+
+                  if (context.mounted) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const LoginScreen()),
+                      (_) => false,
+                    );
+                  }
+                },
+                icon: const Icon(Icons.logout_rounded, color: Colors.red),
+                label: const Text('登出', style: TextStyle(color: Colors.red, fontSize: 15)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.red),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

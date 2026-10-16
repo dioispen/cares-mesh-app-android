@@ -223,12 +223,12 @@ class _SupplyScreenState extends State<SupplyScreen>
             itemBuilder: (_, i) {
               if (i < items.length) {
                 final item = items[i];
-                return _RequestCard(
+                return SupplyRequestCard(
                   item: item,
                   onRequest: (qty) => _submitRequest(item, qty),
                 );
               }
-              return _CustomRequestCard(onSubmit: _submitCustomRequest);
+              return SupplyCustomRequestCard(onSubmit: _submitCustomRequest);
             },
           ),
         ),
@@ -261,7 +261,7 @@ class _SupplyScreenState extends State<SupplyScreen>
                   separatorBuilder: (_, _) => const SizedBox(height: 10),
                   itemBuilder: (_, i) {
                     final item = _filteredItems[i];
-                    return _DonateCard(
+                    return SupplyDonateCard(
                       item: item,
                       onPledge: (qty) => _submitPledge(item, qty),
                     );
@@ -318,15 +318,17 @@ class _SupplyScreenState extends State<SupplyScreen>
 }
 
 // ── 自填需求 卡片 ────────────────────────────────────────────────
-class _CustomRequestCard extends StatefulWidget {
+/// 自填需求卡片。公開只為了讓排版測試（#79）能單獨建立它；物資頁本身要連 Firestore。
+@visibleForTesting
+class SupplyCustomRequestCard extends StatefulWidget {
   final Future<void> Function(String itemName, String unit, int qty) onSubmit;
-  const _CustomRequestCard({required this.onSubmit});
+  const SupplyCustomRequestCard({super.key, required this.onSubmit});
 
   @override
-  State<_CustomRequestCard> createState() => _CustomRequestCardState();
+  State<SupplyCustomRequestCard> createState() => _CustomRequestCardState();
 }
 
-class _CustomRequestCardState extends State<_CustomRequestCard> {
+class _CustomRequestCardState extends State<SupplyCustomRequestCard> {
   static const _card = Color(0xFFFEFDF9);
   static const _brown = Color(0xFF5C3D2E);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -510,17 +512,19 @@ class _CustomRequestCardState extends State<_CustomRequestCard> {
 }
 
 // ── 申請物資 卡片 ────────────────────────────────────────────────
-class _RequestCard extends StatefulWidget {
+/// 申請物資卡片。公開只為了讓排版測試（#79）能單獨建立它；物資頁本身要連 Firestore。
+@visibleForTesting
+class SupplyRequestCard extends StatefulWidget {
   final SupplyItem item;
   final Future<void> Function(int qty) onRequest;
 
-  const _RequestCard({required this.item, required this.onRequest});
+  const SupplyRequestCard({super.key, required this.item, required this.onRequest});
 
   @override
-  State<_RequestCard> createState() => _RequestCardState();
+  State<SupplyRequestCard> createState() => _RequestCardState();
 }
 
-class _RequestCardState extends State<_RequestCard> {
+class _RequestCardState extends State<SupplyRequestCard> {
   static const _card = Color(0xFFFEFDF9);
   static const _brown = Color(0xFF5C3D2E);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -694,17 +698,19 @@ class _RequestCardState extends State<_RequestCard> {
 }
 
 // ── 捐贈物資 卡片 ────────────────────────────────────────────────
-class _DonateCard extends StatefulWidget {
+/// 捐贈物資卡片。公開只為了讓排版測試（#79）能單獨建立它；物資頁本身要連 Firestore。
+@visibleForTesting
+class SupplyDonateCard extends StatefulWidget {
   final SupplyItem item;
   final Future<void> Function(int qty) onPledge;
 
-  const _DonateCard({required this.item, required this.onPledge});
+  const SupplyDonateCard({super.key, required this.item, required this.onPledge});
 
   @override
-  State<_DonateCard> createState() => _DonateCardState();
+  State<SupplyDonateCard> createState() => _DonateCardState();
 }
 
-class _DonateCardState extends State<_DonateCard> {
+class _DonateCardState extends State<SupplyDonateCard> {
   static const _card = Color(0xFFFEFDF9);
   static const _brown = Color(0xFF5C3D2E);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -747,18 +753,27 @@ class _DonateCardState extends State<_DonateCard> {
     }
   }
 
-  Widget _stat(String label, String value, Color color) => Column(
-        children: [
-          Text(value,
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: color)),
-          const SizedBox(height: 2),
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 10, color: _textSecondary)),
-        ],
+  /// 四欄平分寬度；數量或單位太長（大字體、窄螢幕）時縮小字級，不超出卡片（#79）。
+  Widget _stat(String label, String value, Color color) => Expanded(
+        child: Column(
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(value,
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: color)),
+            ),
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(label,
+                  style: const TextStyle(
+                      fontSize: 10, color: _textSecondary)),
+            ),
+          ],
+        ),
       );
 
   @override

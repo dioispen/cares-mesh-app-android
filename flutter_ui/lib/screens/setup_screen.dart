@@ -12,6 +12,7 @@ import '../models/chat_peer.dart';
 import '../models/user.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../services/chat_service.dart';
+import '../widgets/fill_or_scroll.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 import 'verify_email_screen.dart';
@@ -310,9 +311,10 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       backgroundColor: bg,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32.0),
+      // 小螢幕、大字體時內容放不下，改成可以捲動；放得下時照舊置中（#79）。
+      body: FillOrScroll(
+        padding: const EdgeInsets.all(32.0),
+        child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
