@@ -1,10 +1,12 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/mascot_service.dart';
 
 const _kShelterUrl = 'https://kiang.github.io/air_raid_shelter/';
+const _kNpaUrl = 'https://adr.npa.gov.tw/';
 
 class ShelterScreen extends StatefulWidget {
   const ShelterScreen({super.key});
@@ -40,6 +42,9 @@ class _ShelterScreenState extends State<ShelterScreen> with RouteAware {
   @override
   void didPopNext() => mascotOptionsNotifier.value = shelterOptions;
 
+  static void _openExternal(String url) =>
+      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -64,10 +69,7 @@ class _ShelterScreenState extends State<ShelterScreen> with RouteAware {
           IconButton(
             icon: const Icon(Icons.open_in_browser_rounded, color: _textPrimary),
             tooltip: '在瀏覽器中開啟',
-            onPressed: () => launchUrl(
-              Uri.parse(_kShelterUrl),
-              mode: LaunchMode.externalApplication,
-            ),
+            onPressed: () => _openExternal(_kShelterUrl),
           ),
         ],
       ),
@@ -88,46 +90,7 @@ class _ShelterScreenState extends State<ShelterScreen> with RouteAware {
           ),
 
           // 來源標示
-          Container(
-            width: double.infinity,
-            color: _brown.withValues(alpha: 0.06),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline_rounded,
-                    size: 12, color: Color(0xFF8C7B6E)),
-                const SizedBox(width: 4),
-                const Text('資料來源：',
-                    style:
-                        TextStyle(fontSize: 10, color: Color(0xFF8C7B6E))),
-                GestureDetector(
-                  onTap: () => launchUrl(Uri.parse(_kShelterUrl),
-                      mode: LaunchMode.externalApplication),
-                  child: const Text(
-                    'kiang.github.io/air_raid_shelter',
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.blue,
-                        decoration: TextDecoration.underline),
-                  ),
-                ),
-                const Text('  ／  ',
-                    style:
-                        TextStyle(fontSize: 10, color: Color(0xFF8C7B6E))),
-                GestureDetector(
-                  onTap: () => launchUrl(Uri.parse('https://adr.npa.gov.tw/'),
-                      mode: LaunchMode.externalApplication),
-                  child: const Text(
-                    '內政部警政署（NPA）',
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.blue,
-                        decoration: TextDecoration.underline),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          ShelterSourceFooter(onOpen: _openExternal),
         ],
       ),
     );
@@ -192,6 +155,71 @@ class _ShelterScreenState extends State<ShelterScreen> with RouteAware {
         return GeolocationPermissionShowPromptResponse(
             origin: origin, allow: true, retain: true);
       },
+    );
+  }
+}
+
+/// 地圖下方的資料來源列：兩個來源都可以點開外部瀏覽器。
+///
+/// 整列是一段可換行的文字（#79）：360dp 寬的手機或放大字體時，第二個來源換到下一行，
+/// 不會超出畫面右側。
+class ShelterSourceFooter extends StatefulWidget {
+  const ShelterSourceFooter({super.key, required this.onOpen});
+
+  /// 點了來源連結，帶入它的網址。
+  final ValueChanged<String> onOpen;
+
+  @override
+  State<ShelterSourceFooter> createState() => _ShelterSourceFooterState();
+}
+
+class _ShelterSourceFooterState extends State<ShelterSourceFooter> {
+  static const _brown = Color(0xFF5C3D2E);
+  static const _muted = TextStyle(fontSize: 10, color: Color(0xFF8C7B6E));
+  static const _link = TextStyle(
+      fontSize: 10, color: Colors.blue, decoration: TextDecoration.underline);
+
+  late final TapGestureRecognizer _shelterTap = TapGestureRecognizer()
+    ..onTap = () => widget.onOpen(_kShelterUrl);
+  late final TapGestureRecognizer _npaTap = TapGestureRecognizer()
+    ..onTap = () => widget.onOpen(_kNpaUrl);
+
+  @override
+  void dispose() {
+    _shelterTap.dispose();
+    _npaTap.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: _brown.withValues(alpha: 0.06),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Text.rich(
+        TextSpan(
+          style: _muted,
+          children: [
+            const WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Icon(Icons.info_outline_rounded,
+                    size: 12, color: Color(0xFF8C7B6E)),
+              ),
+            ),
+            const TextSpan(text: '資料來源：'),
+            TextSpan(
+                text: 'kiang.github.io/air_raid_shelter',
+                style: _link,
+                recognizer: _shelterTap),
+            const TextSpan(text: '  ／  '),
+            TextSpan(
+                text: '內政部警政署（NPA）', style: _link, recognizer: _npaTap),
+          ],
+        ),
+      ),
     );
   }
 }
