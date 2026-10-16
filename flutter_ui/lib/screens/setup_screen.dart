@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'dart:io' show Platform;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -76,7 +77,13 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     }
 
     // 1. 檢查權限
-    bool hasPermissions = await BitchatBridge.checkPermissions();
+    final bool hasPermissions;
+    try {
+      hasPermissions = await BitchatBridge.checkPermissions();
+    } on PlatformException catch (e) {
+      _showSetupFailure(_nativeFailureText('無法檢查權限', e));
+      return;
+    }
     if (!hasPermissions) {
       setState(() {
         _hasError = true;
@@ -84,19 +91,22 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
         _isChecking = false;
         _statusText = '藍牙與位置權限未開啟。\n請授權後點擊「授權權限」繼續。';
       });
-      await BitchatBridge.requestPermissions();
+      await _requestPermissions();
       return;
     }
 
     // 2. 啟動 Mesh 服務
     setState(() => _statusText = '啟動藍牙掃描與 Mesh 服務...');
-    bool started = await BitchatBridge.startMesh();
+    final bool started;
+    try {
+      started = await BitchatBridge.startMesh();
+    } on PlatformException catch (e) {
+      _showSetupFailure('${_nativeFailureText('啟動 Mesh 失敗', e)}\n請確認藍牙已開啟，且通知權限已允許。');
+      return;
+    }
     if (!started) {
-      setState(() {
-        _hasError = true;
-        _isChecking = false;
-        _statusText = '啟動 Mesh 失敗。\n請確認藍牙已開啟，且通知權限已允許。';
-      });
+      // 只有沒有原生實作時才會是 false（原生啟動失敗會丟 PlatformException）。
+      _showSetupFailure('啟動 Mesh 失敗。\n此裝置沒有原生 Mesh 服務。');
       return;
     }
 
@@ -115,6 +125,32 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     });
   }
 
+  void _showSetupFailure(String text) {
+    if (!mounted) return;
+    setState(() {
+      _hasError = true;
+      _isChecking = false;
+      _statusText = text;
+    });
+  }
+
+  /// 原生回報的錯誤換成給使用者看的文字：Kotlin 給的原因與錯誤碼（#71），沒有原因時只顯示錯誤碼。
+  static String _nativeFailureText(String what, PlatformException e) {
+    final reason = e.message;
+    return '$what。\n原因：${reason == null || reason.isEmpty ? e.code : '$reason（${e.code}）'}';
+  }
+
+  /// 請原生跳出權限請求。原生沒有發出請求時（例如 `NO_ACTIVITY`）把原因顯示出來，
+  /// 不讓使用者以為請求已經跳出（#71）。
+  Future<void> _requestPermissions() async {
+    try {
+      await BitchatBridge.requestPermissions();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() => _statusText = _nativeFailureText('無法跳出權限請求', e));
+    }
+  }
+
   Future<void> _checkRegistration() async {
     if (!mounted) return;
 
@@ -129,7 +165,15 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     bool hasLocalData = false;
 
     try {
-      bool nativeRegistered = await BitchatBridge.isRegistered();
+      bool nativeRegistered;
+      try {
+        nativeRegistered = await BitchatBridge.isRegistered();
+      } on PlatformException catch (e) {
+        // 原生讀不到身分資料（例如 IDENTITY_UNAVAILABLE）不等於尚未註冊：照本機資料與雲端繼續驗證，
+        // 不直接送去登入（#71）。
+        debugPrint('DEBUG: Native registration check failed (${e.code}): ${e.message}');
+        nativeRegistered = true;
+      }
       final firebaseUser = FirebaseAuth.instance.currentUser;
       debugPrint('DEBUG: Native: $nativeRegistered, FirebaseUser: ${firebaseUser?.uid}');
 
@@ -304,7 +348,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
                     ? null
                     : () {
                         if (_needsPermissions) {
-                          BitchatBridge.requestPermissions();
+                          _requestPermissions();
                         } else {
                           _startSetup();
                         }

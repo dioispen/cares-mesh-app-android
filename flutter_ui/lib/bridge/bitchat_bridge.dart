@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 
 /// 聊天 method 名稱，對應 Kotlin `ChatBridge` 的 companion 常數（命名規則 `chat_<動詞><受詞>`）。
@@ -110,15 +111,31 @@ class BitchatBridge {
         .asBroadcastStream();
   }
 
-  /// 獲取當前系統狀態 (藍牙、位置、權限)
-  static Future<Map<String, dynamic>?> getSystemStatus() async {
+  /// 設定流程用的舊方法（[getSystemStatus]、[checkPermissions]、[requestPermissions]、[isRegistered]、
+  /// [startMesh]）共用的錯誤處理（#71）。
+  ///
+  /// 只有 [MissingPluginException] 會降級成 [fallback]：這個平台沒有原生實作（iOS、測試、engine 尚未
+  /// 接上）。iOS 的 setup 流程依賴這個降級，例如 [isRegistered] 回 false 才會往登入走，所以不能拿掉，
+  /// 但會留下 log，分得出是「沒有原生」而不是原生真的這樣回答。
+  ///
+  /// 原生以 `result.error(...)` 回報的 [PlatformException]（例如 `START_FAILED`、`NO_ACTIVITY`）照常
+  /// 往上拋，連同錯誤碼與原因，由呼叫端決定怎麼告訴使用者（與 [setNickname] 等方法一致）。
+  static Future<T> _degradeWithoutNative<T>(String method, T fallback, Future<T> Function() call) async {
     try {
-      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getSystemStatus');
-      return result?.map((k, v) => MapEntry(k.toString(), v));
-    } catch (e) {
-      return null;
+      return await call();
+    } on MissingPluginException {
+      debugPrint('BitchatBridge: $method has no native implementation on this platform; using $fallback');
+      return fallback;
     }
   }
+
+  /// 獲取當前系統狀態 (藍牙、位置、權限)。沒有原生實作時回傳 null；原生錯誤（[PlatformException]）
+  /// 往上拋。
+  static Future<Map<String, dynamic>?> getSystemStatus() =>
+      _degradeWithoutNative<Map<String, dynamic>?>('getSystemStatus', null, () async {
+        final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getSystemStatus');
+        return result?.map((k, v) => MapEntry(k.toString(), v));
+      });
 
   /// 從裝置相簿挑一張照片當大頭貼。回傳已在原生端裁成正方形、縮成小圖的 JPEG；
   /// 使用者取消時為 null。沒有原生實作的平台（例如 iOS 開發用模擬機）會丟
@@ -126,45 +143,33 @@ class BitchatBridge {
   static Future<Uint8List?> pickAvatarPhoto() =>
       _method.invokeMethod<Uint8List>('pickAvatarPhoto');
 
-  /// 檢查權限是否已開啟 (通知、藍牙、位置)
-  static Future<bool> checkPermissions() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('checkPermissions');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 檢查權限是否已開啟 (通知、藍牙、位置)。沒有原生實作時回傳 false；原生錯誤（[PlatformException]）
+  /// 往上拋，不當成「沒有權限」。
+  static Future<bool> checkPermissions() => _degradeWithoutNative('checkPermissions', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('checkPermissions');
+        return result ?? false;
+      });
 
-  /// 請求權限
-  static Future<bool> requestPermissions() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('requestPermissions');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 請原生跳出權限請求。回傳是否已發出請求（不是使用者是否允許）；沒有原生實作時回傳 false。
+  /// 原生沒有發出請求時（例如 `NO_ACTIVITY`）以 [PlatformException] 往上拋。
+  static Future<bool> requestPermissions() => _degradeWithoutNative('requestPermissions', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('requestPermissions');
+        return result ?? false;
+      });
 
-  /// 檢查是否已註冊
-  static Future<bool> isRegistered() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('isRegistered');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 檢查原生端是否已有身分資料（已註冊）。沒有原生實作時回傳 false（iOS 的 setup 流程依賴它）；
+  /// 原生讀不到身分資料時（例如 `IDENTITY_UNAVAILABLE`）以 [PlatformException] 往上拋，不當成「尚未註冊」。
+  static Future<bool> isRegistered() => _degradeWithoutNative('isRegistered', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('isRegistered');
+        return result ?? false;
+      });
 
-  /// 啟動 Mesh 服務
-  static Future<bool> startMesh() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('startMesh');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 啟動 Mesh 服務。回傳 true 表示已啟動；沒有原生實作時回傳 false。原生啟動失敗時（例如
+  /// `START_FAILED`）以 [PlatformException] 往上拋，[PlatformException.message] 是 Kotlin 回報的原因。
+  static Future<bool> startMesh() => _degradeWithoutNative('startMesh', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('startMesh');
+        return result ?? false;
+      });
 
   /// 把使用者輸入的文字交給原生聊天核心（`ChatViewModel.sendMessage`）。
   ///
