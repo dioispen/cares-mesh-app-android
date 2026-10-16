@@ -30,6 +30,13 @@ void main() async{
     debugPrint('Firebase initialization warning: $e');
   }
 
+  try {
+    await loadMascotEnabled();
+  } catch (e) {
+    // 讀不到偏好時維持預設：顯示小助理。
+    debugPrint('Mascot preference unavailable: $e');
+  }
+
   runApp(const BitchatFlutterUiApp());
 }
 

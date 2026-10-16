@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class MascotOption {
   final String icon;
@@ -33,6 +34,27 @@ class MascotOptionsNotifier extends ChangeNotifier
 
 final MascotOptionsNotifier mascotOptionsNotifier =
     MascotOptionsNotifier(const []);
+
+// ─── Show / hide (settings screen, #80) ───────────────────────────────────────
+
+/// SharedPreferences key for whether the mascot is shown; absent means shown.
+const mascotEnabledPrefsKey = 'mascot_enabled';
+
+/// Whether the user wants the mascot at all. [MascotAssistant] hides itself while this is false.
+final ValueNotifier<bool> mascotEnabledNotifier = ValueNotifier<bool>(true);
+
+/// Restores the user's choice; call once at startup.
+Future<void> loadMascotEnabled() async {
+  final prefs = await SharedPreferences.getInstance();
+  mascotEnabledNotifier.value = prefs.getBool(mascotEnabledPrefsKey) ?? true;
+}
+
+/// Takes effect at once and is kept across restarts.
+Future<void> setMascotEnabled(bool enabled) async {
+  mascotEnabledNotifier.value = enabled;
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool(mascotEnabledPrefsKey, enabled);
+}
 
 // ─── Per-screen option sets ───────────────────────────────────────────────────
 

@@ -160,6 +160,8 @@ class BitchatFlutterChannels(
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
+                // 設定頁（#80）靠這筆紀錄分辨「從沒問過」與「已被永久拒絕」。
+                permissionManager.markPermissionsRequested(permissions)
                 activity.requestPermissions(permissions.toTypedArray(), 1001)
                 result.success(true)
             }

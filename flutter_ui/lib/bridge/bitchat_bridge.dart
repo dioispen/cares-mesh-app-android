@@ -43,6 +43,40 @@ abstract final class HealthReportErrors {
   static const sendFailed = 'SEND_FAILED';
 }
 
+/// 設定頁 method 名稱，對應 Kotlin `SettingsBridge` 的 companion 常數（命名規則 `settings_<動詞><受詞>`，#80）。
+abstract final class SettingsMethods {
+  static const getState = 'settings_getState';
+  static const requestPermission = 'settings_requestPermission';
+  static const openAppSettings = 'settings_openAppSettings';
+  static const requestEnableBluetooth = 'settings_requestEnableBluetooth';
+  static const requestIgnoreBatteryOptimization = 'settings_requestIgnoreBatteryOptimization';
+  static const setBackgroundEnabled = 'settings_setBackgroundEnabled';
+  static const setAutoStartEnabled = 'settings_setAutoStartEnabled';
+  static const setNotificationAutoRestore = 'settings_setNotificationAutoRestore';
+  static const panicClear = 'settings_panicClear';
+}
+
+/// 設定頁 method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `SettingsBridge` 的 `ERROR_*`。
+abstract final class SettingsErrors {
+  /// 沒有 Activity 可以開系統的詢問或設定畫面。
+  static const noActivity = 'NO_ACTIVITY';
+
+  /// 這個 Android 版本不會要求這類權限。
+  static const unavailable = 'UNAVAILABLE';
+
+  /// 要先允許「附近的裝置」，系統才肯詢問開啟藍牙。
+  static const permissionRequired = 'PERMISSION_REQUIRED';
+
+  /// 已經有一次緊急清除在進行。
+  static const panicInProgress = 'PANIC_IN_PROGRESS';
+
+  /// 緊急清除跑完了，但無法確認聊天紀錄已刪除；原生讓 mesh 維持停止。
+  static const panicIncomplete = 'PANIC_INCOMPLETE';
+
+  /// 緊急清除途中出錯。
+  static const panicFailed = 'PANIC_FAILED';
+}
+
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
@@ -298,4 +332,48 @@ class BitchatBridge {
   /// [MissingPluginException] 是這個平台沒有原生 mesh（例如 iOS、測試）。
   static Future<void> sendHealthReport(Map<String, dynamic> broadcastTier) =>
       _method.invokeMethod<void>('sendHealthReport', broadcastTier);
+
+  // ── 設定頁（#80）：以下 bridge 錯誤（[PlatformException]、[MissingPluginException]）一律往上拋，
+  // 錯誤碼見 [SettingsErrors]。
+
+  /// 一次取得權限、藍牙、電池最佳化、mesh 背景運作的三個開關與版本號（見 `models/settings_state.dart`）。
+  static Future<Map<String, dynamic>> getSettingsState() async {
+    final Map<dynamic, dynamic>? state = await _method.invokeMethod<Map>(SettingsMethods.getState);
+    if (state == null) {
+      throw PlatformException(code: 'NO_STATE', message: '${SettingsMethods.getState} answered null');
+    }
+    return state.map((k, v) => MapEntry(k.toString(), v));
+  }
+
+  /// 處理某一類權限（`SettingsPermissionCategory.wireName`）：還沒允許時跳出系統的詢問，已允許或
+  /// 系統不再詢問時開啟 App 資訊頁讓使用者自己切換，電池最佳化則請系統排除本 App。回傳原生做了哪一個
+  /// （`prompted`、`openedAppSettings`、`requestedBatteryExemption`）。
+  static Future<String?> requestSettingsPermission(String category) =>
+      _method.invokeMethod<String>(SettingsMethods.requestPermission, <String, dynamic>{'category': category});
+
+  /// 開啟系統設定裡本 App 的資訊頁。
+  static Future<void> openAppSettings() => _method.invokeMethod<void>(SettingsMethods.openAppSettings);
+
+  /// 請系統詢問使用者是否開啟藍牙（App 不能直接開關系統藍牙）。
+  static Future<void> requestEnableBluetooth() => _method.invokeMethod<void>(SettingsMethods.requestEnableBluetooth);
+
+  /// 請系統詢問是否讓本 App 不受電池最佳化限制。
+  static Future<void> requestIgnoreBatteryOptimization() =>
+      _method.invokeMethod<void>(SettingsMethods.requestIgnoreBatteryOptimization);
+
+  /// 背景執行；關閉時原生會停止前景服務。
+  static Future<void> setBackgroundEnabled(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setBackgroundEnabled, <String, dynamic>{'enabled': enabled});
+
+  /// 開機自動啟動。
+  static Future<void> setAutoStartEnabled(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setAutoStartEnabled, <String, dynamic>{'enabled': enabled});
+
+  /// 常駐通知被滑掉時立即恢復；原生會立刻重發一次通知讓設定生效。
+  static Future<void> setNotificationAutoRestore(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setNotificationAutoRestore, <String, dynamic>{'enabled': enabled});
+
+  /// 原生 `ChatViewModel.panicClearAllData()`：清除聊天紀錄、身分金鑰、媒體檔與通知，換一組新身分。
+  /// 原生清除完才回來；沒有清乾淨時以 [SettingsErrors] 的錯誤碼往上拋。
+  static Future<void> panicClear() => _method.invokeMethod<void>(SettingsMethods.panicClear);
 }

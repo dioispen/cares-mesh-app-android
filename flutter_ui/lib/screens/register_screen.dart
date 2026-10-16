@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../models/profile_validation.dart';
 import '../services/auth_service.dart';
 import '../widgets/user_avatar.dart';
 import 'verify_email_screen.dart';
@@ -503,7 +504,7 @@ class _Step1BasicInfo extends StatelessWidget {
               controller: nameCtrl,
               hint: '例：王小明',
               icon: Icons.person_outline_rounded,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入姓名' : null,
+              validator: ProfileValidation.name,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -512,12 +513,8 @@ class _Step1BasicInfo extends StatelessWidget {
               hint: '例：0912-345-678',
               icon: Icons.phone_outlined,
               keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d\-]'))],
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return '請輸入手機號碼';
-                if (v.replaceAll('-', '').length < 9) return '手機號碼格式不正確';
-                return null;
-              },
+              inputFormatters: [FilteringTextInputFormatter.allow(ProfileValidation.phoneCharacters)],
+              validator: ProfileValidation.phone,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -525,7 +522,7 @@ class _Step1BasicInfo extends StatelessWidget {
               controller: areaCtrl,
               hint: '例：南投縣埔里鎮',
               icon: Icons.location_on_outlined,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入居住區域' : null,
+              validator: ProfileValidation.area,
             ),
           ],
         ),
@@ -556,7 +553,7 @@ class _Step2EmergencyContact extends StatelessWidget {
               controller: nameCtrl,
               hint: '例：王大明',
               icon: Icons.person_outline_rounded,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入聯絡人姓名' : null,
+              validator: ProfileValidation.emergencyContactName,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -565,12 +562,8 @@ class _Step2EmergencyContact extends StatelessWidget {
               hint: '例：0923-456-789',
               icon: Icons.phone_outlined,
               keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d\-]'))],
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return '請輸入聯絡人電話';
-                if (v.replaceAll('-', '').length < 9) return '電話號碼格式不正確';
-                return null;
-              },
+              inputFormatters: [FilteringTextInputFormatter.allow(ProfileValidation.phoneCharacters)],
+              validator: ProfileValidation.emergencyContactPhone,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -578,7 +571,7 @@ class _Step2EmergencyContact extends StatelessWidget {
               controller: relationCtrl,
               hint: '例：父親、配偶、朋友',
               icon: Icons.people_outline_rounded,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入與你的關係' : null,
+              validator: ProfileValidation.emergencyContactRelation,
             ),
           ],
         ),
@@ -599,8 +592,6 @@ class _Step3HealthInfo extends StatelessWidget {
     required this.onBloodTypeChanged,
   });
 
-  static const _bloodTypes = ['A 型', 'B 型', 'O 型', 'AB 型', '不清楚'];
-
   @override
   Widget build(BuildContext context) {
     const green = Color(0xFF7AA67A);
@@ -620,7 +611,7 @@ class _Step3HealthInfo extends StatelessWidget {
           const SizedBox(height: 10),
           Wrap(
             spacing: 10,
-            children: _bloodTypes.map((bt) {
+            children: ProfileValidation.bloodTypes.map((bt) {
               final selected = bloodType == bt;
               return GestureDetector(
                 onTap: () => onBloodTypeChanged(selected ? null : bt),
