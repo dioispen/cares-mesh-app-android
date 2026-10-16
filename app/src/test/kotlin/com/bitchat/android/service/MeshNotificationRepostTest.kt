@@ -31,6 +31,12 @@ class MeshNotificationRepostTest {
     }
 
     @Test
+    fun `coming back to the app reposts the notification whether auto-restore is on or off`() {
+        assertTrue(shouldRepostMeshNotification(RepostTrigger.APP_FOREGROUNDED, showing))
+        assertTrue(shouldRepostMeshNotification(RepostTrigger.APP_FOREGROUNDED, showing.copy(autoRestore = false)))
+    }
+
+    @Test
     fun `nothing is reposted unless the service is showing its notification`() {
         val notShowing = listOf(
             showing.copy(inForeground = false),

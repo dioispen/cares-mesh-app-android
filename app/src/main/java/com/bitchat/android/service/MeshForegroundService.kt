@@ -13,7 +13,9 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.bitchat.android.flutter.FlutterChatActivity
 import com.bitchat.android.R
@@ -111,6 +113,17 @@ class MeshForegroundService : Service() {
     private var isShuttingDown: Boolean = false
     private var lastNotifiedPeerCount: Int? = null
 
+    /**
+     * Posts the ongoing notification again whenever the app comes to the front (#84): a notification
+     * the user swiped away on Android 14+ comes back then, with the current peer count. It never
+     * touches [PeerAvailabilityNotifier]. Observed for the service's lifetime.
+     */
+    private val appForegroundObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            repostNotificationIfNeeded(RepostTrigger.APP_FOREGROUNDED)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         notificationManager = NotificationManagerCompat.from(this)
@@ -125,6 +138,9 @@ class MeshForegroundService : Service() {
             }
         )
         createChannel()
+        // Added while the app is already in front, this calls onStart at once; before the service
+        // is promoted that reposts nothing.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(appForegroundObserver)
 
         // Ensure mesh service exists in holder (create if needed)
         val existing = MeshServiceHolder.meshService
@@ -414,6 +430,7 @@ class MeshForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(appForegroundObserver)
         updateJob?.cancel()
         updateJob = null
         // Cancel the service coroutine scope to prevent leaks

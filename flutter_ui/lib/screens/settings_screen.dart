@@ -369,7 +369,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 if (state.backgroundEnabled)
                   _SwitchTile(
                     title: '常駐通知被滑掉時立即恢復',
-                    subtitle: 'Android 14 起可以滑掉常駐通知。開啟後，滑掉的通知會馬上重新出現。',
+                    subtitle: 'Android 14 起可以滑掉常駐通知，平常回到 App 時才會重新出現；開啟後，滑掉就馬上重新出現。',
                     value: state.notificationAutoRestore,
                     onChanged: (v) => _run(() => _settings.setNotificationAutoRestore(v)),
                   ),
