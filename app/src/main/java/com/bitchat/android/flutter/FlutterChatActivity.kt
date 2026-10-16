@@ -1,6 +1,7 @@
 package com.bitchat.android.flutter
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.viewModels
 import androidx.lifecycle.Lifecycle
@@ -12,6 +13,7 @@ import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.ui.ChatViewModel
+import com.bitchat.android.utils.DeviceUtils
 import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -68,6 +70,15 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         meshService = MeshServiceHolder.getOrCreate(applicationContext)
         unifiedMeshService = MeshServiceHolder.getUnifiedOrCreate(applicationContext)
         super.onCreate(savedInstanceState)
+
+        // Phones stay portrait, tablets rotate — what OrientationAwareActivity does, which this
+        // FlutterFragmentActivity can't extend. With configChanges in the manifest a rotation
+        // re-lays out Flutter instead of recreating the Activity (#78).
+        requestedOrientation = if (DeviceUtils.isTablet(this)) {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
 
         // Foreground: the ChatViewModel is the mesh delegate while resumed (mirrors MainActivity's
         // onResume/onPause); paused, the foreground service owns DM notifications.
