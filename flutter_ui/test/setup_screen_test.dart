@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/bridge/bitchat_bridge.dart' show SettingsMethods;
 import 'package:flutter_ui/screens/setup_screen.dart';
 
 /// The setup screen tells the user why the native side could not start (#71), instead of one
@@ -138,9 +139,9 @@ void main() {
     native({
       'checkPermissions': () => false,
       'requestPermissions': () => true,
-      'openAppSettings': () {
+      SettingsMethods.openAppSettings: () {
         opened++;
-        return true;
+        return null;
       },
     });
     await pumpSetup(tester);
@@ -155,7 +156,7 @@ void main() {
     native({
       'checkPermissions': () => false,
       'requestPermissions': () => true,
-      'openAppSettings': () => throw PlatformException(code: 'NO_ACTIVITY', message: 'no activity for settings'),
+      SettingsMethods.openAppSettings: () => throw PlatformException(code: 'NO_ACTIVITY', message: 'no activity for settings'),
     });
     await pumpSetup(tester);
 

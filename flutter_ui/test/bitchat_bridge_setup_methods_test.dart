@@ -29,7 +29,6 @@ void main() {
     ),
     (method: 'checkPermissions', call: BitchatBridge.checkPermissions, success: true, fallback: false, code: 'CHECK_FAILED'),
     (method: 'requestPermissions', call: BitchatBridge.requestPermissions, success: true, fallback: false, code: 'NO_ACTIVITY'),
-    (method: 'openAppSettings', call: BitchatBridge.openAppSettings, success: true, fallback: false, code: 'NO_ACTIVITY'),
     (method: 'isRegistered', call: BitchatBridge.isRegistered, success: true, fallback: false, code: 'IDENTITY_UNAVAILABLE'),
     (method: 'startMesh', call: BitchatBridge.startMesh, success: true, fallback: false, code: 'START_FAILED'),
   ];

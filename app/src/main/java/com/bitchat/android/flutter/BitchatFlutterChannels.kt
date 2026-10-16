@@ -160,23 +160,9 @@ class BitchatFlutterChannels(
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
+                // 設定頁（#80）靠這筆紀錄分辨「從沒問過」與「已被永久拒絕」。
+                permissionManager.markPermissionsRequested(permissions)
                 activity.requestPermissions(permissions.toTypedArray(), 1001)
-                result.success(true)
-            }
-
-            "openAppSettings" -> {
-                // A permission the user denied for good is never prompted again; only the app's
-                // page in the system settings can switch it on.
-                if (activity == null) {
-                    result.error("NO_ACTIVITY", "Cannot open the app settings without an activity", null)
-                    return true
-                }
-                activity.startActivity(
-                    android.content.Intent(
-                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        android.net.Uri.fromParts("package", context.packageName, null)
-                    )
-                )
                 result.success(true)
             }
 

@@ -16,47 +16,52 @@ String _read(String path) {
 }
 
 /// Method names the Kotlin bridge answers. `BitchatFlutterChannels.handle` matches string
-/// literals; `ChatBridge.handle` matches `METHOD_*` constants. Everything else ends in
-/// `notImplemented` (BridgeMethodDispatcher).
+/// literals; `ChatBridge.handle` and `SettingsBridge.handle` match `METHOD_*` constants.
+/// Everything else ends in `notImplemented` (BridgeMethodDispatcher).
 Set<String> _nativeMethods() {
   final channels = _read('$_kotlinBridgeDir/BitchatFlutterChannels.kt');
-  final chat = _read('$_kotlinBridgeDir/ChatBridge.kt');
 
   final literalBranches = RegExp(r'^\s*"(\w+)"\s*->', multiLine: true)
       .allMatches(channels)
       .map((m) => m.group(1)!);
 
-  final constants = {
-    for (final m in RegExp(r'const val (METHOD_\w+) = "(\w+)"').allMatches(chat)) m.group(1)!: m.group(2)!,
-  };
-  final constantBranches = RegExp(r'^\s*(METHOD_\w+)\s*->', multiLine: true)
-      .allMatches(chat)
-      .map((m) => constants[m.group(1)!] ?? fail('ChatBridge branch ${m.group(1)} has no constant'));
+  Iterable<String> constantBranches(String bridge) {
+    final source = _read('$_kotlinBridgeDir/$bridge.kt');
+    final constants = {
+      for (final m in RegExp(r'const val (METHOD_\w+) = "(\w+)"').allMatches(source)) m.group(1)!: m.group(2)!,
+    };
+    return RegExp(r'^\s*(METHOD_\w+)\s*->', multiLine: true)
+        .allMatches(source)
+        .map((m) => constants[m.group(1)!] ?? fail('$bridge branch ${m.group(1)} has no constant'));
+  }
 
-  return {...literalBranches, ...constantBranches};
+  return {...literalBranches, ...constantBranches('ChatBridge'), ...constantBranches('SettingsBridge')};
+}
+
+/// `static const name = 'value'` entries of the Dart class [className] in [source].
+Map<String, String> _dartConstants(String source, String className) {
+  final block = RegExp('abstract final class $className \\{([^}]*)\\}').firstMatch(source)?.group(1) ??
+      fail('$className not found in $_dartBridge');
+  return {for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(block)) m.group(1)!: m.group(2)!};
 }
 
 /// Method names `BitchatBridge` invokes, with `ChatMethods.x` resolved to its value.
 Set<String> _dartInvokedMethods() {
   final source = _read(_dartBridge);
 
-  final chatMethodsBlock =
-      RegExp(r'abstract final class ChatMethods \{([^}]*)\}').firstMatch(source)?.group(1) ??
-          fail('ChatMethods not found in $_dartBridge');
-  final chatMethods = {
-    for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(chatMethodsBlock))
-      m.group(1)!: m.group(2)!,
+  final methodClasses = {
+    for (final className in const ['ChatMethods', 'SettingsMethods']) className: _dartConstants(source, className),
   };
 
   final invoked = <String>{};
   for (final m in RegExp(r'\.invokeMethod(?:<[^>(]*>)?\(\s*([^,)\s]+)').allMatches(source)) {
     final argument = m.group(1)!;
     final literal = RegExp(r"^'([^']+)'$").firstMatch(argument);
-    final constant = RegExp(r'^ChatMethods\.(\w+)$').firstMatch(argument);
+    final constant = RegExp(r'^(ChatMethods|SettingsMethods)\.(\w+)$').firstMatch(argument);
     if (literal != null) {
       invoked.add(literal.group(1)!);
     } else if (constant != null) {
-      invoked.add(chatMethods[constant.group(1)!] ?? fail('unknown ChatMethods.${constant.group(1)}'));
+      invoked.add(methodClasses[constant.group(1)!]![constant.group(2)!] ?? fail('unknown $argument'));
     } else {
       fail('cannot resolve the method name in invokeMethod($argument ...)');
     }
@@ -136,6 +141,45 @@ void main() {
     test('the two sides list the same codes', () {
       expect(kotlinCodes().values, isNotEmpty);
       expect(dartCodes(), kotlinCodes().values.toSet());
+    });
+  });
+
+  group('the settings bridge (#80)', () {
+    Map<String, String> kotlinConstants(String prefix) => {
+          for (final m in RegExp('const val (${prefix}_\\w+) = "(\\w+)"')
+              .allMatches(_read('$_kotlinBridgeDir/SettingsBridge.kt')))
+            m.group(1)!: m.group(2)!,
+        };
+
+    test('Dart calls every settings method the native bridge answers', () {
+      final dartMethods = _dartConstants(_read(_dartBridge), 'SettingsMethods').values.toSet();
+
+      expect(kotlinConstants('METHOD').values, isNotEmpty);
+      expect(dartMethods, kotlinConstants('METHOD').values.toSet());
+      expect(_dartInvokedMethods(), containsAll(dartMethods));
+    });
+
+    test('the two sides list the same error codes', () {
+      final dartCodes = _dartConstants(_read(_dartBridge), 'SettingsErrors').values.toSet();
+
+      expect(kotlinConstants('ERROR').values, isNotEmpty);
+      expect(dartCodes, kotlinConstants('ERROR').values.toSet());
+    });
+
+    test('the two sides name the same permission categories', () {
+      final kotlin = {
+        for (final m in RegExp(r'^\s*[A-Z_]+\("(\w+)"\)[,;]', multiLine: true)
+            .allMatches(_read('$_kotlinBridgeDir/SettingsBridge.kt')))
+          m.group(1)!,
+      };
+      final dart = {
+        for (final m in RegExp(r"^\s*\w+\('(\w+)',", multiLine: true)
+            .allMatches(_read('lib/models/settings_state.dart')))
+          m.group(1)!,
+      };
+
+      expect(kotlin, containsAll(['location', 'batteryOptimization']));
+      expect(dart, kotlin);
     });
   });
 

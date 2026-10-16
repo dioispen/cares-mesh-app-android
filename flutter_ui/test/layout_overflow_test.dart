@@ -246,7 +246,8 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
-      testWidgets('the profile sheet fits on $screen', (tester) async {
+      // 點頭像開的是設定頁（#80），取代原本的個人資料 bottom sheet。
+      testWidgets('the settings page opened from the avatar fits on $screen', (tester) async {
         useScreen(tester, screen);
         await tester.pumpWidget(MaterialApp(navigatorObservers: [mascotRouteObserver], home: const HomeScreen()));
         await tester.pump();
@@ -256,9 +257,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(tester.takeException(), isNull);
-        expect(find.text(_user.id), findsOneWidget, reason: 'the whole User ID is shown');
-        await tester.scrollUntilVisible(find.text('登出'), 50,
-            scrollable: find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)));
+        // 個人資料卡的 User ID 太長時省略，個人資料列裡的那一份要完整換行顯示。
+        expect(find.text(_user.id), findsWidgets, reason: 'the whole User ID is shown');
+        await tester.scrollUntilVisible(find.text('登出'), 50, scrollable: find.byType(Scrollable).first);
+        expect(tester.takeException(), isNull);
         expect(find.text('登出'), findsOneWidget);
       });
     }

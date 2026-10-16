@@ -66,6 +66,14 @@ class _MascotAssistantState extends State<MascotAssistant> {
 
   @override
   Widget build(BuildContext context) {
+    // The user switched the assistant off in settings (#80).
+    return ValueListenableBuilder<bool>(
+      valueListenable: mascotEnabledNotifier,
+      builder: (context, enabled, _) => enabled ? _buildMascot(context) : const SizedBox.shrink(),
+    );
+  }
+
+  Widget _buildMascot(BuildContext context) {
     return ValueListenableBuilder<List<MascotOption>>(
       valueListenable: mascotOptionsNotifier,
       builder: (context, options, _) {
