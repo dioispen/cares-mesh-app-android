@@ -172,7 +172,7 @@
     <string name="cd_open_map">Відкрити карту</string>
     <string name="cd_remove_bookmark">Прибрати закладку</string>
     <string name="cd_teleport">Телепортуватися</string>
-    <string name="notification_action_quit_bitchat">Закрити bitchat</string>
+    <string name="notification_action_quit_bitchat">Закрити cares-mesh-app</string>
     <string name="about_background_title">працювати у фоновому режимі</string>
     <string name="about_background_desc">підтримувати mesh активним, коли додаток закрито (фонова служба)</string>
     <string name="cd_leave_channel">Вийти з каналу</string>

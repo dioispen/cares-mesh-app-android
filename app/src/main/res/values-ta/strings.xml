@@ -179,7 +179,7 @@
   <string name="cd_open_map">வரைபடத்தைத் திற</string>
   <string name="cd_remove_bookmark">புக்மார்க்கை அகற்று</string>
   <string name="cd_teleport">டெலிபோர்ட்</string>
-  <string name="notification_action_quit_bitchat">bitchat ஐ வெளியேறு</string>
+  <string name="notification_action_quit_bitchat">cares-mesh-app ஐ வெளியேறு</string>
   <string name="about_background_title">பின்னணியில் இயக்கு</string>
   <string name="about_background_desc">ஆப் மூடப்பட்டாலும் மெஷை செயலில் வைத்திரு (முன்னணி சேவை)</string>
   <string name="cd_leave_channel">சேனலை விட்டு வெளியேறு</string>

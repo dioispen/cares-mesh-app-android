@@ -187,7 +187,7 @@
   <string name="cd_open_map">打开地图</string>
   <string name="cd_remove_bookmark">移除书签</string>
   <string name="cd_teleport">传送</string>
-  <string name="notification_action_quit_bitchat">退出 bitchat</string>
+  <string name="notification_action_quit_bitchat">退出 cares-mesh-app</string>
   <string name="about_background_title">后台运行</string>
   <string name="about_background_desc">应用关闭时保持 Mesh 处于活动状态（前台服务）</string>
   <string name="cd_leave_channel">离开频道</string>

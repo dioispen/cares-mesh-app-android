@@ -189,7 +189,7 @@
   <string name="cd_open_map">פתח מפה</string>
   <string name="cd_remove_bookmark">הסר סימנייה</string>
   <string name="cd_teleport">טלפורט</string>
-  <string name="notification_action_quit_bitchat">צא מ-bitchat</string>
+  <string name="notification_action_quit_bitchat">צא מ-cares-mesh-app</string>
   <string name="about_background_title">הפעל ברקע</string>
   <string name="about_background_desc">שמור על רשת ה-Mesh פעילה כאשר האפליקציה סגורה (שירות חזית)</string>
   <string name="cd_leave_channel">עזוב ערוץ</string>

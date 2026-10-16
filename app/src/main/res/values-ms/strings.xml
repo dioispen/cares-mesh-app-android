@@ -149,7 +149,7 @@
   <string name="cd_open_map">Buka peta</string>
   <string name="cd_remove_bookmark">Alih keluar penanda buku</string>
   <string name="cd_teleport">Teleport</string>
-  <string name="notification_action_quit_bitchat">Keluar bitchat</string>
+  <string name="notification_action_quit_bitchat">Keluar cares-mesh-app</string>
   <string name="about_background_title">jalankan di latar belakang</string>
   <string name="about_background_desc">kekalkan mesh aktif apabila apl ditutup (perkhidmatan latar depan)</string>
   <string name="cd_leave_channel">Keluar saluran</string>
