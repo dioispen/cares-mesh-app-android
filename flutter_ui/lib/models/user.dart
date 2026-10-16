@@ -47,6 +47,34 @@ class AppUser {
         avatarPhoto: avatarPhoto,
       );
 
+  /// 設定頁編輯個人資料用（#80）：Email、User ID、註冊時間與大頭貼不變。
+  /// [bloodType]、[medicalInfo] 傳 null 表示清空。
+  AppUser withProfile({
+    required String name,
+    required String phone,
+    required String area,
+    required String emergencyContactName,
+    required String emergencyContactPhone,
+    required String emergencyContactRelation,
+    required String? bloodType,
+    required String? medicalInfo,
+  }) =>
+      AppUser(
+        id: id,
+        email: email,
+        name: name,
+        phone: phone,
+        area: area,
+        emergencyContactName: emergencyContactName,
+        emergencyContactPhone: emergencyContactPhone,
+        emergencyContactRelation: emergencyContactRelation,
+        bloodType: bloodType,
+        medicalInfo: medicalInfo,
+        registeredAt: registeredAt,
+        avatar: avatar,
+        avatarPhoto: avatarPhoto,
+      );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'email': email,

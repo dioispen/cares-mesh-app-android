@@ -30,6 +30,13 @@ void main() async{
     debugPrint('Firebase initialization warning: $e');
   }
 
+  try {
+    await loadMascotEnabled();
+  } catch (e) {
+    // Shown, the default, when the preference cannot be read.
+    debugPrint('Mascot preference unavailable: $e');
+  }
+
   runApp(const BitchatFlutterUiApp());
 }
 
