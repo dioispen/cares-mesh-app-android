@@ -92,3 +92,6 @@ firebase-debug.*.log
 firestore-debug.log
 ui-debug.log
 .firebase/
+
+#expriments ble通訊實驗記錄
+docs/experiment/raw
