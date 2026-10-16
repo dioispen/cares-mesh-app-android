@@ -11,7 +11,7 @@
 | 識別碼 | 出現在 | 例子 |
 |---|---|---|
 | 代號 A–J | 手機背面的貼紙、報告、拉 log 時的 `$CODE` | `C` |
-| adb serial | `offset_*.csv` 的 `serial` 欄、指令的 `-s` | `9a5e19d9` |
+| adb serial | `offset_*.csv` 的 `serial` 欄、拉 log 時查代號用的 `$S` | `9a5e19d9` |
 | peerID 前 8 碼 | `exp.csv` 的 `src`、`peer` 欄 | `74483ad0` |
 
 | 代號 | adb serial | 型號 | Android 版本 | 藍牙版本 | 電池健康度 | 電池最佳化設定 | peerID 前 8 碼（僅內部） | E1-A 排名 | 備註 |
@@ -27,17 +27,17 @@
 | I | | | | | | | | | |
 | J | | | | | | | | | |
 
-**各欄怎麼取得**（`S` 是這支手機的 adb serial，指令在 Git Bash 執行）：
+**各欄怎麼取得**（筆電一次只接這一支手機，指令在 Git Bash 執行）：
 
 | 欄位（devices.csv） | 取得方式 |
 |---|---|
 | `code` | 自己分配 A–J，貼在手機背面（例如「C／3」，見 [runbook](field-day-runbook.md#裝置代號與實驗-handle)） |
 | `adb_serial` | `adb devices` 的第一欄 |
-| `model` | `adb -s "$S" shell getprop ro.product.model` |
-| `android_version` | `adb -s "$S" shell getprop ro.build.version.release` |
+| `model` | `adb shell getprop ro.product.model` |
+| `android_version` | `adb shell getprop ro.build.version.release` |
 | `bluetooth_version` | adb 查不到，查該型號的規格頁（例如 GSMArena 的 Bluetooth 欄） |
 | `battery_health` | 手機的「設定 → 電池」，有健康度百分比就抄；看不到填「未知」 |
-| `battery_optimization` | `adb -s "$S" shell dumpsys deviceidle whitelist \| grep bitchat`：有輸出填「不限制」，沒輸出填「最佳化」（預設） |
+| `battery_optimization` | `adb shell dumpsys deviceidle whitelist \| grep bitchat`：有輸出填「不限制」，沒輸出填「最佳化」（預設） |
 | `peer_id_prefix_internal_only` | 長按首頁左上角盾牌 → 實驗工具畫面的「本機 peerId」，抄前 8 碼 |
 | `e1a_rank` | 做完 E1-A 後，依雙向平均 RSSI 排的名次 |
 | `notes` | 手機殼、螢幕裂、容易過熱等 |
@@ -164,7 +164,7 @@ Debug 限定的畫面，可設定的參數：
 
 ### 3.4 時鐘偏移量測
 
-每個 session 開始前與結束後各量一次（同一台筆電）。一次只接一支手機也可以：所有手機都寫進同一個檔案，接一支、量一支、拔掉、換下一支。
+每個 session 開始前與結束後各量一次（同一台筆電）。筆電一次只接一支手機：所有手機都寫進同一個檔案，接一支、量一支、拔掉、換下一支。
 
 指令在實驗資料夾裡執行（見 [runbook](field-day-runbook.md#session-開始每個場地每個半天各一次) 的「Session 開始」），`SESSION` 已經設好。macOS 內建的 date 不支援 `%N`，要改用 coreutils 的 gdate。
 
@@ -181,17 +181,19 @@ mkdir -p "raw/$SESSION"
 **2. 每接上一支手機就跑一次（換下一支時按 ↑ 重跑這段）**
 
 ```bash
-# 確認只列出這一支，而且狀態是 device
+# 確認只列出一支，狀態是 device（列出兩支以上就拔掉多的）
 adb devices
-# 處理已授權的手機：略過 `adb devices` 的標題列，以及狀態不是 device（unauthorized、offline）的手機
-for s in $(adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
-  # 每支量 10 次
-  for i in $(seq 1 10); do
-    t0=$(date +%s%3N)                               # 筆電時間（ms），問手機之前
-    d=$(adb -s "$s" shell date +%s%N | tr -d '\r')  # 手機時間（ns）；去掉 adb shell 輸出結尾的 \r
-    t1=$(date +%s%3N)                               # 筆電時間（ms），手機回答之後
-    echo "$s,$t0,${d:0:13},$t1" >> "$out"           # ns 的前 13 位就是 ms；>> 是附加，不會覆蓋前一支
-  done
+# S：這支手機的 adb serial，寫進偏移檔、在 devices.csv 查代號時用
+S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+# 應該只印出一個序號
+echo "序號 $S"
+
+# 量 10 次
+for i in $(seq 1 10); do
+  t0=$(date +%s%3N)                         # 筆電時間（ms），問手機之前
+  d=$(adb shell date +%s%N | tr -d '\r')    # 手機時間（ns）；去掉 adb shell 輸出結尾的 \r
+  t1=$(date +%s%3N)                         # 筆電時間（ms），手機回答之後
+  echo "$S,$t0,${d:0:13},$t1" >> "$out"     # ns 的前 13 位就是 ms；>> 是附加，不會覆蓋前一支
 done
 # 確認這一支的 serial 有寫進去
 tail -n 3 "$out"
@@ -212,20 +214,26 @@ tail -n 3 "$out"
 Session 開始前：
 
 ```bash
-# S：這支手機的 adb serial（`adb devices` 的第一欄），例如 S=R58N12ABCDE
+# 筆電只接著這一支手機
 
 # 刪掉上一次的實驗 log。exp.csv 在 app 的私有目錄，要透過 run-as 以 app 的身分操作（debug build 才可以）
-adb -s "$S" shell run-as com.bitchat.droid rm -f files/exp.csv
+adb shell run-as com.bitchat.droid rm -f files/exp.csv
 # 把手機的 logcat 緩衝區加大到 16 MB，長時間的 session 前面的 log 才不會被覆蓋
-adb -s "$S" logcat -G 16M
+adb logcat -G 16M
 # 清空 logcat，之後拉出來的只有這個 session 的 log
-adb -s "$S" logcat -c
+adb logcat -c
 ```
 
 Session 結束後（在實驗資料夾裡執行，`SESSION` 是 session 開始時設的那個）：
 
 ```bash
-# S 同上，是這支手機的 adb serial
+# 確認只列出一支，狀態是 device（列出兩支以上就拔掉多的）
+adb devices
+# S：這支手機的 adb serial，寫進偏移檔、在 devices.csv 查代號時用
+S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+# 應該只印出一個序號
+echo "序號 $S"
+
 # CODE：這支手機的代號 A～J，從 devices.csv 用 serial 查出來（第 1 欄 code、第 2 欄 adb_serial）
 CODE=$(awk -F, -v s="$S" '$2==s {print $1}' devices.csv)
 # 查不到就停下來：先把這支的 serial 補進 devices.csv，否則檔名會變成 raw/$SESSION/.exp.csv
@@ -234,9 +242,9 @@ CODE=$(awk -F, -v s="$S" '$2==s {print $1}' devices.csv)
 # 每個 session 一個資料夾
 mkdir -p "raw/$SESSION"
 # 從 app 的私有目錄讀出實驗 log，存成「代號.exp.csv」
-adb -s "$S" shell run-as com.bitchat.droid cat files/exp.csv > "raw/$SESSION/$CODE.exp.csv"
+adb shell run-as com.bitchat.droid cat files/exp.csv > "raw/$SESSION/$CODE.exp.csv"
 # 匯出整份 logcat：-d 印完就結束，-v epoch 以 Unix 時間（秒，含小數到 ms）標示每一行，方便和 exp.csv 對時
-adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
+adb logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 ```
 
 - 檢查 `exp.csv` 第一筆的時間是否早於 session 開始時間，最後一筆是否晚於 session 結束時間。不符合就代表資料不完整，該 run 要重做。

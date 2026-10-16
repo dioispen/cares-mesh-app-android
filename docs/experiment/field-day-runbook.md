@@ -40,21 +40,21 @@
    # 用 Android Studio 內附的 JDK 21 建置（PATH 上的 java 可能是別的版本）；之後在這個 shell 跑的 ./gradlew 都用它
    export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"
    ```
-2. 每支手機**全新安裝**（00 §2.2）。手機可以一次全部接上，也可以一支一支接、每支各跑一次：
+2. 每支手機**全新安裝**（00 §2.2）。筆電一次只接一支：接上 → 跑下面這段 → 做完第 3、4 步 → 拔線，換下一支（按 ↑ 重跑）：
    ```bash
-   # 對每支已授權的手機（略過 `adb devices` 的標題列，以及 unauthorized、offline 的手機）
-   for s in $(adb devices | awk 'NR>1 && $2=="device"{print $1}'); do
-     # 先解除安裝，連同 app 資料、登入狀態與 mesh 身分一起清掉（沒裝過時會印 Failure，可以忽略）
-     adb -s "$s" uninstall com.bitchat.droid
-   done
-   # 建 debug build 並裝到所有接著的手機。要寫 :app:，只裝手機 app，不建也不裝 :wear（手錶版，實驗不用）
+   # 確認只列出一支，狀態是 device（列出兩支以上就拔掉多的）
+   adb devices
+   # 先解除安裝，連同 app 資料、登入狀態與 mesh 身分一起清掉（沒裝過時會印 Failure，可以忽略）
+   adb uninstall com.bitchat.droid
+   # 建 debug build 並裝到這支手機。要寫 :app:，只裝手機 app，不建也不裝 :wear（手錶版，實驗不用）
+   # 第一支要建置比較久，之後幾支沒改程式碼就只是重裝
    ./gradlew :app:installDebug
    ```
-3. 每支手機開 app，給齊權限（藍牙、定位、通知），用**實驗專用帳號**登入到首頁。
+3. 開 app，給齊權限（藍牙、定位、通知），用**實驗專用帳號**登入到首頁。
    - repo 沒有現成的帳號，要自己先註冊一個：資料全部填假的，信箱用組員收得到的（例如 Gmail 的 `名字+exp@gmail.com`），註冊後要點信裡的連結完成驗證才進得了首頁。
    - 所有手機可以共用同一個帳號：mesh 身分是每支手機各自產生的，跟帳號無關；實驗封包用的是實驗 handle，也不會帶出帳號資料。
    - 登入、驗證都要連網，所以要在開飛航模式之前做。登入過一次之後，離線開 app 等約 5 秒就會以本機資料進首頁。重新安裝 app 會清掉登入狀態，要再連網登入一次。
-4. 長按首頁左上角的盾牌圖示，確認進得去「實驗工具」畫面（進不去就是裝到 release 版）。照 [00 §1](00-setup-and-instrumentation.md#1-裝置登錄) 填 devices.csv：adb serial、畫面上的「本機 peerId」、型號、Android 版本等。**每次重裝都要更新 peerID**。
+4. 長按首頁左上角的盾牌圖示，確認進得去「實驗工具」畫面（進不去就是裝到 release 版）。手機還接著時，照 [00 §1](00-setup-and-instrumentation.md#1-裝置登錄) 填 devices.csv：adb serial、畫面上的「本機 peerId」、型號、Android 版本等。**每次重裝都要更新 peerID**。
 5. 建一個 repo 以外的實驗資料夾，把填好的 devices.csv 放進去。之後的時鐘偏移、log、stations.csv 都存在這裡，不會被 commit：
    ```bash
    # 資料夾名稱自訂；~ 是 Windows 的使用者資料夾（C:\Users\<使用者>）
@@ -73,19 +73,15 @@
    SESSION=20261010_campus
    ```
 1. **無線電與螢幕**：先用 Wi-Fi 掃描 app 記下附近 AP 數，再開飛航模式 → 手動打開藍牙、定位；Wi-Fi 關。螢幕逾時設最長、亮度最低。記錄員的手機在開飛航模式前讓時鐘自動對時（[00 §3.7](00-setup-and-instrumentation.md#37-點位記錄與量距)）。
-2. **時鐘偏移**：照 [00 §3.4](00-setup-and-instrumentation.md#34-時鐘偏移量測)，輸出檔設成 `offset_pre.csv`。手機可以一支一支接：接上 → 跑步驟 2 量偏移 → 接著做下面的第 3 步清 log → 拔線，換下一支。
+2. **時鐘偏移**：照 [00 §3.4](00-setup-and-instrumentation.md#34-時鐘偏移量測)，輸出檔設成 `offset_pre.csv`。筆電一次只接一支：接上 → 跑步驟 2 量偏移 → 接著做下面的第 3 步清 log → 拔線，換下一支。
 3. **清 log**（手機還接著 USB 時一起做）：
    ```bash
-   # S：這支手機的 adb serial（`adb devices` 的第一欄），例如 S=R58N12ABCDE
-   # 一次只接一支時，可以直接取 adb devices 唯一那一支：
-   # S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
-
    # 刪掉上一次的實驗 log。exp.csv 在 app 的私有目錄，要透過 run-as 以 app 的身分操作（debug build 才可以）
-   adb -s "$S" shell run-as com.bitchat.droid rm -f files/exp.csv
+   adb shell run-as com.bitchat.droid rm -f files/exp.csv
    # 把手機的 logcat 緩衝區加大到 16 MB，長時間的 session 前面的 log 才不會被覆蓋
-   adb -s "$S" logcat -G 16M
+   adb logcat -G 16M
    # 清空 logcat，之後拉出來的只有這個 session 的 log
-   adb -s "$S" logcat -c
+   adb logcat -c
    ```
    app 開著也可以刪；下一個事件會重建檔案並寫上表頭。
 4. **拔線**，記電量。接著 USB 時是 PERFORMANCE 模式，拔掉才會回到 BALANCED。
@@ -116,8 +112,7 @@
 1. 手機逐一接回筆電，照 [00 §3.4](00-setup-and-instrumentation.md#34-時鐘偏移量測) 再量一次偏移，這次輸出檔設成 `offset_post.csv`（前後兩次的差就是漂移）。每支量完先接著做第 2 步拉 log，再拔線換下一支。
 2. 拉 log（在 `~/cares-exp` 裡執行，`SESSION` 是開始時設的那個）：
    ```bash
-   # S：這支手機的 adb serial；一次只接一支時可以這樣取：
-   # S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+   # S 沿用第 1 步量偏移時取得的序號（同一支手機還接著）
    # CODE：這支手機的代號 A～J，從 devices.csv 用 serial 查出來（第 1 欄 code、第 2 欄 adb_serial）
    CODE=$(awk -F, -v s="$S" '$2==s {print $1}' devices.csv)
    # 查不到就停下來：先把這支的 serial 補進 devices.csv，否則檔名會變成 raw/$SESSION/.exp.csv
@@ -126,9 +121,9 @@
    # 每個 session 一個資料夾
    mkdir -p "raw/$SESSION"
    # 從 app 的私有目錄讀出實驗 log，存成「代號.exp.csv」
-   adb -s "$S" shell run-as com.bitchat.droid cat files/exp.csv > "raw/$SESSION/$CODE.exp.csv"
+   adb shell run-as com.bitchat.droid cat files/exp.csv > "raw/$SESSION/$CODE.exp.csv"
    # 匯出整份 logcat：-d 印完就結束，-v epoch 以 Unix 時間（秒，含小數到 ms）標示每一行，方便和 exp.csv 對時
-   adb -s "$S" logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
+   adb logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
    ```
 3. 檢查每個 `exp.csv` 的第一筆早於 session 開始、最後一筆晚於 session 結束；大約每 60 s 應該有一次 `STAT`（E4 螢幕關閉、手機休眠時會延後）。缺的話該 session 的資料不完整。
 4. 把當天的 stations.csv、runs.csv 也存進 `~/cares-exp/raw/$SESSION/`。

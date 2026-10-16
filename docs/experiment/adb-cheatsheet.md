@@ -38,22 +38,13 @@ adb devices
 
 ## 裝置
 
+實驗的指令都假設**筆電一次只接一支手機**，所以都不用 `-s` 指定裝置。換手機時先拔掉前一支再接下一支。
+
 ```bash
-# 列出接著的手機（第一欄是序號，下面的 -s 用它）
+# 列出接著的手機：應該只有一行，第一欄是序號、第二欄是 device
 adb devices
 
-# 接了好幾支時，每個指令都要用 -s 指定是哪一支
-adb -s 10AD5Q1M4R001H5 shell getprop ro.product.model
-
-# 嫌每次打序號麻煩，先存成變數（runbook 的 $S 就是這個）
-S=10AD5Q1M4R001H5
-adb -s "$S" shell getprop ro.product.model
-```
-
-只接一支手機時可以省略 `-s`。下面的範例都省略，接多支時記得自己補上。
-
-```bash
-# 只接一支時，直接把它的序號存進 S
+# 把這支的序號存進 S（runbook 的 $S 就是這個），寫偏移檔、在 devices.csv 查代號時用
 S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 ```
 
@@ -62,7 +53,7 @@ S=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 在 repo 根目錄執行。完整流程（先解除安裝、再登入）見 runbook 的「前一天」。
 
 ```bash
-# 建 debug build 並裝到所有接著的手機；要寫 :app:，不建也不裝 :wear（手錶版）
+# 建 debug build 並裝到接著的這支手機；要寫 :app:，不建也不裝 :wear（手錶版）
 ./gradlew :app:installDebug
 
 # 解除安裝（連同 app 資料與 mesh 身分一起清掉，peerID 會換新的）
@@ -148,7 +139,7 @@ adb shell dumpsys meminfo com.bitchat.droid
 | `adb: command not found` | PATH 沒設好，或設完沒重開終端機。見上面「把 adb 加進 PATH」 |
 | `adb devices` 顯示 `unauthorized` | 手機上沒按「允許 USB 偵錯」。拔掉重插，看手機畫面 |
 | `adb devices` 什麼都沒列出 | 換一條能傳資料的 USB 線（有些線只能充電）；確認 USB 偵錯有開 |
-| `more than one device/emulator` | 接了好幾支，要加 `-s 序號` |
+| `more than one device/emulator` | 接了不只一支。拔掉其他支，只留要操作的那支 |
 | `run-as: package not debuggable` | 裝到 release 版了。照 runbook「前一天」重新安裝 debug build |
 | `No such file or directory`（exp.csv） | 還沒有任何實驗事件，或剛清掉。開 app 等一下就會重建 |
 | 指令裡的 `/sdcard/...` 路徑變成 `C:/Program Files/Git/sdcard/...` | Git Bash 會自動轉換開頭是 `/` 的路徑。在指令前面加 `MSYS_NO_PATHCONV=1`，例如 `MSYS_NO_PATHCONV=1 adb shell ls /sdcard` |
