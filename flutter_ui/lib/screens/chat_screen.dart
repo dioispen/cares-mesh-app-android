@@ -315,31 +315,37 @@ class _ChatScreenState extends State<ChatScreen> with RouteAware {
         ),
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: ValueListenableBuilder<List<ChatMessage>>(
-                valueListenable: _chat.publicMessages,
-                builder: (context, messages, _) {
-                  if (messages.isEmpty) {
-                    return const Center(
-                      child: Text(
-                        '附近還沒有訊息',
-                        style: TextStyle(fontSize: 13, color: _textSecondary),
-                      ),
+        child: LayoutBuilder(
+          builder: (context, constraints) => Column(
+            children: [
+              Expanded(
+                child: ValueListenableBuilder<List<ChatMessage>>(
+                  valueListenable: _chat.publicMessages,
+                  builder: (context, messages, _) {
+                    if (messages.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          '附近還沒有訊息',
+                          style: TextStyle(fontSize: 13, color: _textSecondary),
+                        ),
+                      );
+                    }
+                    return ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      itemCount: messages.length,
+                      itemBuilder: (context, index) => ChatMessageTile(message: messages[index]),
                     );
-                  }
-                  return ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) => ChatMessageTile(message: messages[index]),
-                  );
-                },
+                  },
+                ),
               ),
-            ),
-            ChatComposer(chat: _chat),
-          ],
+              // 補完清單最多讓輸入區佔到六成高度，鍵盤彈出時訊息列表仍看得到（#79）。
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.6),
+                child: ChatComposer(chat: _chat),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -408,6 +414,8 @@ class _MeshNicknameDialogState extends State<_MeshNicknameDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      // 鍵盤彈出時對話框可用的高度很小，內容改成可以捲動（#79）。
+      scrollable: true,
       title: const Text('mesh 暱稱', style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700)),
       content: Column(
         mainAxisSize: MainAxisSize.min,

@@ -193,53 +193,58 @@ class _ChatComposerState extends State<ChatComposer> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (widget.withSuggestions) _suggestionsPanel(),
-        Container(
-          color: ChatPalette.card,
-          padding: const EdgeInsets.fromLTRB(14, 10, 100, 10),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _controller,
-                  enabled: widget.enabled,
-                  style: const TextStyle(fontSize: 14, color: ChatPalette.textPrimary),
-                  decoration: InputDecoration(
-                    hintText: widget.hintText,
-                    hintStyle: const TextStyle(color: ChatPalette.textSecondary, fontSize: 14),
-                    filled: true,
-                    fillColor: ChatPalette.bg,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
+    // 上層限制了高度（例如鍵盤彈出、聊天室可用高度變小）時，補完清單只用剩下的空間、
+    // 其餘捲動，輸入列一定完整顯示（#79）。
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.withSuggestions)
+            constraints.hasBoundedHeight ? Flexible(child: _suggestionsPanel()) : _suggestionsPanel(),
+          Container(
+            color: ChatPalette.card,
+            padding: const EdgeInsets.fromLTRB(14, 10, 100, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    enabled: widget.enabled,
+                    style: const TextStyle(fontSize: 14, color: ChatPalette.textPrimary),
+                    decoration: InputDecoration(
+                      hintText: widget.hintText,
+                      hintStyle: const TextStyle(color: ChatPalette.textSecondary, fontSize: 14),
+                      filled: true,
+                      fillColor: ChatPalette.bg,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    onChanged: _onInputChanged,
+                    onSubmitted: (_) => _sendMessage(),
                   ),
-                  onChanged: _onInputChanged,
-                  onSubmitted: (_) => _sendMessage(),
                 ),
-              ),
-              const SizedBox(width: 10),
-              GestureDetector(
-                onTap: _sendMessage,
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: widget.enabled ? ChatPalette.accent : ChatPalette.divider,
-                    shape: BoxShape.circle,
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: _sendMessage,
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: widget.enabled ? ChatPalette.accent : ChatPalette.divider,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
                   ),
-                  child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -258,30 +263,46 @@ class _CommandSuggestionTile extends StatelessWidget {
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        child: Row(
-          children: [
-            Text(
-              suggestion.label,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: ChatPalette.accentDark,
+        // 窄螢幕、大字體時指令與參數說明各有上限、超過就截斷，不超出畫面（#79）。
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.4),
+                child: Text(
+                  suggestion.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: ChatPalette.accentDark,
+                  ),
+                ),
               ),
-            ),
-            if (syntax != null) ...[
+              if (syntax != null) ...[
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.3),
+                  child: Text(
+                    syntax,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: ChatPalette.textSecondary),
+                  ),
+                ),
+              ],
               const SizedBox(width: 8),
-              Text(syntax, style: const TextStyle(fontSize: 12, color: ChatPalette.textSecondary)),
-            ],
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                suggestion.description,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: ChatPalette.textSecondary.withValues(alpha: 0.8)),
+              Expanded(
+                child: Text(
+                  suggestion.description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: ChatPalette.textSecondary.withValues(alpha: 0.8)),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
