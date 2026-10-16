@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">bitchat</string>
 
     <!-- Justificativas de permissões -->
     <string name="permission_bluetooth_rationale">A permissão do Bluetooth é necessária para conversar diretamente com outros sem internet.</string>
