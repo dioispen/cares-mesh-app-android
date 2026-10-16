@@ -59,6 +59,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
 
     private var channels: BitchatFlutterChannels? = null
     private var chatBridge: ChatBridge? = null
+    private var settingsBridge: SettingsBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Resolve the mesh instances before super.onCreate(): when the Activity is recreated,
@@ -109,18 +110,25 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // One emitter per engine, shared by both bridges; BitchatFlutterChannels registers the
-        // only method/stream handlers and hands chat methods on to ChatBridge.
+        // One emitter per engine, shared by the bridges; BitchatFlutterChannels registers the
+        // only method/stream handlers and hands chat and settings methods on to ChatBridge and
+        // SettingsBridge.
         val events = BridgeEventEmitter()
         val chat = ChatBridge(chatViewModel, events, pendingNavigation = pendingNavigation)
         chatBridge = chat
+        val settings = SettingsBridge(
+            device = AndroidSettingsDevice(this, activity = this),
+            meshSettings = UpstreamMeshBackgroundSettings(applicationContext),
+            panicClear = chatViewModel::panicClearAllData
+        )
+        settingsBridge = settings
         // 傳遞 activity (this) 給 channels，以便支援權限請求
         channels = BitchatFlutterChannels(
             context = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
             activity = this,
             events = events,
-            additionalMethodHandlers = listOf(chat),
+            additionalMethodHandlers = listOf(chat, settings),
             avatarPhotoPicker = avatarPhotoPicker
         )
     }
@@ -130,6 +138,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         channels = null
         chatBridge?.destroy()
         chatBridge = null
+        settingsBridge?.destroy()
+        settingsBridge = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

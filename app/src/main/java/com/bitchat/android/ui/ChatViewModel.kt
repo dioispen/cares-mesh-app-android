@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import com.bitchat.android.mesh.BluetoothMeshDelegate
 import com.bitchat.android.mesh.BluetoothMeshService
@@ -1441,19 +1443,30 @@ class ChatViewModel(
 
     private var panicClearInProgress = false
 
-    fun panicClearAllData() {
-        if (panicClearInProgress) return
+    /**
+     * Wipes all sensitive data and starts over with a fresh identity. The result completes with
+     * true once everything was erased, false when the conversation history could not be (the mesh
+     * then stays stopped); null when a wipe is already running. A failure still crashes as before.
+     */
+    fun panicClearAllData(): Deferred<Boolean>? {
+        if (panicClearInProgress) return null
         panicClearInProgress = true
+        val outcome = CompletableDeferred<Boolean>()
         viewModelScope.launch {
             try {
-                performPanicClearAllData()
+                outcome.complete(performPanicClearAllData())
+            } catch (e: Throwable) {
+                outcome.completeExceptionally(e)
+                throw e
             } finally {
                 panicClearInProgress = false
             }
         }
+        return outcome
     }
 
-    private suspend fun performPanicClearAllData() {
+    /** True when everything was erased (see [panicClearAllData]). */
+    private suspend fun performPanicClearAllData(): Boolean {
         Log.w(TAG, "🚨 PANIC MODE ACTIVATED - Clearing all sensitive data")
         try {
             com.bitchat.android.geohash.LocationChannelManager
@@ -1524,7 +1537,7 @@ class ChatViewModel(
             // Privacy wins over availability: keep private-message admission and transports
             // stopped if SQLite could not prove that the conversation history was erased.
             Log.e(TAG, "🚨 PANIC MODE INCOMPLETE - conversation database wipe failed")
-            return
+            return false
         }
 
         // Recreate mesh service with fresh identity
@@ -1533,6 +1546,7 @@ class ChatViewModel(
         recreateMeshServiceAfterPanic()
 
         Log.w(TAG, "🚨 PANIC MODE COMPLETED - New identity: ${mesh.myPeerID}")
+        return true
     }
 
     /**

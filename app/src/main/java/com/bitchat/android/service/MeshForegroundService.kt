@@ -35,6 +35,10 @@ class MeshForegroundService : Service() {
         const val ACTION_STOP = "com.bitchat.android.service.STOP"
         const val ACTION_QUIT = "com.bitchat.android.service.QUIT"
         const val ACTION_UPDATE_NOTIFICATION = "com.bitchat.android.service.UPDATE_NOTIFICATION"
+        /** The ongoing notification's delete intent: the user swiped it away (#80). */
+        const val ACTION_NOTIFICATION_DISMISSED = "com.bitchat.android.service.NOTIFICATION_DISMISSED"
+        /** Rebuild and post the ongoing notification, e.g. after auto-restore was switched (#80). */
+        const val ACTION_REPOST_NOTIFICATION = "com.bitchat.android.service.REPOST_NOTIFICATION"
 
         fun start(context: Context) {
             val intent = Intent(context, MeshForegroundService::class.java).apply { action = ACTION_START }
@@ -62,6 +66,15 @@ class MeshForegroundService : Service() {
 
         fun stop(context: Context) {
             val intent = Intent(context, MeshForegroundService::class.java).apply { action = ACTION_STOP }
+            context.startService(intent)
+        }
+
+        /**
+         * Posts the ongoing notification again so a changed auto-restore setting applies at once.
+         * Only call it while background is enabled, when the service is already running.
+         */
+        fun repostNotification(context: Context) {
+            val intent = Intent(context, MeshForegroundService::class.java).apply { action = ACTION_REPOST_NOTIFICATION }
             context.startService(intent)
         }
 
@@ -184,6 +197,14 @@ class MeshForegroundService : Service() {
                 )
                 return START_NOT_STICKY
             }
+            ACTION_NOTIFICATION_DISMISSED -> {
+                repostNotificationIfNeeded(RepostTrigger.DISMISSED)
+                return START_STICKY
+            }
+            ACTION_REPOST_NOTIFICATION -> {
+                repostNotificationIfNeeded(RepostTrigger.SETTING_CHANGED)
+                return START_STICKY
+            }
             ACTION_UPDATE_NOTIFICATION -> {
                 // If we became eligible and are not in foreground yet, promote once
                 if (MeshServicePreferences.isBackgroundEnabled(true) && hasAllRequiredPermissions() && !isInForeground) {
@@ -253,6 +274,21 @@ class MeshForegroundService : Service() {
         }
     }
 
+    /** Posts the ongoing notification again under the same ID; it stays silent (low importance, alert once). */
+    private fun repostNotificationIfNeeded(trigger: RepostTrigger) {
+        val state = MeshNotificationState(
+            inForeground = isInForeground,
+            backgroundEnabled = MeshServicePreferences.isBackgroundEnabled(true),
+            hasPermissions = hasAllRequiredPermissions(),
+            shuttingDown = isShuttingDown,
+            autoRestore = MeshServicePreferences.isNotificationAutoRestoreEnabled()
+        )
+        if (!shouldRepostMeshNotification(trigger, state)) return
+        val count = getUnifiedActivePeerCount()
+        startForegroundCompat(buildNotification(count))
+        lastNotifiedPeerCount = count
+    }
+
     private fun clearMeshNotifications() {
         notificationManager.cancel(NOTIFICATION_ID)
         peerAvailabilityNotifier.clear()
@@ -304,7 +340,7 @@ class MeshForegroundService : Service() {
         val title = getString(R.string.app_name)
         val content = getString(R.string.mesh_service_notification_content, activePeers)
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(content)
             .setSmallIcon(R.mipmap.ic_launcher)
@@ -319,7 +355,18 @@ class MeshForegroundService : Service() {
                 getString(R.string.notification_action_quit_bitchat),
                 quitPendingIntent
             )
-            .build()
+
+        // Auto-restore (#80): learn that the user swiped the notification away, to post it again.
+        if (MeshServicePreferences.isNotificationAutoRestoreEnabled()) {
+            val dismissedIntent = Intent(this, MeshForegroundService::class.java).apply { action = ACTION_NOTIFICATION_DISMISSED }
+            builder.setDeleteIntent(
+                PendingIntent.getService(
+                    this, 2, dismissedIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)
+                )
+            )
+        }
+        return builder.build()
     }
 
     private fun createChannel() {

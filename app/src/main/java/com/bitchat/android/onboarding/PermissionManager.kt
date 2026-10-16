@@ -21,6 +21,7 @@ class PermissionManager(private val context: Context) {
         private const val KEY_FIRST_TIME_COMPLETE = "first_time_onboarding_complete"
         private const val KEY_OPTIONAL_PERMISSION_REQUESTED_PREFIX =
             "optional_permission_requested_"
+        private const val KEY_PERMISSION_REQUESTED_PREFIX = "permission_requested_"
     }
 
     private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -200,6 +201,26 @@ class PermissionManager(private val context: Context) {
 
     private fun optionalPermissionRequestKey(permission: String): String {
         return KEY_OPTIONAL_PERMISSION_REQUESTED_PREFIX + permission
+    }
+
+    /**
+     * Records that the system was asked for [permissions]. A denied permission the system shows no
+     * rationale for was either never asked for or denied for good; only this record tells the two
+     * apart (the Flutter settings screen, #80).
+     */
+    fun markPermissionsRequested(permissions: Collection<String>) {
+        if (permissions.isEmpty()) return
+
+        sharedPrefs.edit().apply {
+            permissions.forEach { permission ->
+                putBoolean(KEY_PERMISSION_REQUESTED_PREFIX + permission, true)
+            }
+        }.apply()
+    }
+
+    fun wasPermissionRequested(permission: String): Boolean {
+        return sharedPrefs.getBoolean(KEY_PERMISSION_REQUESTED_PREFIX + permission, false) ||
+            sharedPrefs.getBoolean(optionalPermissionRequestKey(permission), false)
     }
 
     /**
