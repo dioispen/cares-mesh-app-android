@@ -237,7 +237,7 @@ class BitchatFlutterChannels(
 
     /**
      * `isRegistered`：身分儲存區裡有沒有 static key。在 [ioDispatcher] 上讀，回到主執行緒回覆；
-     * 讀不到（例如 keystore 失效）時回 error，Dart 端照舊當作 false。
+     * 讀不到（例如 keystore 失效）時回 error；Dart 端不當作「尚未註冊」，改照本機資料與雲端繼續驗證（#71）。
      */
     private fun answerIsRegistered(result: MethodChannel.Result) {
         scope.launch {
