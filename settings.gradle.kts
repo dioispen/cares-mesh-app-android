@@ -19,7 +19,11 @@ dependencyResolutionManagement {
 
 rootProject.name = "bitchat-android"
 include(":app")
-include(":wear")
+// :wear (upstream's Wear OS app) is not built by this fork (#38). It shares
+// applicationId com.bitchat.droid with :app but has a far higher versionCode, so an
+// unqualified installDebug overwrote the phone app with the watch APK. The wear/
+// directory stays in the tree so upstream merges don't hit delete/modify conflicts.
+// include(":wear")
 // Using published Arti AAR; local module not included
 
 val flutterProjectDir = settingsDir.resolve("flutter_ui")

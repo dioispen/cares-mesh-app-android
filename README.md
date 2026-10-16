@@ -69,7 +69,7 @@ PUB_CACHE="$LOCALAPPDATA/Pub/Cache" tools/reproducible-builds/apply-pub-cache-pa
 
 # 3. 建置
 ./gradlew assembleDebug        # per-ABI + universal APK
-./gradlew installDebug         # 安裝到已連接的裝置
+./gradlew :app:installDebug    # 安裝到已連接的裝置（加 :app: 前綴，見下方說明）
 
 # 測試
 ./gradlew test                 # Kotlin 單元測試
@@ -86,6 +86,8 @@ A problem occurred evaluating project ':flutter_inappwebview_android'.
 pub 沒有 patch 機制，只能改 PUB_CACHE 裡的副本。腳本會比對修補前後的 SHA-256，重複執行不會重複修補，套件改版時也會直接報錯，不會默默套錯。容器建置會自動執行這一步。細節見 [docs/reproducible-builds.md](docs/reproducible-builds.md#patching-third-party-dart-packages)。
 
 `assembleDebug` / `assembleRelease` 會產生分 ABI 的 APK（arm64、x86_64、armeabi-v7a、x86）加上一個 universal APK；`bundleRelease` 會關閉 split（由 Play Store 處理 ABI 分發）。
+
+**為什麼安裝要寫 `:app:installDebug`**：上游的 Wear OS 模組 `wear/` 仍留在樹裡，但本專案不採用，`settings.gradle.kts` 已不再 `include(":wear")`（#38）。它和 `:app` 共用 applicationId `com.bitchat.droid`，versionCode 卻大得多；只要它被納入建置，不加前綴的 `./gradlew installDebug` 就會把手錶版 APK 裝到手機上、蓋掉剛裝好的 App，下一次安裝則因降版失敗（`INSTALL_FAILED_VERSION_DOWNGRADE`）。已經踩到的話，先 `adb uninstall com.bitchat.droid` 再 `./gradlew :app:installDebug`；注意解除安裝會清掉 Noise 身分金鑰與 Firebase 登入狀態，peer ID 會換一組。
 
 ### 容器建置
 
