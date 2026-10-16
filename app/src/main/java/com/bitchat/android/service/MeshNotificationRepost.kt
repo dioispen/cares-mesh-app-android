@@ -17,7 +17,7 @@ internal enum class RepostTrigger {
     SETTING_CHANGED,
 
     /** The app came to the front (process lifecycle STARTED); a dismissed notification returns (#84). */
-    APP_FOREGROUNDED
+    APP_STARTED
 }
 
 internal data class MeshNotificationState(
@@ -30,13 +30,19 @@ internal data class MeshNotificationState(
     /** The user chose 結束; the notification must not come back. */
     val shuttingDown: Boolean,
     /** [MeshServicePreferences.isNotificationAutoRestoreEnabled]. */
-    val autoRestore: Boolean
+    val autoRestore: Boolean,
+    /**
+     * Android 14+: the user can swipe a foreground service's notification away. Before that it
+     * cannot be dismissed, so coming back to the app has nothing to restore and changes nothing.
+     */
+    val userCanDismiss: Boolean
 )
 
 internal fun shouldRepostMeshNotification(trigger: RepostTrigger, state: MeshNotificationState): Boolean {
     val showing = state.inForeground && state.backgroundEnabled && state.hasPermissions && !state.shuttingDown
     return when (trigger) {
         RepostTrigger.DISMISSED -> showing && state.autoRestore
-        RepostTrigger.SETTING_CHANGED, RepostTrigger.APP_FOREGROUNDED -> showing
+        RepostTrigger.SETTING_CHANGED -> showing
+        RepostTrigger.APP_STARTED -> showing && state.userCanDismiss
     }
 }

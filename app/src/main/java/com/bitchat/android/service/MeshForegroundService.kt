@@ -120,7 +120,7 @@ class MeshForegroundService : Service() {
      */
     private val appForegroundObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
-            repostNotificationIfNeeded(RepostTrigger.APP_FOREGROUNDED)
+            repostNotificationIfNeeded(RepostTrigger.APP_STARTED)
         }
     }
 
@@ -297,7 +297,8 @@ class MeshForegroundService : Service() {
             backgroundEnabled = MeshServicePreferences.isBackgroundEnabled(true),
             hasPermissions = hasAllRequiredPermissions(),
             shuttingDown = isShuttingDown,
-            autoRestore = MeshServicePreferences.isNotificationAutoRestoreEnabled()
+            autoRestore = MeshServicePreferences.isNotificationAutoRestoreEnabled(),
+            userCanDismiss = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
         )
         if (!shouldRepostMeshNotification(trigger, state)) return
         val count = getUnifiedActivePeerCount()

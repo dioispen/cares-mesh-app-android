@@ -11,7 +11,8 @@ class MeshNotificationRepostTest {
         backgroundEnabled = true,
         hasPermissions = true,
         shuttingDown = false,
-        autoRestore = true
+        autoRestore = true,
+        userCanDismiss = true
     )
 
     @Test
@@ -32,8 +33,13 @@ class MeshNotificationRepostTest {
 
     @Test
     fun `coming back to the app reposts the notification whether auto-restore is on or off`() {
-        assertTrue(shouldRepostMeshNotification(RepostTrigger.APP_FOREGROUNDED, showing))
-        assertTrue(shouldRepostMeshNotification(RepostTrigger.APP_FOREGROUNDED, showing.copy(autoRestore = false)))
+        assertTrue(shouldRepostMeshNotification(RepostTrigger.APP_STARTED, showing))
+        assertTrue(shouldRepostMeshNotification(RepostTrigger.APP_STARTED, showing.copy(autoRestore = false)))
+    }
+
+    @Test
+    fun `before Android 14 the notification cannot be swiped away, so coming back reposts nothing`() {
+        assertFalse(shouldRepostMeshNotification(RepostTrigger.APP_STARTED, showing.copy(userCanDismiss = false)))
     }
 
     @Test
