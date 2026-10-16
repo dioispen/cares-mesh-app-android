@@ -19,7 +19,7 @@ A Reporter's standing request to be rescued, carried on each of their Health Rep
 _Avoid_: SOS request, emergency request, distress signal
 
 **Reporter**:
-The person who published a Health Report, known to receivers only through its Reporter Handle. Distinct from the device that relayed it.
+The person who published a Health Report. Over the mesh they are known only through their Reporter Handle; on the backend, the Detail Tier names them. Distinct from the device that relayed it.
 _Avoid_: victim, casualty, user
 
 **Reporter Handle**:
@@ -27,8 +27,20 @@ The opaque, random pseudonym of one app installation, under which every Health R
 _Avoid_: broadcast handle, user ID, peer ID
 
 **Rescuer**:
-Anyone who reads a Health Report in order to go and help its Reporter, including other survivors. A role taken by acting on a report, never an identity the system verifies.
+Anyone who reads a Health Report in order to go and help its Reporter, including other survivors. A role taken by acting on a report; the system does not verify it.
 _Avoid_: responder, rescue team, 救援人員
+
+**Verified Rescuer**:
+A Rescuer whom the project has verified out of band and listed on the backend. The only identity the system verifies, and only ever granted by an administrator, never by the app. Being one unlocks nothing on its own — only the Sensitive Tier of the Reporters they are currently the Helper for.
+_Avoid_: rescue team, admin, 救援人員
+
+**Mutual-aid Task**:
+A Health Report whose Status calls for help (輕傷 or 重傷), offered to Rescuers to take on. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it.
+_Avoid_: rescue request, ticket, job
+
+**Helper**:
+The Rescuer who has accepted a Mutual-aid Task, from accepting it until they complete or release it. A task has at most one Helper at a time. Any Rescuer may become a Helper; verification is not required.
+_Avoid_: assignee, volunteer, 協助者 (when the Rescuer has not accepted)
 
 ### Disclosure
 
@@ -37,8 +49,12 @@ The part of a Health Report every device in range may read — the Reporter Hand
 _Avoid_: public payload, tier 1, summary
 
 **Detail Tier**:
-The part of a Health Report withheld from broadcast — real name, phone number, blood type, precise location, free-text description. Released only to a specific Rescuer, on request, over an established secure session.
-_Avoid_: private payload, tier 2, PII blob
+The part of a Health Report withheld from broadcast but open to every signed-in account on the backend — real name, residential area, precise location, and the injury detail chosen with the Status. What a Rescuer needs to decide whether to go and to find the Reporter.
+_Avoid_: private payload, tier 2, public profile
+
+**Sensitive Tier**:
+The part of a Health Report that tells someone how to reach and treat the Reporter — phone number, blood type, medical history, emergency contacts. Released only to the Reporter and to a Verified Rescuer while they are the Helper on that Reporter's Mutual-aid Task.
+_Avoid_: PII blob, private payload, 個資
 
 ### Relaying
 

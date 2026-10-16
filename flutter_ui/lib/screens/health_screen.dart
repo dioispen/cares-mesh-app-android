@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, defaultTargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
 import '../models/health_report_delivery.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
 import '../services/mascot_service.dart';
+import '../services/mutual_aid_tasks.dart';
 
 // Top-level function required by compute() — must live outside any class.
 HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
@@ -21,32 +25,6 @@ class HealthService {
   String status = 'unknown';
   void updateStatus(String newStatus) => status = newStatus;
   String getStatus() => status;
-}
-
-enum TaskStatus { waiting, accepted, done }
-
-class MutualAidTask {
-  final String id;
-  final String name;
-  final String userId;
-  final String injury;
-  final String location;
-  final double distanceKm;
-  final String note;
-  TaskStatus status;
-  final bool isBle;
-
-  MutualAidTask({
-    required this.id,
-    required this.name,
-    required this.userId,
-    required this.injury,
-    required this.location,
-    required this.distanceKm,
-    required this.note,
-    this.status = TaskStatus.waiting,
-    this.isBle = false,
-  });
 }
 
 class HealthScreen extends StatefulWidget {
@@ -74,13 +52,33 @@ class _HealthScreenState extends State<HealthScreen>
 
   Position? _currentPosition;
   String? _currentUserId;
+
+  /// 自己是不是 Verified Rescuer（rescuers/{uid} 存在）。只用來決定詳情畫面怎麼說明，
+  /// 真正的把關在 firestore.rules。
+  bool _isVerifiedRescuer = false;
   String? _myBroadcastHandle;
   Future<String>? _broadcastHandleFuture;
-  List<QueryDocumentSnapshot> _firestoreDocs = [];
+  List<ReportEntry> _reports = [];
   final List<MutualAidTask> _bleTasks = [];
   final Map<String, TaskStatus> _taskStatusOverrides = {};
-  StreamSubscription<QuerySnapshot>? _tasksSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tasksSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _ownReportSubscription;
   StreamSubscription? _bridgeSubscription;
+
+  /// 第一批任務資料還沒到 vs. 真的沒有任務——這兩件事要分開講，
+  /// 否則載入中的空畫面會寫著「附近目前無求助任務」。
+  bool _tasksLoaded = false;
+
+  /// 互救任務目前顯示哪一個分頁。
+  TaskStatus _taskFilter = TaskStatus.waiting;
+  String? _tasksError;
+
+  /// 回報送出中：擋住連點造成的重複廣播與互相覆蓋的寫入。
+  bool _isSubmitting = false;
+
+  /// 舊版隨機 ID 文件只補查一次，避免監聽每次觸發都打一次 query。
+  bool _legacyRestoreAttempted = false;
 
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
@@ -132,16 +130,25 @@ class _HealthScreenState extends State<HealthScreen>
   void dispose() {
     mascotRouteObserver.unsubscribe(this);
     _tasksSubscription?.cancel();
+    _ownReportSubscription?.cancel();
     _bridgeSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
 
+  // RouteObserver 會在路由安裝的那一幀回呼，這時直接寫 notifier 會在 build 期間
+  // 觸發 markNeedsBuild（log 裡的 setState() called during build）。延到下一幀再寫。
   @override
-  void didPush() => mascotOptionsNotifier.value = healthOptions;
+  void didPush() => _setMascotOptions();
 
   @override
-  void didPopNext() => mascotOptionsNotifier.value = healthOptions;
+  void didPopNext() => _setMascotOptions();
+
+  void _setMascotOptions() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) mascotOptionsNotifier.value = healthOptions;
+    });
+  }
 
   void _listenToBridge() {
     _bridgeSubscription = BitchatBridge.events().listen((event) async {
@@ -159,21 +166,18 @@ class _HealthScreenState extends State<HealthScreen>
       if (decoded == null) return;
       if (!mounted) return;
 
-      // 不顯示自己發出的報告（Broadcast Tier 沒有帳號 ID，以廣播 handle 比對）
-      if (decoded.reporterHandle == _myBroadcastHandle) return;
+      // 不顯示自己發出的報告（Broadcast Tier 沒有帳號 ID，以廣播 handle 比對）。
+      // handle 是非同步載入的，還沒備好就比對會把自己的廣播當成別人的求助，
+      // 所以這裡等它產生／讀取完成再判斷。
+      final myHandle = _myBroadcastHandle ??
+          await _getOrCreateBroadcastHandle(
+              await SharedPreferences.getInstance());
+      if (decoded.reporterHandle == myHandle) return;
+      if (!mounted) return;
 
       final report = decoded.toBroadcastReport();
       final position = _currentPosition;
       final hasLocation = report.approxLat != null && report.approxLng != null;
-
-      double distanceKm = 0;
-      if (hasLocation && position != null) {
-        final meters = Geolocator.distanceBetween(
-          position.latitude, position.longitude,
-          report.approxLat!, report.approxLng!,
-        );
-        distanceKm = meters / 1000;
-      }
 
       final newTask = MutualAidTask(
         id: 'ble_${report.reporterHandle}',
@@ -183,7 +187,14 @@ class _HealthScreenState extends State<HealthScreen>
         location: hasLocation
             ? '概略位置 ${report.approxLat!.toStringAsFixed(2)}, ${report.approxLng!.toStringAsFixed(2)}'
             : '位置未提供',
-        distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
+        lat: report.approxLat,
+        lng: report.approxLng,
+        distanceKm: distanceKmBetween(
+          position?.latitude,
+          position?.longitude,
+          report.approxLat,
+          report.approxLng,
+        ),
         note: '來自 BLE 廣播・聯絡資訊需另行請求',
         isBle: true,
       );
@@ -196,6 +207,10 @@ class _HealthScreenState extends State<HealthScreen>
           _bleTasks.add(newTask);
         }
       });
+    }, onError: (Object e) {
+      // 沒有原生端的平台（iOS 模擬機、桌機）會丟 MissingPluginException。
+      // 收不到 BLE 廣播不影響 Firestore 那條路，記錄下來就好，不要變成未處理例外。
+      debugPrint('bitchat bridge stream unavailable: $e');
     });
   }
 
@@ -224,23 +239,55 @@ class _HealthScreenState extends State<HealthScreen>
     return handle;
   }
 
+  /// 「我的狀態」是每個帳號各自的資料，所以本機快取的鍵值必須綁 uid。
+  ///
+  /// 舊版存在不分帳號的 'health_status'／'health_sub_injury' 裡：同一台裝置
+  /// A 帳號回報「輕傷／割傷」後登出，B 帳號登入時會讀到同一份值，看起來像兩個
+  /// 帳號的健康狀態被同步了。
+  static const _legacyStatusKey = 'health_status';
+  static const _legacySubInjuryKey = 'health_sub_injury';
+  static String _statusKey(String uid) => 'health_status:$uid';
+  static String _subInjuryKey(String uid) => 'health_sub_injury:$uid';
+
+  /// 舊文件清理只需要成功一次，之後不再重複查詢。
+  static String _prunedKey(String uid) => 'health_reports_pruned:$uid';
+
   Future<void> _loadUserAndPosition() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // 舊的不分帳號鍵值無從判斷屬於誰，一律清掉，免得洩漏給下一個登入的帳號。
+    await prefs.remove(_legacyStatusKey);
+    await prefs.remove(_legacySubInjuryKey);
+
     final userJson = prefs.getString('app_user');
-    if (userJson != null) {
-      final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
-      if (mounted) setState(() => _currentUserId = user.id);
-    }
+    final user = userJson == null
+        ? null
+        : AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+
+    // 登入時如果讀不到 users 文件（離線、逾時），本機不會有 app_user。
+    // 但「看自己的狀態」只需要 uid，而 uid 在 Auth 的登入狀態裡就有 ——
+    // 少了個人資料不該連自己回報過什麼都看不到。
+    final uid = user?.id ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && mounted) setState(() => _currentUserId = uid);
+
     final handle = await _getOrCreateBroadcastHandle(prefs);
     if (mounted) setState(() => _myBroadcastHandle = handle);
-    final savedStatus = prefs.getString('health_status');
-    final savedSub = prefs.getString('health_sub_injury');
-    if (mounted) {
-      setState(() {
-        if (savedStatus != null) _selectedStatus = savedStatus;
-        _selectedSubInjury = savedSub;
-      });
+
+    if (uid != null) {
+      final savedStatus = prefs.getString(_statusKey(uid));
+      final savedSub = prefs.getString(_subInjuryKey(uid));
+      if (mounted) {
+        setState(() {
+          if (savedStatus != null) _selectedStatus = savedStatus;
+          _selectedSubInjury = savedSub;
+        });
+      }
+      // 監聽只是掛上去、不等網路，所以搶在定位之前接好：位置權限對話框停在
+      // 那裡的時候，「我的狀態」不該跟著卡住。
+      _subscribeToOwnReport(uid);
+      unawaited(_loadVerifiedRescuer(uid));
     }
+
     try {
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -255,68 +302,236 @@ class _HealthScreenState extends State<HealthScreen>
     } catch (_) {}
   }
 
+  /// 讀不到（離線、逾時）就當作不是：詳情畫面頂多少顯示聯絡資訊，不會多顯示。
+  Future<void> _loadVerifiedRescuer(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('rescuers')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      if (mounted) setState(() => _isVerifiedRescuer = doc.exists);
+    } catch (e) {
+      debugPrint('load rescuer status failed: $e');
+    }
+  }
+
+  /// 訂閱自己那份回報文件，讓「我的狀態」以後端為準。
+  ///
+  /// 一人一筆之後文件 ID 就是 uid，所以這裡只讀自己的文件：換帳號登入不可能
+  /// 看到別人的狀態，換裝置或從別的裝置改狀態也會同步過來。
+  /// 本機快取只是監聽還沒回來前的離線初值。
+  void _subscribeToOwnReport(String uid) {
+    _ownReportSubscription?.cancel();
+    _ownReportSubscription = FirebaseFirestore.instance
+        .collection('health_reports')
+        .doc(uid)
+        .snapshots()
+        .listen((doc) async {
+      final data = doc.data();
+      // 文件 ID 是 uid 不代表內容是自己寫的：規則補上「ID 必須是自己 uid」之前，
+      // 別人可以搶先建立這份文件。reporterId 對不上就不能當成自己的狀態顯示。
+      if (doc.exists && data?['reporterId'] != uid) {
+        debugPrint('health_reports/$uid has a foreign reporterId, ignoring');
+        return;
+      }
+      final status = data?['status'] as String?;
+      if (!doc.exists || status == null) {
+        // 後端沒有這份文件：可能是舊版 add() 留下隨機 ID 的回報，補查一次。
+        // 查不到也不清掉本機顯示的狀態——寧可留著待確認的傷勢，也不要把
+        // 使用者的回報悄悄降級成「尚未回報」。
+        await _restoreLegacyOwnStatus(uid);
+        return;
+      }
+      final subInjury = data?['description'] as String?;
+      _healthService.updateStatus(status);
+      if (mounted) {
+        setState(() {
+          _selectedStatus = status;
+          _selectedSubInjury = subInjury;
+        });
+      }
+      await _cacheOwnStatus(uid, status, subInjury);
+    }, onError: (Object e) => debugPrint('own report stream failed: $e'));
+  }
+
+  /// 補查舊版 add() 流程留下的自己的回報（文件 ID 不是 uid 的那些）。
+  ///
+  /// 只讀 reporterId 等於自己的文件。失敗（離線、權限）就維持現狀，不阻擋畫面。
+  Future<void> _restoreLegacyOwnStatus(String uid) async {
+    if (_legacyRestoreAttempted) return;
+    _legacyRestoreAttempted = true;
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('health_reports')
+          .where('reporterId', isEqualTo: uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      if (snapshot.docs.isEmpty) return;
+
+      // reportTime 是 ISO8601 字串，字典序等於時間序。這裡刻意不用 orderBy：
+      // 等式條件 + 排序會需要額外的複合索引，而自己的回報筆數很少，在本機挑最新的即可。
+      final latest = snapshot.docs.reduce((a, b) {
+        final at = a.data()['reportTime'] as String? ?? '';
+        final bt = b.data()['reportTime'] as String? ?? '';
+        return at.compareTo(bt) >= 0 ? a : b;
+      });
+      final status = latest.data()['status'] as String?;
+      if (status == null) return;
+      final subInjury = latest.data()['description'] as String?;
+
+      _healthService.updateStatus(status);
+      if (mounted) {
+        setState(() {
+          _selectedStatus = status;
+          _selectedSubInjury = subInjury;
+        });
+      }
+      await _cacheOwnStatus(uid, status, subInjury);
+    } catch (_) {}
+  }
+
+  /// 刪掉自己在舊版 add() 流程留下的多餘回報（文件 ID 不等於 uid 的那些）。
+  ///
+  /// 只動 reporterId 等於自己的文件，這也是 firestore.rules 唯一允許刪除的範圍。
+  /// 失敗（離線、權限）就跳過，不影響這次回報。
+  Future<void> _pruneLegacyOwnReports(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_prunedKey(uid)) == true) return;
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('health_reports')
+          .where('reporterId', isEqualTo: uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final stale = snapshot.docs.where((doc) => doc.id != uid).toList();
+      if (stale.isNotEmpty) {
+        final batch = FirebaseFirestore.instance.batch();
+        for (final doc in stale) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit().timeout(const Duration(seconds: 10));
+      }
+      // 清完才記錄，失敗的話下次回報會再試一次。
+      await prefs.setBool(_prunedKey(uid), true);
+    } catch (e) {
+      debugPrint('pruneLegacyOwnReports failed: $e');
+    }
+  }
+
+  Future<void> _cacheOwnStatus(String uid, String status, String? subInjury) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_statusKey(uid), status);
+    if (subInjury != null) {
+      await prefs.setString(_subInjuryKey(uid), subInjury);
+    } else {
+      await prefs.remove(_subInjuryKey(uid));
+    }
+  }
+
+  /// 把任務狀態寫回 Firestore，讓被協助者與其他協助者看到同一份進度。
+  ///
+  /// 先前這裡只改 [_taskStatusOverrides]（純記憶體 Map），所以「已接受／已完成」
+  /// 既不會同步給別人，App 重開也會整批退回等待中。
+  ///
+  /// BLE 任務沒有對應的 Firestore 文件——它只存在於現場廣播——因此仍走本機覆寫。
+  Future<void> _updateTaskStatus(
+    MutualAidTask task,
+    TaskStatus next,
+    String successMessage,
+    Color successColor,
+  ) async {
+    if (task.isBle) {
+      setState(() {
+        _taskStatusOverrides[task.id] = next;
+        _taskFilter = next;
+      });
+      _showTaskSnackBar(successMessage, successColor);
+      return;
+    }
+
+    // 規則要求 helperId 必須等於 request.auth.uid，沒有本機使用者就一定會被擋，
+    // 與其讓使用者看到 permission-denied，不如直接說明原因。
+    if (_currentUserId == null) {
+      _showTaskSnackBar('請先完成註冊驗證，才能接任務', _red);
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('health_reports')
+          .doc(task.id)
+          .update({
+        'taskStatus': next.name,
+        'helperId': next == TaskStatus.waiting ? null : _currentUserId,
+      });
+      // 任務會從原本的分頁移走，畫面要跟著切過去，不然剛接的任務看起來像不見了，
+      // 會讓人以為接受失敗或被別人接走。清單本身由 snapshots() 監聽帶回新狀態重繪。
+      if (mounted) setState(() => _taskFilter = next);
+      _showTaskSnackBar(successMessage, successColor);
+    } catch (e) {
+      debugPrint('updateTaskStatus failed: $e');
+      _showTaskSnackBar(
+        next == TaskStatus.accepted
+            ? '接任務失敗，可能已被其他夥伴接走'
+            : '更新任務狀態失敗，請稍後再試',
+        _red,
+      );
+    }
+  }
+
+  void _showTaskSnackBar(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
   void _subscribeToTasks() {
     _tasksSubscription = FirebaseFirestore.instance
         .collection('health_reports')
-        .where('status', whereIn: ['輕傷', '重傷'])
+        .where('status', whereIn: mutualAidInjuries.toList())
         .snapshots()
         .listen((snapshot) {
-          if (mounted) setState(() => _firestoreDocs = snapshot.docs);
-        });
+      if (!mounted) return;
+      setState(() {
+        _reports = [
+          for (final doc in snapshot.docs)
+            (id: doc.id, data: doc.data()),
+        ];
+        _tasksLoaded = true;
+        _tasksError = null;
+      });
+    }, onError: (Object e) {
+      debugPrint('health_reports stream failed: $e');
+      if (!mounted) return;
+      // 讀取失敗要說出來。沿用「附近目前無求助任務」會讓人以為現場沒人需要幫忙。
+      // 離線時監聽不會報錯，而是給本機快取，所以會跑到這裡的多半是權限問題；
+      // 一律叫人檢查網路會讓人找錯方向。
+      final denied = e is FirebaseException && e.code == 'permission-denied';
+      setState(() {
+        _tasksLoaded = true;
+        _tasksError = denied
+            ? '你的帳號目前沒有權限查看互救任務清單'
+            : '任務清單載入失敗，請稍後重新進入此頁';
+      });
+    });
   }
 
-  List<MutualAidTask> _buildTaskList() {
-    final List<MutualAidTask> allTasks = [];
-    
-    // Firestore 任務
-    final firestoreTasks = _firestoreDocs
-        .where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return data['reporterId'] != _currentUserId;
-        })
-        .map((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final lat = (data['lat'] as num?)?.toDouble();
-          final lng = (data['lng'] as num?)?.toDouble();
-
-          double distanceKm = 0;
-          if (lat != null && lng != null && _currentPosition != null) {
-            final meters = Geolocator.distanceBetween(
-              _currentPosition!.latitude, _currentPosition!.longitude,
-              lat, lng,
-            );
-            distanceKm = meters / 1000;
-          }
-
-          return MutualAidTask(
-            id: doc.id,
-            name: data['name'] as String? ?? '未知',
-            userId: data['reporterId'] as String? ?? '',
-            injury: data['status'] as String? ?? '輕傷',
-            location: lat != null && lng != null
-                ? '緯度 ${lat.toStringAsFixed(4)}, 經度 ${lng.toStringAsFixed(4)}'
-                : '位置未提供',
-            distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
-            note: data['description'] as String? ?? '無補充說明',
-            status: _taskStatusOverrides[doc.id] ?? TaskStatus.waiting,
-          );
-        });
-    
-    allTasks.addAll(firestoreTasks);
-
-    // 加入 BLE 任務（只顯示需要協助的傷亡，安全狀態不列入）
-    // 去重：如果同一個 UserID 已有 Firestore 任務，以 Firestore 為主
-    for (var bleTask in _bleTasks) {
-      if ((bleTask.injury == '輕傷' || bleTask.injury == '重傷') &&
-          !allTasks.any((t) => t.userId == bleTask.userId)) {
-        bleTask.status = _taskStatusOverrides[bleTask.id] ?? TaskStatus.waiting;
-        allTasks.add(bleTask);
-      }
-    }
-
-    allTasks.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
-    return allTasks;
-  }
+  List<MutualAidTask> _buildTaskList() => buildMutualAidTasks(
+        reports: _reports,
+        bleTasks: _bleTasks,
+        currentUserId: _currentUserId,
+        myLat: _currentPosition?.latitude,
+        myLng: _currentPosition?.longitude,
+        bleStatusOverrides: _taskStatusOverrides,
+      );
 
   Color _statusColor() {
     final match = _statusOptions.where((o) => o['label'] == _selectedStatus);
@@ -324,6 +539,7 @@ class _HealthScreenState extends State<HealthScreen>
   }
 
   void _onStatusTap(String status) {
+    if (_isSubmitting) return;
     if (status == '安全') {
       _select('安全', null);
       return;
@@ -346,23 +562,36 @@ class _HealthScreenState extends State<HealthScreen>
     );
   }
 
+  /// 送出一筆健康回報：BLE 廣播、Firestore、本機快取三條路各自獨立。
+  ///
+  /// 災難現場可能只有 BLE 沒有網路，也可能有網路但裝置不支援 BLE，
+  /// 所以任一條失敗都不能拖垮其他兩條。
   Future<void> _select(String status, String? subInjury) async {
+    // 連點防護：重複送出會重複廣播，兩次寫入也會互相覆蓋。
+    if (_isSubmitting) return;
+
+    final previousStatus = _selectedStatus;
+    final previousSubInjury = _selectedSubInjury;
+
     _healthService.updateStatus(status);
     setState(() {
+      _isSubmitting = true;
       _selectedStatus = status;
       _selectedSubInjury = subInjury;
     });
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('health_status', status);
-      if (subInjury != null) {
-        await prefs.setString('health_sub_injury', subInjury);
-      } else {
-        await prefs.remove('health_sub_injury');
-      }
       final userJson = prefs.getString('app_user');
-      if (userJson == null) return;
+      if (userJson == null) {
+        // 不知道這筆狀態屬於哪個帳號時，既不快取也不送出；畫面也要還原，
+        // 否則會顯示一個其實沒有回報成功的狀態。
+        _revertStatus(previousStatus, previousSubInjury);
+        // 有可能其實已經登入（uid 可以從 FirebaseAuth 拿到），只是手機裡沒有
+        // app_user，所以不說「尚未登入」。說法與 SOS 頁一致。
+        _showTaskSnackBar('找不到你的個人資料，無法回報健康狀態。請重新登入後再試。', _red);
+        return;
+      }
       final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
 
       final handle = _myBroadcastHandle ?? await _getOrCreateBroadcastHandle(prefs);
@@ -373,17 +602,24 @@ class _HealthScreenState extends State<HealthScreen>
       final report = HealthReport(
         reporterId: user.id,
         name: user.name,
-        phone: user.phone,
-        bloodType: user.bloodType,
+        area: user.area,
         status: status,
         description: subInjury,
         lat: _currentPosition?.latitude,
         lng: _currentPosition?.longitude,
         reportTime: DateTime.now(),
+        phone: user.phone,
+        bloodType: user.bloodType,
+        medicalInfo: user.medicalInfo,
+        emergencyContactName: user.emergencyContactName,
+        emergencyContactPhone: user.emergencyContactPhone,
+        emergencyContactRelation: user.emergencyContactRelation,
       );
 
       // BLE 廣播只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標
       // （由原生端就地降精度為 geohash）。姓名／電話／血型／自由文字一律不進入廣播（ADR-0003）。
+      //
+      // 自己包 try：沒開藍牙、裝置不支援、原生端拋錯，都不該讓雲端回報跟著失敗。
       String? broadcastFailure;
       try {
         await BitchatBridge.sendHealthReport({
@@ -397,43 +633,97 @@ class _HealthScreenState extends State<HealthScreen>
         broadcastFailure = HealthReportDelivery.broadcastFailureReason(e);
       }
 
-      // 附近廣播失敗也照樣上傳。Firestore 仍寫入完整回報（Reporter 對後端的自願揭露，另由
-      // firestore.rules 治理）。
+      // 附近廣播失敗也照樣上傳。後端拆成兩份文件（ADR-0005）：Detail Tier 寫進大家都讀得到
+      // 的 health_reports，電話、血型、病史、緊急聯絡人寫進 health_report_sensitive。
+      // 同一個 batch：兩份要嘛一起寫進去，要嘛都沒有。
+      //
+      // 一人一筆：文件 ID 就用 uid，改狀態是直接覆寫同一份文件，不再 add() 新增。
+      // 舊做法每回報一次就多一筆，同一個人會在後端留下一串過期狀態（回報安全之後，
+      // 之前那筆「輕傷」還在互救任務清單上）。
+      //
+      // 傷勢一改就回到「等待中／無人認領」：內容已經不一樣了，沿用舊的認領紀錄會讓
+      // 協助者看到對不上的任務。但重送一模一樣的狀態（例如不小心再點一次）不算改，
+      // 這時清掉認領，已經在路上的協助者會無聲無息地丟掉任務，還可能被別人接走。
+      // toDetailJson() 每個欄位都會寫（含 null），所以 merge 只會保留 taskStatus／helperId。
+      final contentChanged =
+          status != previousStatus || subInjury != previousSubInjury;
+      final db = FirebaseFirestore.instance;
+      final write = (db.batch()
+            ..set(
+              db.collection('health_reports').doc(user.id),
+              {
+                ...report.toDetailJson(),
+                if (contentChanged) ...{'taskStatus': 'waiting', 'helperId': null},
+              },
+              SetOptions(merge: true),
+            )
+            ..set(
+              db.collection('health_report_sensitive').doc(user.id),
+              report.toSensitiveJson(),
+            ))
+          .commit();
+
+      // set() 的 Future 要等伺服器確認才完成，離線時會一直不完成（資料已進本機佇列，
+      // 恢復連線會自動送出）。所以不無限等待——災難時離線是常態，使用者需要立刻得到
+      // 回饋，而不是一個永遠轉不完的按鈕。
+      var uploadQueued = false;
       String? uploadFailure;
       try {
-        await FirebaseFirestore.instance
-            .collection('health_reports')
-            .add(report.toJson());
+        await write.timeout(const Duration(seconds: 6));
+      } on TimeoutException {
+        uploadQueued = true;
+        // 佇列中的寫入之後才失敗的話，錯誤沒人接會變成未處理例外。
+        unawaited(write.catchError((Object e) {
+          debugPrint('queued health report failed: $e');
+        }));
       } catch (e) {
         debugPrint('HealthScreen: Health Report upload failed: $e');
         uploadFailure = '$e';
       }
 
-      final delivery = HealthReportDelivery(broadcastFailure: broadcastFailure, uploadFailure: uploadFailure);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(delivery.message(status)),
-            backgroundColor: delivery.complete ? _statusColor() : (delivery.failed ? _red : _orange),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
+      final delivery = HealthReportDelivery(
+        broadcastFailure: broadcastFailure,
+        uploadFailure: uploadFailure,
+        uploadQueued: uploadQueued,
+      );
+      if (delivery.failed) {
+        // 兩條路都沒送出：誰都沒收到這份回報，畫面不能顯示已回報。
+        _revertStatus(previousStatus, previousSubInjury);
+        _showTaskSnackBar(delivery.message(status), _red);
+        return;
       }
+
+      await _cacheOwnStatus(user.id, status, subInjury);
+
+      if (!uploadQueued && uploadFailure == null) {
+        // 清掉舊版 add() 在後端留下的多餘文件。純後端整理，不讓它擋住回饋。
+        unawaited(_pruneLegacyOwnReports(user.id));
+      }
+
+      if (!mounted) return;
+      _showTaskSnackBar(
+        delivery.message(status),
+        delivery.complete ? _statusColor() : _orange,
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('回報失敗：$e'),
-            backgroundColor: _red,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      }
+      // 寫入被規則擋下、或本機儲存失敗：後端根本沒有這筆，畫面不能顯示已回報。
+      debugPrint('health report failed: $e');
+      _revertStatus(previousStatus, previousSubInjury);
+      _showTaskSnackBar('回報失敗，請稍後再試', _red);
+    } finally {
+      _isSubmitting = false;
+      if (mounted) setState(() {});
     }
+  }
+
+  /// 回報沒成功時把畫面退回原本的狀態，不留下一個假的「已回報」。
+  void _revertStatus(String previousStatus, String? previousSubInjury) {
+    _healthService.updateStatus(previousStatus);
+    if (!mounted) return;
+    setState(() {
+      _selectedStatus = previousStatus;
+      _selectedSubInjury = previousSubInjury;
+    });
   }
 
   Color _injuryColor(String injury) {
@@ -448,46 +738,97 @@ class _HealthScreenState extends State<HealthScreen>
     return Icons.check_circle_rounded;
   }
 
+  /// 用手機原生的地圖 App 導航到對方的座標。
+  ///
+  /// 一串經緯度對要趕過去的人沒有用，真正需要的是「怎麼走過去」。
+  /// 原生 App 開不起來（沒安裝、模擬機）才退到 Google Maps 網頁。
+  Future<void> _openNavigation(MutualAidTask task) async {
+    final lat = task.lat;
+    final lng = task.lng;
+    if (lat == null || lng == null) return;
+
+    for (final uri in navigationUris(
+      lat: lat,
+      lng: lng,
+      platform: defaultTargetPlatform,
+      // 不帶求助者姓名：姓名是 Detail Tier，交給外部地圖 App 可能被存進搜尋紀錄
+      // （ADR-0003），而導航本身用不到它。
+      label: '求助者',
+    )) {
+      try {
+        if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+      } catch (e) {
+        debugPrint('launch $uri failed: $e');
+      }
+    }
+    if (!mounted) return;
+    // 這裡是從詳情 sheet 呼叫的，SnackBar 會出現在 sheet 底下被擋住，先把 sheet 關掉。
+    Navigator.of(context).popUntil((route) => route is! ModalBottomSheetRoute);
+    final coords = '$lat, $lng';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('這台裝置打不開地圖 App，座標為 $coords'),
+        backgroundColor: _red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: '複製',
+          textColor: Colors.white,
+          onPressed: () => Clipboard.setData(ClipboardData(text: coords)),
+        ),
+      ),
+    );
+  }
+
   void _showTaskDetail(MutualAidTask task) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _TaskDetailSheet(
+      // 加上聯絡與醫療資訊後內容變長，小螢幕或大字體時要能捲動。
+      builder: (_) => SingleChildScrollView(child: _TaskDetailSheet(
         task: task,
         injuryColor: _injuryColor(task.injury),
+        // 任務同步之後，看到「進行中」不代表是自己接的。BLE 任務只存在本機，
+        // 沒有被別人先接走的問題。
+        canComplete: task.isBle ||
+            (_currentUserId != null && task.helperId == _currentUserId),
+        sensitiveAccess: sensitiveAccessFor(
+          task,
+          currentUserId: _currentUserId,
+          isVerifiedRescuer: _isVerifiedRescuer,
+        ),
+        // 沒有座標就沒得導航，按鈕不該出現在那裡讓人白按。
+        onNavigate: task.lat != null && task.lng != null
+            ? () => _openNavigation(task)
+            : null,
         onAccept: () {
-          setState(() => _taskStatusOverrides[task.id] = TaskStatus.accepted);
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已接受協助 ${task.name} 的任務'),
-              backgroundColor: _purple,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              margin: const EdgeInsets.all(16),
-            ),
-          );
+          _updateTaskStatus(
+              task, TaskStatus.accepted, '已接受協助 ${task.name} 的任務', _purple);
         },
         onDone: () {
-          setState(() => _taskStatusOverrides[task.id] = TaskStatus.done);
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已完成協助 ${task.name}'),
-              backgroundColor: _green,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              margin: const EdgeInsets.all(16),
-            ),
-          );
+          _updateTaskStatus(task, TaskStatus.done, '已完成協助 ${task.name}', _green);
         },
-      ),
+        // 接了卻趕不過去時要有出口，否則那筆求助會一直卡在「進行中」，
+        // 別人也接不了。firestore.rules 的狀態機本來就允許本人退回等待中。
+        onRelease: () {
+          Navigator.pop(context);
+          _updateTaskStatus(task, TaskStatus.waiting,
+              '已放棄協助 ${task.name}，任務回到待救援', _orange);
+        },
+      )),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    // 一次算好給 badge 與清單共用：組任務要算每一筆的距離，每次重繪算三遍很浪費。
+    final tasks = _buildTaskList();
+
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -517,7 +858,7 @@ class _HealthScreenState extends State<HealthScreen>
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${_buildTaskList().where((t) => t.status == TaskStatus.waiting).length}',
+                      '${tasks.where((t) => t.status == TaskStatus.waiting).length}',
                       style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -531,7 +872,7 @@ class _HealthScreenState extends State<HealthScreen>
         controller: _tabController,
         children: [
           _buildMyStatusTab(),
-          _buildMutualAidTab(),
+          _buildMutualAidTab(tasks),
         ],
       ),
     );
@@ -621,7 +962,9 @@ class _HealthScreenState extends State<HealthScreen>
                   final color = option['color'] as Color;
                   final isSelected = _selectedStatus == option['label'];
                   return GestureDetector(
-                    onTap: () => _onStatusTap(option['label'] as String),
+                    onTap: _isSubmitting
+                        ? null
+                        : () => _onStatusTap(option['label'] as String),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -696,8 +1039,7 @@ class _HealthScreenState extends State<HealthScreen>
     );
   }
 
-  Widget _buildMutualAidTab() {
-    final tasks = _buildTaskList();
+  Widget _buildMutualAidTab(List<MutualAidTask> tasks) {
     final waiting = tasks.where((t) => t.status == TaskStatus.waiting).toList();
     final accepted = tasks.where((t) => t.status == TaskStatus.accepted).toList();
     final done = tasks.where((t) => t.status == TaskStatus.done).toList();
@@ -728,32 +1070,206 @@ class _HealthScreenState extends State<HealthScreen>
             ),
           ),
 
-          if (waiting.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionLabel('待救援', waiting.length, _red),
-            const SizedBox(height: 8),
-            ...waiting.map((t) => _taskCard(t)),
-          ],
-
-          if (accepted.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionLabel('進行中', accepted.length, _purple),
-            const SizedBox(height: 8),
-            ...accepted.map((t) => _taskCard(t)),
-          ],
-
-          if (done.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            _sectionLabel('已完成', done.length, _green),
-            const SizedBox(height: 8),
-            ...done.map((t) => _taskCard(t)),
+          if (tasks.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                _taskFilterTab(TaskStatus.waiting, '待救援', waiting.length, Icons.emergency_rounded, _red),
+                const SizedBox(width: 8),
+                _taskFilterTab(TaskStatus.accepted, '進行中', accepted.length, Icons.directions_run_rounded, _purple),
+                const SizedBox(width: 8),
+                _taskFilterTab(TaskStatus.done, '已完成', done.length, Icons.task_alt_rounded, _green),
+              ],
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              child: switch (_taskFilter) {
+                TaskStatus.waiting => _taskSection(
+                    key: const ValueKey(TaskStatus.waiting),
+                    label: '待救援',
+                    hint: '尚無人前往，等待協助',
+                    empty: '目前沒有待救援的求助',
+                    icon: Icons.emergency_rounded,
+                    color: _red,
+                    tasks: waiting,
+                  ),
+                TaskStatus.accepted => _taskSection(
+                    key: const ValueKey(TaskStatus.accepted),
+                    label: '進行中',
+                    hint: '已有夥伴前往協助',
+                    empty: '目前沒有進行中的任務',
+                    icon: Icons.directions_run_rounded,
+                    color: _purple,
+                    tasks: accepted,
+                  ),
+                TaskStatus.done => _taskSection(
+                    key: const ValueKey(TaskStatus.done),
+                    label: '已完成',
+                    hint: '協助已結束',
+                    empty: '還沒有完成的任務',
+                    icon: Icons.task_alt_rounded,
+                    color: _green,
+                    tasks: done,
+                  ),
+              },
+            ),
           ],
 
           if (tasks.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 60),
+            Padding(
+              padding: const EdgeInsets.only(top: 60),
+              child: Center(child: _emptyTaskListMessage()),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 清單是空的有三種原因，訊息不能混用：還在載入、載入失敗、真的沒有人需要協助。
+  Widget _emptyTaskListMessage() {
+    if (_tasksError != null) {
+      return Column(
+        children: [
+          const Icon(Icons.cloud_off_rounded, color: _textSecondary, size: 28),
+          const SizedBox(height: 10),
+          Text(
+            _tasksError!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _textSecondary),
+          ),
+        ],
+      );
+    }
+    if (!_tasksLoaded) {
+      return const Column(
+        children: [
+          SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _textSecondary),
+          ),
+          SizedBox(height: 12),
+          Text('載入附近的求助任務…', style: TextStyle(color: _textSecondary)),
+        ],
+      );
+    }
+    return const Text('附近目前無求助任務', style: TextStyle(color: _textSecondary));
+  }
+
+  /// 頂端的三個分頁：選到的那頁實心上色，其餘淡色；數字讓沒選到的分頁也看得出有幾筆。
+  Widget _taskFilterTab(TaskStatus status, String label, int count, IconData icon, Color color) {
+    final selected = _taskFilter == status;
+    final fg = selected ? Colors.white : (count > 0 ? color : _textSecondary);
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _taskFilter = status),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? color : (count > 0 ? color.withValues(alpha: 0.1) : _card),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? color : (count > 0 ? color.withValues(alpha: 0.3) : const Color(0xFFE8E0D5)),
+            ),
+            boxShadow: [
+              if (selected)
+                BoxShadow(color: color.withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4)),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 14, color: fg),
+                  const SizedBox(width: 4),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: selected || count > 0 ? fg : _textSecondary.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 一個狀態一塊底色區：待救援是紅、進行中是紫、已完成是綠，
+  /// 區塊本身就說明了狀態，不用逐張卡片讀標籤。
+  Widget _taskSection({
+    Key? key,
+    required String label,
+    required String hint,
+    required String empty,
+    required IconData icon,
+    required Color color,
+    required List<MutualAidTask> tasks,
+  }) {
+    return Container(
+      key: key,
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(9)),
+                child: Icon(icon, size: 16, color: Colors.white),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color, letterSpacing: 1),
+                    ),
+                    Text(hint, style: TextStyle(fontSize: 11, color: color.withValues(alpha: 0.75))),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
+                child: Text(
+                  '${tasks.length} 筆',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...tasks.map((t) => _taskCard(t, color)),
+          if (tasks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 14, 0, 24),
               child: Center(
-                child: Text('附近目前無求助任務', style: TextStyle(color: _textSecondary)),
+                child: Text(empty, style: TextStyle(fontSize: 13, color: color.withValues(alpha: 0.8))),
               ),
             ),
         ],
@@ -761,23 +1277,7 @@ class _HealthScreenState extends State<HealthScreen>
     );
   }
 
-  Widget _sectionLabel(String label, int count, Color color) {
-    return Row(
-      children: [
-        Container(
-          width: 3,
-          height: 14,
-          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
-        ),
-        const SizedBox(width: 8),
-        Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color, letterSpacing: 1)),
-        const SizedBox(width: 6),
-        Text('$count 筆', style: TextStyle(fontSize: 12, color: color.withValues(alpha: 0.7))),
-      ],
-    );
-  }
-
-  Widget _taskCard(MutualAidTask task) {
+  Widget _taskCard(MutualAidTask task, Color sectionColor) {
     final color = _injuryColor(task.injury);
     final isDone = task.status == TaskStatus.done;
     final isAccepted = task.status == TaskStatus.accepted;
@@ -787,127 +1287,170 @@ class _HealthScreenState extends State<HealthScreen>
       child: GestureDetector(
         onTap: isDone ? null : () => _showTaskDetail(task),
         child: Container(
-          padding: const EdgeInsets.all(14),
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: isDone ? _bg : _card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isAccepted ? _purple.withValues(alpha: 0.4) : const Color(0xFFE8E0D5),
-              width: isAccepted ? 1.5 : 1,
-            ),
+            borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
+                color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
             ],
           ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(9),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: isDone ? 0.06 : 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(_injuryIcon(task.injury), color: color.withValues(alpha: isDone ? 0.4 : 1), size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 左側色條：與所屬區塊同色
+                Container(width: 5, color: sectionColor.withValues(alpha: isDone ? 0.4 : 1)),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
                       children: [
-                        Text(
-                          task.name,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: isDone ? _textSecondary : _textPrimary,
+                        Container(
+                          padding: const EdgeInsets.all(9),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: isDone ? 0.06 : 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(_injuryIcon(task.injury), color: color.withValues(alpha: isDone ? 0.4 : 1), size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    task.name,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: isDone ? _textSecondary : _textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: color.withValues(alpha: isDone ? 0.06 : 0.1),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      task.injury,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: color.withValues(alpha: isDone ? 0.5 : 1),
+                                      ),
+                                    ),
+                                  ),
+                                  if (isAccepted) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _purple,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Text(
+                                        '協助中',
+                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                                      ),
+                                    ),
+                                  ],
+                                  if (task.isBle) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(Icons.bluetooth_audio_rounded, size: 14, color: Colors.blue),
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
+                                  const SizedBox(width: 3),
+                                  Expanded(
+                                    child: Text(
+                                      task.location,
+                                      style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.8)),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: isDone ? 0.06 : 0.1),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            task.injury,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: color.withValues(alpha: isDone ? 0.5 : 1),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              task.distanceLabel,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isDone ? _textSecondary : _textPrimary,
+                              ),
                             ),
-                          ),
-                        ),
-                        if (isAccepted) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _purple.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Text(
-                              '協助中',
-                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _purple),
-                            ),
-                          ),
-                        ],
-                        if (task.isBle) ...[
-                          const SizedBox(width: 6),
-                          const Icon(Icons.bluetooth_audio_rounded, size: 14, color: Colors.blue),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
-                        const SizedBox(width: 3),
-                        Expanded(
-                          child: Text(
-                            task.location,
-                            style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.8)),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                            if (!isDone)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Icon(Icons.chevron_right_rounded, color: _textSecondary, size: 18),
+                              ),
+                            if (isDone)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Icon(Icons.check_circle_rounded, color: _green.withValues(alpha: 0.5), size: 18),
+                              ),
+                          ],
                         ),
                       ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '${task.distanceKm} km',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isDone ? _textSecondary : _textPrimary,
                     ),
                   ),
-                  if (!isDone)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Icon(Icons.chevron_right_rounded, color: _textSecondary, size: 18),
-                    ),
-                  if (isDone)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Icon(Icons.check_circle_rounded, color: _green.withValues(alpha: 0.5), size: 18),
-                    ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 複製座標：不用裝任何 App、離線也能用，開不了地圖時至少能貼到別處或念給別人聽。
+///
+/// 複製成功的提示寫在按鈕上——它在詳情 sheet 裡，SnackBar 會被 sheet 擋住。
+class _CopyCoordsButton extends StatefulWidget {
+  final String text;
+  final Color color;
+
+  const _CopyCoordsButton({required this.text, required this.color});
+
+  @override
+  State<_CopyCoordsButton> createState() => _CopyCoordsButtonState();
+}
+
+class _CopyCoordsButtonState extends State<_CopyCoordsButton> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: () async {
+          await Clipboard.setData(ClipboardData(text: widget.text));
+          if (mounted) setState(() => _copied = true);
+        },
+        icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 16),
+        label: Text(_copied ? '已複製座標' : '複製座標'),
+        style: TextButton.styleFrom(foregroundColor: widget.color),
       ),
     );
   }
@@ -916,8 +1459,17 @@ class _HealthScreenState extends State<HealthScreen>
 class _TaskDetailSheet extends StatelessWidget {
   final MutualAidTask task;
   final Color injuryColor;
+  /// 這位使用者是不是當初認領的人——只有他能按「完成協助」。
+  final bool canComplete;
   final VoidCallback onAccept;
   final VoidCallback onDone;
+  final VoidCallback onRelease;
+
+  /// 開啟地圖導航；對方沒有回報座標時為 null。
+  final VoidCallback? onNavigate;
+
+  /// 電話、血型、病史、緊急聯絡人那一區怎麼呈現（ADR-0005）。
+  final SensitiveAccess sensitiveAccess;
 
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
@@ -929,8 +1481,12 @@ class _TaskDetailSheet extends StatelessWidget {
   const _TaskDetailSheet({
     required this.task,
     required this.injuryColor,
+    required this.canComplete,
     required this.onAccept,
     required this.onDone,
+    required this.onRelease,
+    required this.onNavigate,
+    required this.sensitiveAccess,
   });
 
   @override
@@ -1015,7 +1571,13 @@ class _TaskDetailSheet extends StatelessWidget {
               children: [
                 _infoRow(Icons.location_on_rounded, '位置', task.location),
                 const Divider(height: 18, color: Color(0xFFE8E0D5)),
-                _infoRow(Icons.near_me_rounded, '距離', '${task.distanceKm} 公里'),
+                _infoRow(Icons.near_me_rounded, '距離', task.distanceLabel),
+                if (!task.isBle) ...[
+                  const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                  _infoRow(Icons.healing_rounded, '傷勢細項', task.note),
+                  const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                  _infoRow(Icons.home_rounded, '居住區域', task.area ?? '未提供'),
+                ],
                 if (task.isBle) ...[
                   const Divider(height: 18, color: Color(0xFFE8E0D5)),
                   _infoRow(Icons.bluetooth_audio_rounded, '來源', 'BLE 現場廣播'),
@@ -1023,6 +1585,44 @@ class _TaskDetailSheet extends StatelessWidget {
               ],
             ),
           ),
+
+          if (onNavigate != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onNavigate,
+                icon: const Icon(Icons.directions_rounded, size: 18),
+                label: Text(
+                  task.isBle ? '導航到概略位置' : '開啟地圖導航',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _textPrimary,
+                  side: const BorderSide(color: Color(0xFFD6CCC2)),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+            if (task.isBle)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  'BLE 廣播只帶概略位置，到現場後仍需搜尋',
+                  style: TextStyle(fontSize: 12, color: _textSecondary),
+                ),
+              ),
+            _CopyCoordsButton(
+              text: '${task.lat}, ${task.lng}',
+              color: _textSecondary,
+            ),
+          ],
+
+          if (sensitiveAccess != SensitiveAccess.none) ...[
+            const SizedBox(height: 12),
+            _SensitiveTierSection(reporterUid: task.userId, access: sensitiveAccess),
+          ],
 
           const SizedBox(height: 20),
 
@@ -1044,7 +1644,23 @@ class _TaskDetailSheet extends StatelessWidget {
               ),
             ),
 
-          if (isAccepted) ...[
+          if (isAccepted && !canComplete)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                color: _purple.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _purple.withValues(alpha: 0.3)),
+              ),
+              child: const Text(
+                '已由其他夥伴接手協助中',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _purple),
+              ),
+            ),
+
+          if (isAccepted && canComplete) ...[
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -1059,6 +1675,26 @@ class _TaskDetailSheet extends StatelessWidget {
                   elevation: 0,
                 ),
               ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onRelease,
+                icon: const Icon(Icons.undo_rounded, size: 18),
+                label: const Text('放棄協助', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _textSecondary,
+                  side: const BorderSide(color: Color(0xFFD6CCC2)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '放棄後這筆求助會回到待救援，讓其他夥伴可以接手',
+              style: TextStyle(fontSize: 12, color: _textSecondary),
             ),
           ],
         ],
@@ -1082,6 +1718,153 @@ class _TaskDetailSheet extends StatelessWidget {
       ],
     );
   }
+}
+
+/// 詳情畫面的 Sensitive Tier：電話、血型、病史、緊急聯絡人（ADR-0005）。
+///
+/// 只有正接著這筆任務的 Verified Rescuer 才去讀 health_report_sensitive；其他情況照實
+/// 說明為什麼看不到，而不是讓人以為對方沒填。
+class _SensitiveTierSection extends StatefulWidget {
+  final String reporterUid;
+  final SensitiveAccess access;
+
+  const _SensitiveTierSection({required this.reporterUid, required this.access});
+
+  @override
+  State<_SensitiveTierSection> createState() => _SensitiveTierSectionState();
+}
+
+class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
+  static const _card = Color(0xFFFEFDF9);
+  static const _textPrimary = Color(0xFF3D2C1E);
+  static const _textSecondary = Color(0xFF8C7B6E);
+
+  Future<DocumentSnapshot<Map<String, dynamic>>>? _sensitive;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.access == SensitiveAccess.granted) {
+      _sensitive = FirebaseFirestore.instance
+          .collection('health_report_sensitive')
+          .doc(widget.reporterUid)
+          .get();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE8E0D5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.lock_rounded, size: 16, color: _textSecondary),
+              SizedBox(width: 6),
+              Text(
+                '聯絡與醫療資訊',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _textPrimary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          switch (widget.access) {
+            SensitiveAccess.granted => _granted(),
+            SensitiveAccess.acceptFirst =>
+              _note('電話、血型、病史與緊急聯絡人，只在你接下並協助這筆任務期間看得到。'),
+            SensitiveAccess.verificationRequired =>
+              _note('電話、血型、病史與緊急聯絡人只提供給經過認證、並且接下這筆任務的救援者。'),
+            SensitiveAccess.none => const SizedBox.shrink(),
+          },
+        ],
+      ),
+    );
+  }
+
+  Widget _granted() => FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        future: _sensitive,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final denied = error is FirebaseException && error.code == 'permission-denied';
+            return _note(denied
+                ? '讀不到：你的救援者認證或這筆任務的狀態可能已經改變。'
+                : '讀取失敗，請稍後再試。');
+          }
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
+          final data = snapshot.data?.data();
+          if (data == null) return _note('對方沒有提供聯絡與醫療資訊。');
+
+          return Column(
+            children: [
+              _row('電話', _text(data['phone'])),
+              _row('血型', _text(data['bloodType'])),
+              _row('病史', _text(data['medicalInfo'])),
+              _row('緊急聯絡人', _emergencyContact(data)),
+            ],
+          );
+        },
+      );
+
+  static String _text(Object? value) =>
+      value is String && value.trim().isNotEmpty ? value : '未提供';
+
+  /// 「王大明（父親） 0987654321」；缺的部分省略，全缺就是「未提供」。
+  static String _emergencyContact(Map<String, dynamic> data) {
+    String? part(String key) {
+      final v = data[key];
+      return v is String && v.trim().isNotEmpty ? v.trim() : null;
+    }
+
+    final name = part('emergencyContactName');
+    final relation = part('emergencyContactRelation');
+    final phone = part('emergencyContactPhone');
+    final who = [?name, if (relation != null) '（$relation）'].join();
+    final text = [if (who.isNotEmpty) who, ?phone].join(' ');
+    return text.isEmpty ? '未提供' : text;
+  }
+
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 76,
+              child: Text(label, style: const TextStyle(fontSize: 13, color: _textSecondary)),
+            ),
+            Expanded(
+              child: SelectableText(
+                value,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  Widget _note(String text) =>
+      Text(text, style: const TextStyle(fontSize: 12, color: _textSecondary));
 }
 
 // ── 傷況細項選單 ──────────────────────────────────────────

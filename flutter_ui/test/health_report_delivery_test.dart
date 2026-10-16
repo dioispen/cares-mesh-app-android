@@ -31,6 +31,22 @@ void main() {
       expect(delivery.failed, isFalse);
     });
 
+    test('offline: the broadcast went out and the upload is queued', () {
+      const delivery = HealthReportDelivery(uploadQueued: true);
+
+      expect(delivery.message('輕傷'), '已向附近廣播：輕傷，目前離線，恢復連線後自動上傳雲端');
+      expect(delivery.complete, isFalse);
+      expect(delivery.failed, isFalse);
+    });
+
+    test('offline and no broadcast: only the queued upload is left', () {
+      const delivery = HealthReportDelivery(broadcastFailure: 'mesh 尚未啟動', uploadQueued: true);
+
+      expect(delivery.message('重傷'), '已記錄：重傷，但附近廣播失敗（mesh 尚未啟動），目前離線，恢復連線後自動上傳雲端');
+      expect(delivery.complete, isFalse);
+      expect(delivery.failed, isFalse);
+    });
+
     test('neither got it', () {
       const delivery = HealthReportDelivery(broadcastFailure: 'mesh 尚未啟動', uploadFailure: 'unavailable');
 
