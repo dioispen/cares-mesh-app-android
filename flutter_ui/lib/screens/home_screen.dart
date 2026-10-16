@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/mascot_service.dart';
+import '../services/profile_store.dart';
 import '../widgets/chat_navigation_host.dart';
 import '../widgets/user_avatar.dart';
 import 'knowledge_screen.dart';
@@ -14,8 +13,6 @@ import 'health_screen.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 import 'supply_screen.dart';
-
-const _prefsKeyUser = 'app_user';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -60,11 +57,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void didPopNext() => mascotOptionsNotifier.value = homeOptions;
 
   Future<void> _loadUser() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefsKeyUser);
-    if (raw != null && mounted) {
-      setState(() => _user = AppUser.fromJson(jsonDecode(raw)));
-    }
+    final user = await ProfileStore().load();
+    if (user != null && mounted) setState(() => _user = user);
   }
 
   /// 點頭像開啟設定頁（#80）。回來時重讀本機的個人資料：設定頁可能改了它。

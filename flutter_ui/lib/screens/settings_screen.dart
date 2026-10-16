@@ -81,12 +81,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _lifecycle = AppLifecycleListener(onResume: _reload);
-    try {
-      _statusChanges = _settings.systemStatusChanges.listen((_) => _reload());
-    } catch (e) {
-      // 沒有原生 event channel 的平台：狀態只在開啟與回到 App 時讀取。
-      debugPrint('Settings: system status events unavailable: $e');
-    }
+    // 事件串流出錯（例如沒有原生 event channel）時照樣顯示出來，狀態仍會在回到 App 時重新讀取。
+    _statusChanges = _settings.systemStatusChanges.listen(
+      (_) => _reload(),
+      onError: (Object e) {
+        if (mounted) setState(() => _stateError = e);
+      },
+    );
     _reload();
   }
 
@@ -273,6 +274,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _panicRunning = true);
     try {
       await _account.panicClear();
+    } on PanicSignOutFailed catch (e) {
+      // 資料已經清掉了，不能讓使用者以為要重來一次。
+      if (!mounted) return;
+      setState(() => _panicRunning = false);
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('資料已清除'),
+          content: Text('本機資料已清除，但登出帳號失敗：${_describe(e.cause)}\n回到登入畫面後請重新登入。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('確定')),
+          ],
+        ),
+      );
+      _goToSignedOut();
+      return;
     } catch (e) {
       if (!mounted) return;
       setState(() => _panicRunning = false);
@@ -703,7 +720,7 @@ class _ProfileEditorState extends State<_ProfileEditor> {
         medicalInfo: medical.isEmpty ? null : medical,
       ));
     } catch (e) {
-      // The device copy could not be written; the form stays open with the user's input.
+      // 本機副本寫不進去：表單留著，使用者輸入的內容不會不見。
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('儲存失敗：$e')));
       }

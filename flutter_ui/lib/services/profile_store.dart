@@ -8,6 +8,9 @@ import '../models/user.dart';
 /// 本機存的登入帳號個人資料（SharedPreferences）的鍵。
 const appUserPrefsKey = 'app_user';
 
+/// 註冊後、Email 驗證前暫存的個人資料（`register_screen.dart`）的鍵。
+const pendingAppUserPrefsKey = 'pending_app_user';
+
 /// 一次存檔的雲端那一半：本機已寫入，[synced] 在 Firestore 確認寫入時完成，失敗時帶錯誤。
 ///
 /// 離線時 Firestore 先把寫入留在本機佇列，連上網才送出，[synced] 會一直等到那時。

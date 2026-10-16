@@ -88,6 +88,7 @@ void main() {
   late Completer<void> remote;
   late List<String> account;
   late Future<void> Function() nativePanic;
+  late Future<void> Function() firebaseSignOut;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({
@@ -100,6 +101,7 @@ void main() {
     remoteWrites = [];
     account = [];
     nativePanic = () async => account.add('nativePanic');
+    firebaseSignOut = () async => account.add('firebaseSignOut');
   });
 
   Future<void> pumpSettings(WidgetTester tester) async {
@@ -116,7 +118,7 @@ void main() {
           return remote.future;
         }),
         account: AccountService(
-          signOutFirebase: () async => account.add('firebaseSignOut'),
+          signOutFirebase: () => firebaseSignOut(),
           nativePanicClear: () => nativePanic(),
         ),
         signedOutBuilder: (_) => const Scaffold(body: Text('login screen')),
@@ -208,6 +210,15 @@ void main() {
       expect(find.descendant(of: rowFor('藍牙'), matching: find.text('已關閉')), findsOneWidget);
       await tapOn(tester, find.text('開啟藍牙'));
       expect(native.calls, ['requestEnableBluetooth']);
+    });
+
+    testWidgets('a failing status event stream is shown, not dropped', (tester) async {
+      await pumpSettings(tester);
+
+      native.events.addError(MissingPluginException('no event channel'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('no event channel'), findsOneWidget);
     });
 
     testWidgets('a native read that fails says so instead of showing nothing', (tester) async {
@@ -366,6 +377,25 @@ void main() {
       expect(prefs.getString('app_user'), isNull);
       expect(prefs.getString('pending_app_user'), isNull);
       expect(prefs.getString('unrelated'), 'kept');
+      expect(find.text('login screen'), findsOneWidget);
+    });
+
+    testWidgets('a sign-out failing after the wipe says the data is gone and still leaves for login',
+        (tester) async {
+      firebaseSignOut = () async => throw StateError('network');
+      await pumpSettings(tester);
+      await openPanicDialog(tester);
+
+      await tester.enterText(find.byType(TextField).last, '清除');
+      await tester.pump();
+      await tester.tap(confirmButton());
+      await tester.pumpAndSettle();
+
+      expect(find.text('資料已清除'), findsOneWidget);
+      expect(find.textContaining('清除未完成'), findsNothing);
+      await tester.tap(find.text('確定'));
+      await tester.pumpAndSettle();
+      expect(account, ['nativePanic']);
       expect(find.text('login screen'), findsOneWidget);
     });
 

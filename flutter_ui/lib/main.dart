@@ -33,7 +33,7 @@ void main() async{
   try {
     await loadMascotEnabled();
   } catch (e) {
-    // Shown, the default, when the preference cannot be read.
+    // 讀不到偏好時維持預設：顯示小助理。
     debugPrint('Mascot preference unavailable: $e');
   }
 

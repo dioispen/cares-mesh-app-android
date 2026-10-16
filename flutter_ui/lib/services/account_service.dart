@@ -33,7 +33,21 @@ class AccountService {
     await _nativePanicClear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(appUserPrefsKey);
-    await prefs.remove('pending_app_user');
-    await _signOutFirebase();
+    await prefs.remove(pendingAppUserPrefsKey);
+    try {
+      await _signOutFirebase();
+    } catch (e) {
+      throw PanicSignOutFailed(e);
+    }
   }
+}
+
+/// 緊急清除時原生與本機資料都已清除，只有登出 Firebase 失敗：不必、也不該再清一次。
+class PanicSignOutFailed implements Exception {
+  PanicSignOutFailed(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => 'PanicSignOutFailed($cause)';
 }
