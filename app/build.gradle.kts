@@ -188,6 +188,10 @@ dependencies {
 
     // Google Play Services Location
     implementation(libs.gms.location)
+
+    // Kotlin 端沒有使用 Firebase，但這行不是多餘的：它把 FlutterFire 外掛帶入的 Firebase
+    // 原生 SDK 從 firebase_core 預設的 BoM 33.x 統一拉到這個版本，實機驗證過的也是這個
+    // 版本。刪掉等於把 Firebase 降一個大版本。
     implementation(platform("com.google.firebase:firebase-bom:34.11.0"))
 
     // ProcessCameraProvider.getInstance() 與 CoroutineWorker.getForegroundInfoAsync() 回傳
