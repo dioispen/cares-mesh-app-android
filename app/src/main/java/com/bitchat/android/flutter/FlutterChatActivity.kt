@@ -1,8 +1,13 @@
 package com.bitchat.android.flutter
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -12,6 +17,8 @@ import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.ui.ChatViewModel
+import com.bitchat.android.util.AppConstants
+import com.bitchat.android.utils.DeviceUtils
 import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -61,6 +68,17 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     private var chatBridge: ChatBridge? = null
     private var settingsBridge: SettingsBridge? = null
 
+    /**
+     * The ongoing notification's quit action: AppShutdownCoordinator broadcasts this before it
+     * kills the process, as MainActivity listens for it. Without it the UI stayed on screen until
+     * the kill up to 5 s later and looked like a crash.
+     */
+    private val forceFinishReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == AppConstants.UI.ACTION_FORCE_FINISH) finishAffinity()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Resolve the mesh instances before super.onCreate(): when the Activity is recreated,
         // FragmentActivity restores the FlutterFragment inside super.onCreate(), and that calls
@@ -69,6 +87,24 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         meshService = MeshServiceHolder.getOrCreate(applicationContext)
         unifiedMeshService = MeshServiceHolder.getUnifiedOrCreate(applicationContext)
         super.onCreate(savedInstanceState)
+
+        ContextCompat.registerReceiver(
+            this,
+            forceFinishReceiver,
+            IntentFilter(AppConstants.UI.ACTION_FORCE_FINISH),
+            AppConstants.UI.PERMISSION_FORCE_FINISH,
+            null,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        // Phones stay portrait, tablets rotate — what OrientationAwareActivity does, which this
+        // FlutterFragmentActivity can't extend. With configChanges in the manifest a rotation
+        // re-lays out Flutter instead of recreating the Activity (#78).
+        requestedOrientation = if (DeviceUtils.isTablet(this)) {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
 
         // Foreground: the ChatViewModel is the mesh delegate while resumed (mirrors MainActivity's
         // onResume/onPause); paused, the foreground service owns DM notifications.
@@ -87,6 +123,11 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         // A notification tap that started the Activity (cold start). Not when it is recreated:
         // its intent is the one it was first started with, and that tap is already pending.
         if (savedInstanceState == null) receiveNotificationTap(intent)
+    }
+
+    override fun onDestroy() {
+        try { unregisterReceiver(forceFinishReceiver) } catch (_: IllegalArgumentException) { }
+        super.onDestroy()
     }
 
     /** A notification tapped while the Activity exists (singleTop / CLEAR_TOP bring it back). */

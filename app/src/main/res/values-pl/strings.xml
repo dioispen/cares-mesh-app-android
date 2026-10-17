@@ -57,7 +57,6 @@
   <string name="verify_success_system_message">zweryfikowano %1$s</string>
 
     <!-- Newly translated strings -->
-    <string name="app_name">bitchat</string>
     <string name="permission_bluetooth_rationale">Uprawnienie Bluetooth jest wymagane do komunikacji peer-to-peer bez internetu.</string>
     <string name="permission_location_rationale">Uprawnienie lokalizacji jest wymagane do wykrywania pobliskich urządzeń przez Bluetooth.</string>
     <string name="permission_notification_rationale">Uprawnienie powiadomień jest wymagane, aby informować Cię o nowych wiadomościach.</string>
@@ -188,7 +187,7 @@
     <string name="cd_open_map">Otwórz mapę</string>
     <string name="cd_remove_bookmark">Usuń zakładkę</string>
     <string name="cd_teleport">Teleportuj</string>
-    <string name="notification_action_quit_bitchat">Zamknij bitchat</string>
+    <string name="notification_action_quit_bitchat">Zamknij cares-mesh-app</string>
     <string name="about_background_title">działaj w tle</string>
     <string name="about_background_desc">utrzymuj sieć mesh aktywną po zamknięciu aplikacji (usługa pierwszoplanowa)</string>
     <string name="cd_leave_channel">Opuść kanał</string>

@@ -140,11 +140,11 @@ class BitchatFlutterChannels(
             }
 
             "checkPermissions" -> {
-                val requiredGranted = permissionManager.areRequiredPermissionsGranted()
-                val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
-                } else true
-                result.success(requiredGranted && notificationGranted)
+                // Only Bluetooth and location gate the setup screen. POST_NOTIFICATIONS is optional
+                // (PermissionManager.getRequiredPermissions, MeshForegroundService): once the user
+                // turns it off in the system settings the system never prompts for it again, so
+                // gating on it kept the setup screen re-requesting forever.
+                result.success(permissionManager.areRequiredPermissionsGranted())
             }
 
             "requestPermissions" -> {
@@ -239,7 +239,7 @@ class BitchatFlutterChannels(
 
     /**
      * `isRegistered`：身分儲存區裡有沒有 static key。在 [ioDispatcher] 上讀，回到主執行緒回覆；
-     * 讀不到（例如 keystore 失效）時回 error，Dart 端照舊當作 false。
+     * 讀不到（例如 keystore 失效）時回 error；Dart 端不當作「尚未註冊」，改照本機資料與雲端繼續驗證（#71）。
      */
     private fun answerIsRegistered(result: MethodChannel.Result) {
         scope.launch {

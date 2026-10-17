@@ -1,7 +1,9 @@
 # Reproducible builds
 
 Bitchat's canonical release build produces byte-for-byte reproducible unsigned
-phone and Wear OS APKs and Android App Bundles (AABs). CI builds the release
+phone APKs and an Android App Bundle (AAB). This fork does not build upstream's
+Wear OS module (`settings.gradle.kts` no longer includes `:wear`, see #38), so
+no `bitchat-android-wear-*` artifact is produced. CI builds the release
 twice in independent jobs and exposes a verified release artifact only when
 every canonical byte matches.
 
@@ -58,7 +60,6 @@ The authoritative pins are:
 - `gradle/libs.versions.toml`
 - `settings-gradle.lockfile`
 - `app/gradle.lockfile`
-- `wear/gradle.lockfile`
 - `gradle/verification-metadata.xml`
 - `tools/reproducible-builds/TOOLCHAIN.env`
 - `tools/arti-build/TOOLCHAIN.env`
@@ -206,10 +207,15 @@ disabled lint checks. That is a suppression, not a fix. Removing it and running
 `./gradlew :geolocator_android:lintDebug` fails with two real errors, both at
 `geolocator_android-4.6.2/.../location/BackgroundNotification.java:100`:
 `NotificationManagerCompat.notify` is called without checking
-`android.permission.POST_NOTIFICATIONS`. That finding is unreviewed and deserves
-an issue of its own. The suppression is scoped to the generated plugin projects,
-so it never hides a `MissingPermission` finding in `:app` or `:wear` — `:app`'s
-own lint report still carries its `MissingPermission` entries.
+`android.permission.POST_NOTIFICATIONS`, so from API 33 the background-location
+foreground notification silently fails to appear when that permission is not
+granted. The app only takes one-shot fixes (`getCurrentPosition`) today, which
+never reach that code. #41 tracks when the suppression must be revisited: as
+soon as Flutter code uses `getPositionStream()` with a
+`foregroundNotificationConfig`, or `geolocator_android` is upgraded past 4.6.2.
+The suppression is scoped to the generated plugin projects, so it never hides a
+`MissingPermission` finding in `:app` — `:app`'s own lint report still carries
+its `MissingPermission` entries.
 
 ## Patching third-party Dart packages
 
@@ -366,8 +372,6 @@ The output contains:
 
 - unsigned APKs for arm64, armv7, x86, x86_64, and universal installs
 - `bitchat-android-release-unsigned.aab`
-- `bitchat-android-wear-unsigned.apk`
-- `bitchat-android-wear-release-unsigned.aab`
 - `BUILDINFO.json`
 - `SHA256SUMS.unsigned`
 
@@ -462,8 +466,8 @@ gh attestation verify bitchat-android-universal-unsigned.apk \
 
 Google Play App Signing changes the verification boundary:
 
-- maintainers upload signed phone and Wear AABs using the upload key;
-- Google Play generates optimized, device-specific APK splits from those AABs;
+- maintainers upload the signed phone AAB using the upload key;
+- Google Play generates optimized, device-specific APK splits from that AAB;
 - Google signs the delivered APKs with the app-signing key.
 
 Consequently, a Play-delivered APK is not expected to be byte-identical to the
@@ -472,7 +476,7 @@ GitHub universal APK or to a locally built APK. Use this procedure instead:
 1. In Play Console, open **Test and release > App bundle explorer**, select the
    release/version code, and download the original app bundle if that option is
    available to your account. Compare its unsigned payload with the matching
-   reproduced phone or Wear AAB:
+   reproduced phone AAB:
 
    ```bash
    tools/reproducible-builds/compare-archive-payloads.sh \
@@ -512,10 +516,9 @@ maintainers to retain the uploaded AAB, publish its digest and provenance, and
 record the Play version code and app-signing certificate fingerprint alongside
 the release.
 
-The GitHub workflow builds and attests both canonical unsigned AABs. A
-maintainer locally creates `bitchat-android-play-upload.aab` and
-`bitchat-android-wear-play-upload.aab` from those exact files and uploads them
-manually to Google Play.
+The GitHub workflow builds and attests the canonical unsigned AAB. A
+maintainer locally creates `bitchat-android-play-upload.aab` from that exact
+file and uploads it manually to Google Play.
 
 ## Maintainer release process
 

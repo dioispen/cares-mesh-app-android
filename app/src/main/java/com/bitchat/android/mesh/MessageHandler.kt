@@ -455,17 +455,22 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
     /**
      * Dispatch HEALTH_REPORT(0x30) tagged-broadcast by BroadcastContentTag.
      * payload[0] = tag; payload[1..] = actual data.
-     * Falls back to full payload decode for old-format packets (no tag byte).
+     * Packets with an unknown or missing tag are dropped, never decoded as a health report.
      */
     private suspend fun handleTaggedBroadcast(routed: RoutedPacket) {
         val packet = routed.packet
-        val tag = BroadcastContentTag.fromValue(packet.payload.getOrElse(0) { 0 })
-        val dataPayload = if (tag != null) packet.payload.drop(1).toByteArray() else packet.payload
+        val rawTag = packet.payload.firstOrNull()
+        val tag = rawTag?.let { BroadcastContentTag.fromValue(it) }
+        if (tag == null) {
+            val peerID = routed.peerID ?: "unknown"
+            val tagText = rawTag?.let { "0x%02X".format(it.toInt() and 0xFF) } ?: "none"
+            Log.w(TAG, "Dropping tagged broadcast with unknown content tag $tagText from ${peerID.take(8)}")
+            return
+        }
+        val dataPayload = packet.payload.copyOfRange(1, packet.payload.size)
         when (tag) {
             BroadcastContentTag.HEALTH_REPORT ->
                 handleHealthReport(routed.copy(packet = packet.copy(payload = dataPayload)))
-            null ->
-                handleHealthReport(routed)
         }
     }
 

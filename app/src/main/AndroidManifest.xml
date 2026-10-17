@@ -123,12 +123,15 @@
             android:theme="@style/Theme.BitchatAndroid"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- Flutter UI (聊天室 Demo) 的承載 Activity，現在作為進入點 -->
+        <!-- Flutter UI (聊天室 Demo) 的承載 Activity，現在作為進入點。
+             configChanges 照 Flutter 官方範本：旋轉、深色模式、字體大小、分割畫面等設定改變時
+             由 Flutter 自己重新排版，不重建 Activity，否則 Dart 會從 main() 重跑、回到 SetupScreen（#78）。 -->
         <activity
             android:name=".flutter.FlutterChatActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.BitchatAndroid"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTop">
             <intent-filter>

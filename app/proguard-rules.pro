@@ -38,3 +38,14 @@
 -keepclassmembers class * implements android.location.LocationListener {
     public <methods>;
 }
+
+# Flutter's own R8 rules (flutter_tools/gradle/flutter_proguard_rules.pro). A Flutter app gets
+# them from the Flutter Gradle plugin; this host embeds the Flutter module (:flutter) and never
+# did. Without them R8 merged shared_preferences_android's pigeon SharedPreferencesApi into its
+# plugin and dropped the handlers, so in release every SharedPreferences call failed with
+# "Unable to establish connection on channel" (no saved profile: the avatar opened nothing).
+# See https://github.com/flutter/flutter/issues/154580.
+-dontwarn io.flutter.plugin.**
+-dontwarn android.**
+-if class * implements io.flutter.embedding.engine.plugins.FlutterPlugin
+-keep,allowshrinking,allowobfuscation class <1>

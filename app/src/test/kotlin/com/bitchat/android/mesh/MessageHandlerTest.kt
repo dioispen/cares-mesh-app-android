@@ -21,6 +21,8 @@ import com.bitchat.android.services.meshgraph.MeshGraphService
 import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -235,6 +237,65 @@ class MessageHandlerTest {
         handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
 
         verify(delegate).onMessageReceived(any())
+    }
+
+    // handleHealthReport() 第一步就是 delegate.getPeerInfo()；handleMessage() 走廣播路徑時不會先呼叫它，
+    // 所以 getPeerInfo 從未被呼叫即代表封包沒有進到 handleHealthReport()。
+    @Test
+    fun `health report packet with unknown content tag is dropped`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val forwarded = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { forwarded.add(it) }
+        InboundPacketBridge.addListener(listener)
+        try {
+            val packet = healthReportPacket(tag = 0x7F)
+
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+            verify(delegate, never()).getPeerInfo(any())
+            verify(delegate, never()).onMessageReceived(any())
+            assertTrue("Unknown-tag packet must not reach the Flutter bridge", forwarded.isEmpty())
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun `health report packet with empty payload is dropped`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val forwarded = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { forwarded.add(it) }
+        InboundPacketBridge.addListener(listener)
+        try {
+            val packet = healthReportPacket().copy(payload = ByteArray(0))
+
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+            verify(delegate, never()).getPeerInfo(any())
+            verify(delegate, never()).onMessageReceived(any())
+            assertTrue("Empty-payload packet must not reach the Flutter bridge", forwarded.isEmpty())
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun `health report packet with HEALTH_REPORT tag is forwarded with tag stripped`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val forwarded = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { forwarded.add(it) }
+        InboundPacketBridge.addListener(listener)
+        try {
+            val packet = healthReportPacket()
+
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+            verify(delegate).onMessageReceived(any())
+            assertEquals(1, forwarded.size)
+            assertArrayEquals(healthReportData(), forwarded.single().payload)
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
     }
 
     @Test
@@ -507,20 +568,21 @@ class MessageHandlerTest {
         lastSeen = System.currentTimeMillis()
     )
 
-    private fun healthReportPacket(): BitchatPacket {
-        val payload = HealthReportPayload.fromLocation(
-            reporterHandle = "abcdef012345",
-            status = HealthStatus.SAFE,
-            lat = null,
-            lng = null,
-            reportTimeMillis = 1_700_000_000_000L
-        ).encode()
+    private fun healthReportData(): ByteArray = HealthReportPayload.fromLocation(
+        reporterHandle = "abcdef012345",
+        status = HealthStatus.SAFE,
+        lat = null,
+        lng = null,
+        reportTimeMillis = 1_700_000_000_000L
+    ).encode()
+
+    private fun healthReportPacket(tag: Byte = BroadcastContentTag.HEALTH_REPORT.value): BitchatPacket {
         return BitchatPacket(
             version = 1u,
             type = MessageType.HEALTH_REPORT.value,
             senderID = peerID.hexToBytes(),
             timestamp = System.currentTimeMillis().toULong(),
-            payload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload,
+            payload = byteArrayOf(tag) + healthReportData(),
             signature = signature,
             ttl = 7u
         )

@@ -11,10 +11,14 @@ The central rule is:
 No keystore or password is stored in GitHub, GitHub Actions, the repository,
 release notes, or workflow artifacts.
 
-This runbook releases both the phone and Wear OS apps under the shared Play
-application ID `com.bitchat.droid`. Wear releases use the independent version
-code range beginning at `1000000001`; every phone and Wear artifact uploaded to
-one Play listing must have a unique version code.
+This runbook releases the phone app under the Play application ID
+`com.bitchat.droid`.
+
+> **This fork does not ship Wear OS.** Upstream's `wear/` module is still in the
+> tree, but `settings.gradle.kts` no longer includes it (#38), and the release
+> scripts in `tools/reproducible-builds/` no longer build, sign, or check any
+> `bitchat-android-wear-*` artifact. If `:wear` is ever re-included, the Wear
+> steps must be restored here and in those scripts together.
 
 For the technical trust model and third-party verification instructions, see
 [Reproducible builds](reproducible-builds.md).
@@ -118,9 +122,7 @@ a command line, in a shell profile, or in a release-notes file.
 
 ## 1. Prepare and approve the release commit
 
-1. Update `versionCode` and `versionName` in `app/build.gradle.kts`. For a Wear
-   release, also update them in `wear/build.gradle.kts` using the reserved Wear
-   version-code range. Every code must be unique across both form factors.
+1. Update `versionCode` and `versionName` in `app/build.gradle.kts`.
    The phone `versionName` must match the release tag without the leading `v`.
 2. Merge all intended release changes into `main`.
 3. Confirm required CI checks are green.
@@ -147,7 +149,6 @@ Set shell variables for the rest of the release:
 export REPOSITORY=permissionlesstech/bitchat-android
 export TAG=vX.Y.Z
 export VERSION_CODE=NN
-export WEAR_VERSION_CODE=1000000001
 export RELEASE_DIR="release-${TAG#v}"
 ```
 
@@ -157,7 +158,6 @@ Confirm the source version:
 grep -nE 'versionCode|versionName' app/build.gradle.kts
 test "$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)" = "${TAG#v}"
 test "$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts)" = "$VERSION_CODE"
-test "$(sed -n 's/.*versionCode = \([0-9_][0-9_]*\).*/\1/p' wear/build.gradle.kts | tr -d _)" = "$WEAR_VERSION_CODE"
 ```
 
 Stop if either `test` command fails.
@@ -253,8 +253,6 @@ The directory must initially contain exactly these canonical files:
 - `bitchat-android-x86-unsigned.apk`
 - `bitchat-android-x86_64-unsigned.apk`
 - `bitchat-android-release-unsigned.aab`
-- `bitchat-android-wear-unsigned.apk`
-- `bitchat-android-wear-release-unsigned.aab`
 
 Verify the checksum manifest:
 
@@ -332,7 +330,6 @@ It creates:
 
 - `bitchat-android-arm64.apk`
 - `bitchat-android-universal.apk`
-- `bitchat-android-wear.apk`
 - `bitchat-android-x86_64.apk`
 
 The unsigned armv7 and x86 APKs remain available for reproducibility, but are
@@ -366,16 +363,14 @@ Run:
 tools/reproducible-builds/sign-play-bundle.sh "$RELEASE_DIR"
 ```
 
-The helper creates `bitchat-android-play-upload.aab` and
-`bitchat-android-wear-play-upload.aab`, verifies their JAR signatures, proves
-that every non-signature payload entry matches the corresponding canonical
+The helper creates `bitchat-android-play-upload.aab`, verifies its JAR
+signature, proves that every non-signature payload entry matches the canonical
 unsigned AAB, and updates `SHA256SUMS`.
 
-These are the only files to upload to Play Console:
+This is the only file to upload to Play Console:
 
 ```text
 release-X.Y.Z/bitchat-android-play-upload.aab
-release-X.Y.Z/bitchat-android-wear-play-upload.aab
 ```
 
 Do not upload an APK or either `*-release-unsigned.aab` to Play. Do not open
@@ -401,20 +396,16 @@ tools/reproducible-builds/prepare-github-release.sh "$RELEASE_DIR"
 The helper verifies all checksums and renames the public build information and
 checksum manifests. It refuses missing or pre-existing release files.
 
-The final GitHub Release must contain all 17 files below:
+The final GitHub Release must contain all 13 files below:
 
 | Asset | Signed? | Why it is published |
 |---|---:|---|
 | `bitchat-android-arm64.apk` | APK release key | Primary direct-install APK |
 | `bitchat-android-universal.apk` | APK release key | Fallback direct-install APK |
 | `bitchat-android-x86_64.apk` | APK release key | x86_64 install APK |
-| `bitchat-android-wear.apk` | APK release key | Wear OS direct-install APK |
 | Five phone `bitchat-android-*-unsigned.apk` files | No | Reproducibility inputs for every phone ABI target |
 | `bitchat-android-release-unsigned.aab` | No | Canonical reproducible Play input |
 | `bitchat-android-play-upload.aab` | Play upload key | Exact bundle uploaded to Play |
-| `bitchat-android-wear-unsigned.apk` | No | Canonical reproducible Wear install input |
-| `bitchat-android-wear-release-unsigned.aab` | No | Canonical reproducible Wear Play input |
-| `bitchat-android-wear-play-upload.aab` | Play upload key | Exact bundle uploaded to the Wear OS track |
 | `BITCHAT_BUILDINFO.json` | GitHub attestation | Source commit and pinned toolchain |
 | `BITCHAT_SHA256SUMS.unsigned` | GitHub attestation | Original canonical CI manifest |
 | `BITCHAT_SHA256SUMS` | No detached signature | SHA-256 for every published asset |
@@ -443,7 +434,6 @@ Create a local release-notes file. At minimum it must contain:
 ## Bitchat Android vX.Y.Z
 
 - Version code: NN
-- Wear version: 0.1.0 (code 1000000001)
 - Source tag: vX.Y.Z
 - GitHub APK signing certificate SHA-256: FINGERPRINT
 - Play upload certificate SHA-256: FINGERPRINT
@@ -507,15 +497,8 @@ Keep it as a draft until the Play internal-track checks below pass.
 10. In **Setup > App integrity**, confirm the Play app-signing certificate
     SHA-256 is the value recorded in the GitHub release notes.
 
-For the initial Wear release, open **Test and release > Advanced settings >
-Form factors**, add Wear OS, upload the required Wear screenshot, and use the
-dedicated **Wear OS only** test track. Upload exactly
-`bitchat-android-wear-play-upload.aab`, confirm version code `1000000001`, and
-complete the Wear OS opt-in and review flow. Promote the already-tested Wear
-artifact on its dedicated track; do not add it to the mobile track.
-
-Promote these same tested Play releases from their test tracks to their
-respective production tracks. Do not rebuild or upload replacement AABs for
+Promote this same tested Play release from its test track to the production
+track. Do not rebuild or upload a replacement AAB for
 production. Use staged production rollouts when appropriate.
 
 Google signs the device APKs with the Play app-signing key, so Play-delivered
@@ -523,7 +506,7 @@ APKs will not be byte-identical to the GitHub APKs. That is expected.
 
 ## 10. Publish GitHub and promote Play
 
-After both Play test builds pass and the GitHub draft has all 17 assets:
+After the Play test build passes and the GitHub draft has all 13 assets:
 
 ```bash
 gh release edit "$TAG" \
@@ -591,10 +574,10 @@ Also verify:
 - [ ] `verified-unsigned-release` downloaded by run ID
 - [ ] Checksums, source commit, and attestations verified
 - [ ] GitHub APKs signed locally with the pinned certificate
-- [ ] Phone and Wear Play AABs signed locally with the registered upload key
-- [ ] `BITCHAT_SHA256SUMS` verifies all 17 release assets
+- [ ] Phone Play AAB signed locally with the registered upload key
+- [ ] `BITCHAT_SHA256SUMS` verifies all 13 release assets
 - [ ] GitHub draft created with certificate fingerprints and all assets
-- [ ] Exact signed phone and Wear AABs uploaded to and tested on their tracks
+- [ ] Exact signed phone AAB uploaded to and tested on its track
 - [ ] GitHub Release published
 - [ ] Same tested Play release promoted to production
 - [ ] Public GitHub and Play verification completed
@@ -605,5 +588,3 @@ Also verify:
 - [GitHub CLI: create a release](https://cli.github.com/manual/gh_release_create)
 - [Google Play App Signing](https://support.google.com/googleplay/android-developer/answer/9842756)
 - [Play Console App bundle explorer](https://support.google.com/googleplay/android-developer/answer/9859152)
-- [Package and distribute Wear OS apps](https://developer.android.com/training/wearables/packaging)
-- [Manage form-factor releases on dedicated tracks](https://support.google.com/googleplay/android-developer/answer/13295490)

@@ -83,10 +83,12 @@ gradle.beforeProject {
     // `./gradlew :geolocator_android:lintDebug` fails with two real errors, both at
     // geolocator_android-4.6.2/android/src/main/java/com/baseflow/geolocator/
     // location/BackgroundNotification.java:100 — NotificationManagerCompat.notify
-    // called without checking android.permission.POST_NOTIFICATIONS. That finding is
-    // unreviewed and deserves an issue of its own. Scoped to the generated Flutter
-    // plugin projects, the suppression never hides a MissingPermission finding in
-    // :app or :wear.
+    // called without checking android.permission.POST_NOTIFICATIONS. Only background
+    // location (getPositionStream + foregroundNotificationConfig) reaches that code;
+    // the app uses one-shot getCurrentPosition today. Revisit this suppression (#41)
+    // before enabling background location or upgrading geolocator_android past 4.6.2.
+    // Scoped to the generated Flutter plugin projects, the suppression never hides a
+    // MissingPermission finding in :app.
     if (path !in ownedProjects) {
         pluginManager.withPlugin("com.android.library") {
             (extensions.getByName("android") as LibraryExtension).lint.disable.add("MissingPermission")

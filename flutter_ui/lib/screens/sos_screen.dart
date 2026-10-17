@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/sos_service.dart';
+import '../widgets/fill_or_scroll.dart';
 
 /// 一次送出 SOS 的結果。
 enum _SendOutcome {
@@ -406,8 +407,10 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         iconTheme: const IconThemeData(color: _textPrimary),
       ),
       body: SafeArea(
-        child: Padding(
+        // 小螢幕、大字體時按鈕與資訊卡放不下，改成可以捲動；放得下時照舊用 Spacer 撐開（#79）。
+        child: FillOrScroll(
           padding: const EdgeInsets.all(20),
+          fillWithFlex: true,
           child: Column(
             children: [
               // 狀態提示
@@ -715,13 +718,17 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
           label,
           style: const TextStyle(fontSize: 13, color: _textSecondary),
         ),
-        const Spacer(),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: _textPrimary,
+        const SizedBox(width: 12),
+        // 值太長（大字體、窄螢幕）時換行，不超出卡片（#79）。
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: _textPrimary,
+            ),
           ),
         ),
       ],

@@ -175,6 +175,17 @@ void main() {
       expect(find.descendant(of: rowFor('電池最佳化'), matching: find.text('已排除')), findsOneWidget);
     });
 
+    testWidgets('battery optimization that is not exempt says which system option exempts it', (tester) async {
+      native.permissions = [
+        for (final p in native.permissions)
+          p['category'] == 'batteryOptimization' ? {...p, 'granted': false} : p,
+      ];
+      await pumpSettings(tester);
+      await scrollTo(tester, find.text('電池最佳化'));
+
+      expect(find.descendant(of: rowFor('電池最佳化'), matching: find.text('未排除・需設為「不受限制」')), findsOneWidget);
+    });
+
     testWidgets('tapping a category hands it to native', (tester) async {
       await pumpSettings(tester);
 

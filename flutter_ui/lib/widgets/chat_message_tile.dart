@@ -110,7 +110,8 @@ class ChatMessageTile extends StatelessWidget {
                   ),
                 ),
               Container(
-                constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.65),
+                // sizeOf：只在畫面尺寸改變時重建，鍵盤彈出的每一格動畫不會讓每則訊息都重建。
+                constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.65),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: isMe ? ChatPalette.accent : (msg.mentionsMe ? ChatPalette.mentionBg : ChatPalette.card),

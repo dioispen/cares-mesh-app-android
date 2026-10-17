@@ -21,6 +21,22 @@ class _LoginScreenState extends State<LoginScreen> {
   static const _brown = Color(0xFF5C3D2E);
   static const _brownLight = Color(0xFF8B5E3C);
   static const _textSecondary = Color(0xFF8C7B6E);
+  static const _errorColor = Color(0xFFBF7A5A);
+
+  // 驗證失敗時欄位標籤不跟著變紅，錯誤原因只寫在欄位下方。
+  static const _labelStyle = TextStyle(color: _textSecondary);
+  static const _floatingLabelStyle = TextStyle(color: _brown);
+
+  // 沒有指定時，驗證失敗會退回 border（BorderSide.none），欄位外框整個消失、只剩點得到的空白。
+  // 顏色與註冊頁的錯誤外框相同。
+  static final _errorBorder = OutlineInputBorder(
+    borderRadius: BorderRadius.circular(14),
+    borderSide: const BorderSide(color: _errorColor, width: 1),
+  );
+  static final _focusedErrorBorder = OutlineInputBorder(
+    borderRadius: BorderRadius.circular(14),
+    borderSide: const BorderSide(color: _errorColor, width: 2),
+  );
 
   final _formKey = GlobalKey<FormState>();
   final _emailCtrl = TextEditingController();
@@ -152,6 +168,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
                         labelText: '電子郵件',
+                        labelStyle: _labelStyle,
+                        floatingLabelStyle: _floatingLabelStyle,
                         filled: false,
                         prefixIcon:
                             const Icon(Icons.email_outlined, color: _brown),
@@ -168,6 +186,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           borderRadius: BorderRadius.circular(14),
                           borderSide: const BorderSide(color: _brown, width: 2),
                         ),
+                        errorBorder: _errorBorder,
+                        focusedErrorBorder: _focusedErrorBorder,
                       ),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return '請輸入電子郵件';
@@ -183,6 +203,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       obscureText: _obscurePassword,
                       decoration: InputDecoration(
                         labelText: '密碼',
+                        labelStyle: _labelStyle,
+                        floatingLabelStyle: _floatingLabelStyle,
                         filled: false,
                         prefixIcon:
                             const Icon(Icons.lock_outline, color: _brown),
@@ -209,6 +231,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           borderRadius: BorderRadius.circular(14),
                           borderSide: const BorderSide(color: _brown, width: 2),
                         ),
+                        errorBorder: _errorBorder,
+                        focusedErrorBorder: _focusedErrorBorder,
                       ),
                       validator: (v) {
                         if (v == null || v.isEmpty) return '請輸入密碼';

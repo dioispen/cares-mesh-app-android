@@ -135,4 +135,5 @@ Dart 套件的完整清單與版本見 [`flutter_ui/pubspec.yaml`](flutter_ui/pu
 
 ## 6. 已知的待處理事項
 
-- `app/src/main/res/values/strings.xml` 的 `app_name` 已改為 `cares-mesh-app`，但 `settings.gradle.kts` 的 `rootProject.name` 仍為 `bitchat-android`，`applicationId` 仍為 `com.bitchat.droid`，各語系 `values-*/strings.xml` 的 `app_name` 也仍為 `bitchat`。GPLv3 §7(c) 允許上游要求修改版明確與原版區別；在對外散布前應改為本專案自己的名稱與 application ID，避免與上游 bitchat 混淆。
+- [x] Launcher 顯示名稱：`app/src/main/res/values/strings.xml` 的 `app_name` 為 `cares-mesh-app`，各語系 `values-*/strings.xml` 不再覆寫 `app_name`，一律回落到預設值，所有語系的裝置上都顯示 `cares-mesh-app`（#25）。
+- [ ] 安裝識別：`settings.gradle.kts` 的 `rootProject.name` 仍為 `bitchat-android`，`applicationId` 仍為 `com.bitchat.droid`。GPLv3 §7(c) 允許上游要求修改版明確與原版區別；在對外散布前應改為本專案自己的名稱與 application ID，避免與上游 bitchat 混淆。注意：更換 `applicationId` 會被 Android 視為另一個 App，已安裝的使用者不會收到更新，需在該次變更中明講。
