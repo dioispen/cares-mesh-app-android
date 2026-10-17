@@ -3,6 +3,7 @@ package com.bitchat.android.mesh
 import android.bluetooth.*
 import android.content.Context
 import android.util.Log
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import kotlinx.coroutines.*
@@ -17,7 +18,8 @@ import kotlinx.coroutines.flow.combine
 class BluetoothConnectionManager(
     private val context: Context, 
     private val myPeerID: String,
-    private val fragmentManager: FragmentManager? = null
+    private val fragmentManager: FragmentManager? = null,
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
 ) {
     
     companion object {
@@ -37,8 +39,8 @@ class BluetoothConnectionManager(
     
     // Component managers
     private val permissionManager = BluetoothPermissionManager(context)
-    private val connectionTracker = BluetoothConnectionTracker(connectionScope, powerManager)
-    private val packetBroadcaster = BluetoothPacketBroadcaster(connectionScope, connectionTracker, fragmentManager, myPeerID)
+    private val connectionTracker = BluetoothConnectionTracker(connectionScope, powerManager, experimentRecorder)
+    private val packetBroadcaster = BluetoothPacketBroadcaster(connectionScope, connectionTracker, fragmentManager, myPeerID, experimentRecorder)
     
     // Delegate for component managers to call back to main manager
     private val componentDelegate = object : BluetoothConnectionManagerDelegate {
@@ -89,7 +91,7 @@ class BluetoothConnectionManager(
         context, connectionScope, connectionTracker, permissionManager, powerManager, componentDelegate, myPeerID
     )
     private val clientManager = BluetoothGattClientManager(
-        context, connectionScope, connectionTracker, permissionManager, powerManager, componentDelegate
+        context, connectionScope, connectionTracker, permissionManager, powerManager, componentDelegate, experimentRecorder
     )
     
     // Service state
@@ -338,7 +340,10 @@ class BluetoothConnectionManager(
      * Automatically fragments large packets to fit within BLE MTU limits
      */
     fun broadcastPacket(routed: RoutedPacket): Boolean {
-        if (!isActive || !isBleTransportEnabled()) return false
+        if (!isActive || !isBleTransportEnabled()) {
+            experimentRecorder.onBroadcastDropped(routed.packet)
+            return false
+        }
 
         return packetBroadcaster.broadcastPacket(
             routed,

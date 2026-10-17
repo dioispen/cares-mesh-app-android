@@ -440,8 +440,8 @@ class MeshCore(
         }
 
         packetProcessor.delegate = object : PacketProcessorDelegate {
-            override fun validatePacketSecurity(packet: BitchatPacket, peerID: String): Boolean {
-                return securityManager.validatePacket(packet, peerID)
+            override fun validatePacketSecurity(routed: RoutedPacket): Boolean {
+                return securityManager.validatePacket(routed.packet, routed.peerID ?: "unknown")
             }
 
             override fun updatePeerLastSeen(peerID: String) {

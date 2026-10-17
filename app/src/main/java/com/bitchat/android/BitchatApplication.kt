@@ -14,6 +14,10 @@ class BitchatApplication : Application() {
         // Start the single process-wide power policy before transport components are constructed.
         com.bitchat.android.mesh.PowerManager.getInstance(this).start()
 
+        // Field-experiment instrumentation (#70) must be in place before the mesh service builds
+        // its components. Debug builds only; the release ExperimentTools does nothing.
+        com.bitchat.android.experiment.ExperimentTools.install(this)
+
         // NOTE: upstream also initialises Tor (ArtiTorManager), the Nostr relay directory and
         // LocationNotes here. CARES runs mesh-only with a Firebase uplink, so those stay detached.
 

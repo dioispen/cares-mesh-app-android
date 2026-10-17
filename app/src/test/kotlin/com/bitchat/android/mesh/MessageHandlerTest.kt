@@ -299,6 +299,22 @@ class MessageHandlerTest {
     }
 
     @Test
+    fun `field-experiment health report is not shown as a real report`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val toFlutter = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { toFlutter += it }
+        InboundPacketBridge.addListener(listener)
+        try {
+            handler.handleMessage(RoutedPacket(healthReportPacket(reporterHandle = "ee0000000003"), peerID, "direct-link"))
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+
+        verify(delegate, never()).onMessageReceived(any())
+        assertTrue(toFlutter.isEmpty())
+    }
+
+    @Test
     fun `encrypted prerelease iOS Noise 0x09 private media is delivered`() {
         runBlocking {
             val file = BitchatFilePacket(
@@ -568,21 +584,24 @@ class MessageHandlerTest {
         lastSeen = System.currentTimeMillis()
     )
 
-    private fun healthReportData(): ByteArray = HealthReportPayload.fromLocation(
-        reporterHandle = "abcdef012345",
+    private fun healthReportData(reporterHandle: String = "abcdef012345"): ByteArray = HealthReportPayload.fromLocation(
+        reporterHandle = reporterHandle,
         status = HealthStatus.SAFE,
         lat = null,
         lng = null,
         reportTimeMillis = 1_700_000_000_000L
     ).encode()
 
-    private fun healthReportPacket(tag: Byte = BroadcastContentTag.HEALTH_REPORT.value): BitchatPacket {
+    private fun healthReportPacket(
+        tag: Byte = BroadcastContentTag.HEALTH_REPORT.value,
+        reporterHandle: String = "abcdef012345"
+    ): BitchatPacket {
         return BitchatPacket(
             version = 1u,
             type = MessageType.HEALTH_REPORT.value,
             senderID = peerID.hexToBytes(),
             timestamp = System.currentTimeMillis().toULong(),
-            payload = byteArrayOf(tag) + healthReportData(),
+            payload = byteArrayOf(tag) + healthReportData(reporterHandle),
             signature = signature,
             ttl = 7u
         )
