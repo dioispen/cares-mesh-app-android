@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../models/chat_suggestions.dart';
 import '../services/chat_service.dart';
+import '../services/mascot_service.dart';
 import 'chat_message_tile.dart';
 
 /// 聊天輸入區：輸入列，加上公開聊天室的 `/` 指令與 `@` 提及補完清單（公開聊天室與私訊畫面共用）。
@@ -202,45 +203,56 @@ class _ChatComposerState extends State<ChatComposer> {
         children: [
           if (widget.withSuggestions)
             constraints.hasBoundedHeight ? Flexible(child: _suggestionsPanel()) : _suggestionsPanel(),
-          Container(
-            color: ChatPalette.card,
-            padding: const EdgeInsets.fromLTRB(14, 10, 100, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    enabled: widget.enabled,
-                    style: const TextStyle(fontSize: 14, color: ChatPalette.textPrimary),
-                    decoration: InputDecoration(
-                      hintText: widget.hintText,
-                      hintStyle: const TextStyle(color: ChatPalette.textSecondary, fontSize: 14),
-                      filled: true,
-                      fillColor: ChatPalette.bg,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
+          // 右側只在小助理實際顯示時（設定裡開著、這一頁有選項）讓出位置給它，關掉時輸入框延伸到右邊。
+          // 整列算在輸入框內：按送出不會收起鍵盤，點訊息列表等其他地方才會（onTapOutside）。
+          TextFieldTapRegion(
+            child: ListenableBuilder(
+              listenable: Listenable.merge([mascotEnabledNotifier, mascotOptionsNotifier]),
+              builder: (context, row) => Container(
+                color: ChatPalette.card,
+                padding: EdgeInsets.fromLTRB(
+                    14, 10, mascotEnabledNotifier.value && mascotOptionsNotifier.value.isNotEmpty ? 100 : 14, 10),
+                child: row,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      enabled: widget.enabled,
+                      style: const TextStyle(fontSize: 14, color: ChatPalette.textPrimary),
+                      decoration: InputDecoration(
+                        hintText: widget.hintText,
+                        hintStyle: const TextStyle(color: ChatPalette.textSecondary, fontSize: 14),
+                        filled: true,
+                        fillColor: ChatPalette.bg,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      onChanged: _onInputChanged,
+                      onSubmitted: (_) => _sendMessage(),
+                      // 點聊天室其他地方（例如訊息列表）收起鍵盤。
+                      onTapOutside: (_) => FocusScope.of(context).unfocus(),
                     ),
-                    onChanged: _onInputChanged,
-                    onSubmitted: (_) => _sendMessage(),
                   ),
-                ),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  onTap: _sendMessage,
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: widget.enabled ? ChatPalette.accent : ChatPalette.divider,
-                      shape: BoxShape.circle,
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: _sendMessage,
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: widget.enabled ? ChatPalette.accent : ChatPalette.divider,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
                     ),
-                    child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
