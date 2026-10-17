@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../models/profile_validation.dart';
 import '../services/auth_service.dart';
+import '../widgets/user_avatar.dart';
 import 'verify_email_screen.dart';
 import 'login_screen.dart';
 
@@ -35,6 +37,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _phoneCtrl = TextEditingController();
   final _areaCtrl = TextEditingController();
   final _step1Key = GlobalKey<FormState>();
+  String _avatar = avatarPresets.first.id;
+  String? _avatarPhoto;
+
+  Future<void> _pickAvatarPhoto() async {
+    final result = await pickAvatarPhoto();
+    if (!mounted) return;
+    // 註冊頁沒有疊 sheet，SnackBar 看得到。
+    if (result.error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(result.error!),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+      ));
+    }
+    final photo = result.photo;
+    if (photo == null) return;
+    setState(() {
+      _avatarPhoto = photo;
+      _avatar = photoAvatarId;
+    });
+  }
 
   // Step 2：緊急聯絡人
   final _ecNameCtrl = TextEditingController();
@@ -113,6 +136,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         bloodType: _bloodType,
         medicalInfo: _medicalCtrl.text.trim().isEmpty ? null : _medicalCtrl.text.trim(),
         registeredAt: DateTime.now(),
+        avatar: _avatar,
+        avatarPhoto: _avatar == photoAvatarId ? _avatarPhoto : null,
       );
 
       final prefs = await SharedPreferences.getInstance();
@@ -168,13 +193,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 鍵盤打開時（Android 的鍵盤約佔半個螢幕），上方標題與下方次要按鈕都固定不捲動，
+    // 若不收起來，中間的表單只剩一欄高，下一個輸入框會被「下一步」蓋住。
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
         child: Column(
           children: [
             // ── 頂部進度列 ──
-            _StepHeader(currentStep: _currentStep),
+            _StepHeader(currentStep: _currentStep, compact: keyboardOpen),
 
             // ── 頁面內容 ──
             Expanded(
@@ -192,6 +221,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     nameCtrl: _nameCtrl,
                     phoneCtrl: _phoneCtrl,
                     areaCtrl: _areaCtrl,
+                    avatar: _avatar,
+                    avatarPhoto: _avatarPhoto,
+                    onAvatarChanged: (v) => setState(() => _avatar = v),
+                    onPickAvatarPhoto: _pickAvatarPhoto,
                   ),
                   _Step2EmergencyContact(
                     formKey: _step2Key,
@@ -210,12 +243,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
             // ── 底部按鈕 ──
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              padding: EdgeInsets.fromLTRB(24, keyboardOpen ? 8 : 0, 24, keyboardOpen ? 10 : 24),
               child: Column(
                 children: [
                   SizedBox(
                     width: double.infinity,
-                    height: 52,
+                    height: keyboardOpen ? 46 : 52,
                     child: ElevatedButton(
                       onPressed: _isSaving ? null : _nextStep,
                       style: ElevatedButton.styleFrom(
@@ -236,14 +269,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             ),
                     ),
                   ),
-                  if (_currentStep > 0) ...[
+                  // 打字時只留「下一步」，其他次要按鈕等鍵盤收起再出現。
+                  if (_currentStep > 0 && !keyboardOpen) ...[
                     const SizedBox(height: 10),
                     TextButton(
                       onPressed: _prevStep,
                       child: const Text('返回上一步', style: TextStyle(color: _textSecondary)),
                     ),
                   ],
-                  if (_currentStep == 3) ...[
+                  if (_currentStep == 3 && !keyboardOpen) ...[
                     const SizedBox(height: 4),
                     TextButton(
                       onPressed: _isSaving ? null : _submit,
@@ -251,25 +285,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           style: TextStyle(color: _textSecondary.withAlpha(178), fontSize: 13)),
                     ),
                   ],
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('已有帳號？',
-                          style: TextStyle(color: _textSecondary, fontSize: 14)),
-                      TextButton(
-                        onPressed: _isSaving
-                            ? null
-                            : () => Navigator.of(context).pushReplacement(
-                                  MaterialPageRoute(
-                                      builder: (_) => const LoginScreen()),
-                                ),
-                        child: const Text('返回登入',
-                            style: TextStyle(
-                                color: _brown, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  ),
+                  if (!keyboardOpen) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text('已有帳號？',
+                            style: TextStyle(color: _textSecondary, fontSize: 14)),
+                        TextButton(
+                          onPressed: _isSaving
+                              ? null
+                              : () => Navigator.of(context).pushReplacement(
+                                    MaterialPageRoute(
+                                        builder: (_) => const LoginScreen()),
+                                  ),
+                          child: const Text('返回登入',
+                              style: TextStyle(
+                                  color: _brown, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -283,7 +319,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
 // ── 步驟標題列 ───────────────────────────────────────────
 class _StepHeader extends StatelessWidget {
   final int currentStep;
-  const _StepHeader({required this.currentStep});
+
+  /// 鍵盤打開時收起標題列、縮小留白，只留步驟進度。
+  final bool compact;
+  const _StepHeader({required this.currentStep, this.compact = false});
 
   static const _steps = ['帳號', '基本資料', '緊急聯絡', '健康資訊'];
   static const _icons = [Icons.vpn_key_rounded, Icons.person_rounded, Icons.contact_phone_rounded, Icons.favorite_rounded];
@@ -294,20 +333,23 @@ class _StepHeader extends StatelessWidget {
     const green = Color(0xFF7AA67A);
     const textSecondary = Color(0xFF8C7B6E);
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 200),
+      padding: EdgeInsets.fromLTRB(24, compact ? 8 : 20, 24, compact ? 6 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Image.asset('assets/images/mascot_hi.png', width: 32, height: 32),
-              const SizedBox(width: 8),
-              const Text('防災 APP 註冊',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: brown)),
-            ],
-          ),
-          const SizedBox(height: 20),
+          if (!compact) ...[
+            Row(
+              children: [
+                Image.asset('assets/images/mascot_hi.png', width: 32, height: 32),
+                const SizedBox(width: 8),
+                const Text('防災 APP 註冊',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: brown)),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
           Row(
             children: List.generate(_steps.length, (i) {
               final isDone = i < currentStep;
@@ -418,7 +460,20 @@ class _Step0Account extends StatelessWidget {
 class _Step1BasicInfo extends StatelessWidget {
   final GlobalKey<FormState> formKey;
   final TextEditingController nameCtrl, phoneCtrl, areaCtrl;
-  const _Step1BasicInfo({required this.formKey, required this.nameCtrl, required this.phoneCtrl, required this.areaCtrl});
+  final String avatar;
+  final String? avatarPhoto;
+  final ValueChanged<String> onAvatarChanged;
+  final VoidCallback onPickAvatarPhoto;
+  const _Step1BasicInfo({
+    required this.formKey,
+    required this.nameCtrl,
+    required this.phoneCtrl,
+    required this.areaCtrl,
+    required this.avatar,
+    required this.avatarPhoto,
+    required this.onAvatarChanged,
+    required this.onPickAvatarPhoto,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -430,13 +485,26 @@ class _Step1BasicInfo extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const _SectionTitle('基本個人資料', '管理端在緊急狀況時將透過此資料聯繫你'),
+            const SizedBox(height: 20),
+            const Text('選一個大頭貼',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF3D2C1E))),
+            const SizedBox(height: 4),
+            const Text('可以用自己的照片，之後也能在個人資料裡更換',
+                style: TextStyle(fontSize: 12, color: Color(0xFF8C7B6E))),
+            const SizedBox(height: 12),
+            AvatarPicker(
+              selectedId: avatar,
+              onSelected: onAvatarChanged,
+              photo: avatarPhoto,
+              onPickPhoto: onPickAvatarPhoto,
+            ),
             const SizedBox(height: 24),
             _InputField(
               label: '姓名',
               controller: nameCtrl,
               hint: '例：王小明',
               icon: Icons.person_outline_rounded,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入姓名' : null,
+              validator: ProfileValidation.name,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -445,12 +513,8 @@ class _Step1BasicInfo extends StatelessWidget {
               hint: '例：0912-345-678',
               icon: Icons.phone_outlined,
               keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d\-]'))],
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return '請輸入手機號碼';
-                if (v.replaceAll('-', '').length < 9) return '手機號碼格式不正確';
-                return null;
-              },
+              inputFormatters: [FilteringTextInputFormatter.allow(ProfileValidation.phoneCharacters)],
+              validator: ProfileValidation.phone,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -458,7 +522,7 @@ class _Step1BasicInfo extends StatelessWidget {
               controller: areaCtrl,
               hint: '例：南投縣埔里鎮',
               icon: Icons.location_on_outlined,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入居住區域' : null,
+              validator: ProfileValidation.area,
             ),
           ],
         ),
@@ -489,7 +553,7 @@ class _Step2EmergencyContact extends StatelessWidget {
               controller: nameCtrl,
               hint: '例：王大明',
               icon: Icons.person_outline_rounded,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入聯絡人姓名' : null,
+              validator: ProfileValidation.emergencyContactName,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -498,12 +562,8 @@ class _Step2EmergencyContact extends StatelessWidget {
               hint: '例：0923-456-789',
               icon: Icons.phone_outlined,
               keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d\-]'))],
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return '請輸入聯絡人電話';
-                if (v.replaceAll('-', '').length < 9) return '電話號碼格式不正確';
-                return null;
-              },
+              inputFormatters: [FilteringTextInputFormatter.allow(ProfileValidation.phoneCharacters)],
+              validator: ProfileValidation.emergencyContactPhone,
             ),
             const SizedBox(height: 16),
             _InputField(
@@ -511,7 +571,7 @@ class _Step2EmergencyContact extends StatelessWidget {
               controller: relationCtrl,
               hint: '例：父親、配偶、朋友',
               icon: Icons.people_outline_rounded,
-              validator: (v) => (v == null || v.trim().isEmpty) ? '請輸入與你的關係' : null,
+              validator: ProfileValidation.emergencyContactRelation,
             ),
           ],
         ),
@@ -532,8 +592,6 @@ class _Step3HealthInfo extends StatelessWidget {
     required this.onBloodTypeChanged,
   });
 
-  static const _bloodTypes = ['A 型', 'B 型', 'O 型', 'AB 型', '不清楚'];
-
   @override
   Widget build(BuildContext context) {
     const green = Color(0xFF7AA67A);
@@ -553,7 +611,7 @@ class _Step3HealthInfo extends StatelessWidget {
           const SizedBox(height: 10),
           Wrap(
             spacing: 10,
-            children: _bloodTypes.map((bt) {
+            children: ProfileValidation.bloodTypes.map((bt) {
               final selected = bloodType == bt;
               return GestureDetector(
                 onTap: () => onBloodTypeChanged(selected ? null : bt),

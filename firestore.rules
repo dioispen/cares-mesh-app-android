@@ -2,7 +2,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 救援者身分的唯一依據：rescuers/{uid} 文件存在與否。
+    // Verified Rescuer（經過額外認證的救援者，見 CONTEXT.md）的唯一依據：
+    // rescuers/{uid} 文件存在與否。一般 Rescuer 不需要認證，任何人都能接互助任務；
+    // 只有讀取 Sensitive Tier 需要這個身分（ADR-0005）。
     //
     // 刻意不放在 users/{uid} 的 role 欄位——使用者本來就能寫自己的 users 文件，
     // 把角色放在那裡等於讓人自我提權。rescuers 對客戶端一律唯讀，只能由後台
@@ -12,33 +14,114 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/rescuers/$(request.auth.uid));
     }
 
+    function isNonNegativeInt(value) {
+      return value is int && value >= 0;
+    }
+
+    function isOwner(userId) {
+      return request.auth != null && userId == request.auth.uid;
+    }
+
     match /rescuers/{uid} {
-      // 只能查自己是不是救援者；名單本身不外流。
+      // 只能查自己是不是 Verified Rescuer；名單本身不外流。
       allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
 
-    // health_reports: 文件是 Reporter 對後端自願揭露的完整 Health Report，內容涵蓋
-    // Detail Tier 的全部欄位（姓名、電話、血型、精確座標、自由文字），見 CONTEXT.md。
+    // health_reports：Health Report 的 Detail Tier（ADR-0005）——姓名、居住區域、Status 與
+    // 傷勢細項、精確座標、回報時間，以及互助任務的 taskStatus／helperId。文件 ID 是
+    // Reporter 的 uid，一人一份。
     //
-    // 只有 Reporter 本人與救援者可讀（issue #33）。「有登入」不是授權依據——註冊是
-    // 開放的自助流程，任何人都能取得帳號。一般使用者要看附近的求救，走的是 BLE 的
-    // Broadcast Tier，不是這裡。
-    // NOTE: 這條路徑是對「全體救援者」整批開放，比 CONTEXT.md 對 Detail Tier 的
-    //       「逐一請求、經 secure session 釋出」寬鬆；兩條揭露路徑並存是既有設計。
+    // 任何登入帳號都能讀：互助任務要讓附近的人知道誰需要幫忙、在哪裡，才能趕過去。
+    // 這是刻意的決定（ADR-0005），取代 issue #33 對這份文件「只給本人與救援者」的限制。
+    // 電話、血型、病史、緊急聯絡人屬於 Sensitive Tier，放在 health_report_sensitive；
+    // 這裡的 create／update 用 keys().hasOnly() 擋住，不能誤寫進大家都讀得到的文件。
     match /health_reports/{docId} {
-      allow read: if isRescuer()
-                  || (request.auth != null
-                      && resource.data.reporterId == request.auth.uid);
+      // 任務狀態欄位缺席時一律視為「等待中／無人認領」，讓規則能相容
+      // 還沒有 taskStatus 的文件。
+      function curStatus() { return resource.data.get('taskStatus', 'waiting'); }
+      function newStatus() { return request.resource.data.get('taskStatus', 'waiting'); }
+      function curHelper() { return resource.data.get('helperId', null); }
+      function newHelper() { return request.resource.data.get('helperId', null); }
+      function detailTierKeys() {
+        return ['id', 'reporterId', 'name', 'area', 'status', 'description',
+                'lat', 'lng', 'reportTime', 'taskStatus', 'helperId'];
+      }
+
+      allow read: if request.auth != null;
+      // 一人一筆：文件 ID 必須是自己的 uid。只檢查 reporterId 的話，任何人都能先建立
+      // health_reports/{別人的 uid}，讓對方之後的 set() 變成「改別人的文件」而一直被擋。
+      // 舊版 App 用 add() 產生隨機 ID，會因此無法再新增回報。
       allow create: if request.auth != null
-                    && request.resource.data.reporterId == request.auth.uid;
-      // 救援者身分只放寬讀取，不能竄改或刪除他人的回報。
-      // update 不得改動 reporterId：轉手給他人等於把讀取權交給對方。
+                    && docId == request.auth.uid
+                    && request.resource.data.reporterId == request.auth.uid
+                    && request.resource.data.keys().hasOnly(detailTierKeys());
+      // update 不得改動 reporterId：轉手給他人等於把這份回報和它的 Sensitive Tier
+      // 讀取權交給對方。
       allow update: if request.auth != null
                     && resource.data.reporterId == request.auth.uid
-                    && request.resource.data.reporterId == resource.data.reporterId;
+                    && request.resource.data.reporterId == resource.data.reporterId
+                    && request.resource.data.keys().hasOnly(detailTierKeys());
       allow delete: if request.auth != null
                     && resource.data.reporterId == request.auth.uid;
+
+      // 互助任務狀態：協助者不是回報者，卻必須能改動「別人的文件」才能認領任務。
+      //
+      // 這裡不能放寬成整份文件可寫——姓名、傷勢、座標都在同一份文件裡。
+      // 因此比照 supply_items 的 pledgedQty 做欄位層級限制：只開放 taskStatus 與
+      // helperId 兩個欄位，其餘一律不可竄改。
+      //
+      // 狀態機同時擋掉三種搗亂：搶走別人已認領的任務、冒名把 helperId 填成第三人、
+      // 把任務從「已完成」翻回去。認領不需要救援者認證；沒認證的協助者一樣能接任務，
+      // 只是讀不到 Sensitive Tier。
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['taskStatus', 'helperId'])
+                    && (
+                         // 認領：等待中 → 已接受，且只能把自己填為協助者
+                         (curStatus() == 'waiting'
+                          && newStatus() == 'accepted'
+                          && newHelper() == request.auth.uid)
+                         // 完成：已接受 → 已完成，限當初認領的本人
+                         || (curStatus() == 'accepted'
+                             && newStatus() == 'done'
+                             && curHelper() == request.auth.uid
+                             && newHelper() == request.auth.uid)
+                         // 放棄：已接受 → 等待中，限本人，並且要把 helperId 清掉
+                         || (curStatus() == 'accepted'
+                             && newStatus() == 'waiting'
+                             && curHelper() == request.auth.uid
+                             && newHelper() == null)
+                       );
+    }
+
+    // health_report_sensitive：Health Report 的 Sensitive Tier（ADR-0005）——電話、血型、
+    // 病史、緊急聯絡人。文件 ID 是 Reporter 的 uid，與 health_reports/{uid} 一對一。
+    //
+    // 只有兩種人讀得到：
+    //   1. Reporter 本人。
+    //   2. 經過認證的救援者（rescuers 名單，只能由後台授予），而且此刻正接著這位
+    //      Reporter 的互助任務：health_reports/{uid} 的 taskStatus 是 accepted、
+    //      helperId 是自己。放棄或完成任務之後就讀不到了。
+    // NOTE: 規則只能擋之後的讀取，已經讀到協助者手機上的內容收不回來。
+    match /health_report_sensitive/{uid} {
+      function task() {
+        return get(/databases/$(database)/documents/health_reports/$(uid)).data;
+      }
+
+      allow read: if request.auth != null
+                  && (uid == request.auth.uid
+                      || (isRescuer()
+                          && task().get('taskStatus', 'waiting') == 'accepted'
+                          && task().get('helperId', null) == request.auth.uid));
+      allow create, update: if request.auth != null
+                            && uid == request.auth.uid
+                            && request.resource.data.reporterId == request.auth.uid
+                            && request.resource.data.keys().hasOnly(
+                                 ['reporterId', 'phone', 'bloodType', 'medicalInfo',
+                                  'emergencyContactName', 'emergencyContactPhone',
+                                  'emergencyContactRelation']);
+      allow delete: if request.auth != null && uid == request.auth.uid;
     }
 
     // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS
@@ -57,48 +140,111 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // supply_items: 共用的物資型錄，「沒有擁有者」。
-    //
-    // 這裡不能做擁有者比對：認領流程（supply_screen.dart 的 _showPledgeSheet）
-    // 會讓「別人建立的物資」被其他使用者更新已認領總量：
-    //     itemRef.update({'pledgedQty': FieldValue.increment(qty)})
-    // 加上擁有者檢查會讓整個認領功能失效（見 issue #34 的更正留言）。
-    //
-    // 因此改用「欄位層級限制」：只允許改動 pledgedQty，其餘欄位不可竄改。
+    // supply_items 是所有使用者共用的型錄；套用欄位限制而非擁有者限制，
+    // 讓使用者能在任何物資上登記需求或捐贈，但不能竄改描述欄位。
     match /supply_items/{docId} {
       allow read: if request.auth != null;
 
-      // create 目前僅供客戶端種子寫入使用（_initSupplyItems() 在 collection
-      // 為空時批次寫入 _seedItems）。限定欄位組成與型別，pledgedQty 必須從 0 起算。
-      // NOTE: 由客戶端寫入共用型錄的種子資料本身是設計問題，另案處理。
+      // 客戶端在型錄為空時寫入固定種子；不可藉由種子資料偽造需求或捐贈總量。
       allow create: if request.auth != null
                     && request.resource.data.keys().hasOnly(
-                         ['name', 'unit', 'category', 'neededQty', 'pledgedQty'])
+                         ['name', 'unit', 'category', 'inventoryQty',
+                          'totalRequestedQty', 'totalPledgedQty'])
                     && request.resource.data.keys().hasAll(
-                         ['name', 'unit', 'category', 'neededQty', 'pledgedQty'])
+                         ['name', 'unit', 'category', 'inventoryQty',
+                          'totalRequestedQty', 'totalPledgedQty'])
                     && request.resource.data.name is string
                     && request.resource.data.unit is string
                     && request.resource.data.category is string
-                    && request.resource.data.neededQty is int
-                    && request.resource.data.neededQty >= 0
-                    && request.resource.data.pledgedQty == 0;
+                    && isNonNegativeInt(request.resource.data.inventoryQty)
+                    && request.resource.data.totalRequestedQty == 0
+                    && request.resource.data.totalPledgedQty == 0;
 
-      // update 只允許改動已認領總量，其餘欄位（名稱、單位、分類、需求量）不可被竄改。
+      // 需求／捐贈登記會以 increment 更新共用計數；其餘欄位及負數計數不可寫入。
       allow update: if request.auth != null
                     && request.resource.data.diff(resource.data)
-                         .affectedKeys().hasOnly(['pledgedQty'])
-                    && request.resource.data.pledgedQty is int
-                    && request.resource.data.pledgedQty >= 0;
+                         .affectedKeys().hasOnly(
+                           ['inventoryQty', 'totalRequestedQty', 'totalPledgedQty'])
+                    && isNonNegativeInt(request.resource.data.inventoryQty)
+                    && isNonNegativeInt(request.resource.data.totalRequestedQty)
+                    && isNonNegativeInt(request.resource.data.totalPledgedQty);
 
-      // delete 在程式碼中找不到任何呼叫端，一律禁止。
       allow delete: if false;
     }
 
-    // pledges: 認領紀錄，有 userId 欄位，比照 sos_requests 做擁有者比對。
+    // 申請與捐贈紀錄含有個人識別資料；使用者只能讀寫自己的紀錄。
+    match /supply_requests/{requestId} {
+      allow read: if isOwner(resource.data.userId);
+
+      allow create: if isOwner(request.resource.data.userId)
+                    && request.resource.data.keys().hasOnly(
+                         ['userId', 'userName', 'itemId', 'itemName',
+                          'unit', 'quantity', 'status', 'createdAt'])
+                    && request.resource.data.keys().hasAll(
+                         ['userId', 'userName', 'itemId', 'itemName',
+                          'unit', 'quantity', 'status', 'createdAt'])
+                    && request.resource.data.userName is string
+                    && request.resource.data.itemId is string
+                    && request.resource.data.itemName is string
+                    && request.resource.data.unit is string
+                    && request.resource.data.quantity is int
+                    && request.resource.data.quantity > 0
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.createdAt is timestamp;
+
+      allow update: if isOwner(resource.data.userId)
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.itemId == resource.data.itemId
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['quantity', 'status', 'updatedAt'])
+                    && request.resource.data.keys().hasOnly(
+                         ['userId', 'userName', 'itemId', 'itemName', 'unit',
+                          'quantity', 'status', 'createdAt', 'updatedAt'])
+                    && request.resource.data.quantity is int
+                    && request.resource.data.quantity > 0
+                    && request.resource.data.status in
+                         ['pending', 'fulfilled', 'cancelled'];
+
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    match /supply_pledges/{pledgeId} {
+      allow read: if isOwner(resource.data.userId);
+
+      allow create: if isOwner(request.resource.data.userId)
+                    && request.resource.data.keys().hasOnly(
+                         ['userId', 'userName', 'itemId', 'itemName',
+                          'unit', 'qty', 'status', 'pledgedAt'])
+                    && request.resource.data.keys().hasAll(
+                         ['userId', 'userName', 'itemId', 'itemName',
+                          'unit', 'qty', 'status', 'pledgedAt'])
+                    && request.resource.data.userName is string
+                    && request.resource.data.itemId is string
+                    && request.resource.data.itemName is string
+                    && request.resource.data.unit is string
+                    && request.resource.data.qty is int
+                    && request.resource.data.qty > 0
+                    && request.resource.data.status == 'pledged'
+                    && request.resource.data.pledgedAt is timestamp;
+
+      allow update: if isOwner(resource.data.userId)
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.itemId == resource.data.itemId
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['qty', 'status', 'updatedAt'])
+                    && request.resource.data.keys().hasOnly(
+                         ['userId', 'userName', 'itemId', 'itemName', 'unit',
+                          'qty', 'status', 'pledgedAt', 'updatedAt'])
+                    && request.resource.data.qty is int
+                    && request.resource.data.qty > 0
+                    && request.resource.data.status in
+                         ['pledged', 'delivered', 'cancelled'];
+
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // 舊版 pledges 路徑保留既有擁有者保護，避免影響尚未遷移的資料。
     match /pledges/{docId} {
-      // NOTE: 目前維持「登入即可讀」。收斂為僅能讀自己的認領紀錄是可行的
-      //       （supply_screen.dart 的查詢已用 where('userId', ...) 限定），
-      //       但不在 issue #34 範圍內，另案處理。
       allow read: if request.auth != null;
 
       allow create: if request.auth != null

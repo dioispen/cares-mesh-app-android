@@ -6,8 +6,8 @@
 //
 // 測試重點：
 //   issue #34
-//   - supply_items：共用型錄，沒有擁有者，只能改 pledgedQty
-//   - pledges：有 userId，只有擁有者能改／刪
+//   - supply_items：共用型錄，沒有擁有者，只能改非負計數欄位
+//   - supply_requests / supply_pledges：只有紀錄擁有者能讀、改、刪
 //   最關鍵的一條是「使用者能認領別人建立的物資」——那是加擁有者檢查最容易弄壞的地方。
 //
 //   issue #33
@@ -35,10 +35,12 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 
 const ALICE = 'uid-alice';
 const BOB = 'uid-bob';
+const CAROL = 'uid-carol';
 const RESCUER = 'uid-rescuer';
 
 let testEnv;
@@ -47,8 +49,9 @@ const seedItem = {
   name: '礦泉水',
   unit: '瓶',
   category: '食品飲水',
-  neededQty: 500,
-  pledgedQty: 0,
+  inventoryQty: 500,
+  totalRequestedQty: 0,
+  totalPledgedQty: 0,
 };
 
 before(async () => {
@@ -86,8 +89,7 @@ beforeEach(async () => {
       id: 'report-alice',
       reporterId: ALICE,
       name: 'Alice',
-      phone: '0912345678',
-      bloodType: 'O',
+      area: '台北市中正區',
       status: '重傷',
       description: '左腿骨折，無法行走',
       lat: 25.0339,
@@ -116,18 +118,21 @@ describe('supply_items', () => {
     await assertFails(getDoc(doc(anonDb(), 'supply_items/water')));
   });
 
-  // ★ 迴歸測試：這是加擁有者檢查會弄壞的行為
-  it('★ 使用者可以在「不是自己建立的」物資上累加 pledgedQty', async () => {
+  // ★ issue #34：共用型錄不可做擁有者比對，否則無法登記他人建立的物資。
+  it('★ 使用者可以在共用物資上累加需求與捐贈計數', async () => {
     await assertSucceeds(
       updateDoc(doc(dbFor(BOB), 'supply_items/water'), {
-        pledgedQty: increment(5),
+        totalRequestedQty: increment(5),
+        totalPledgedQty: increment(3),
       }),
     );
   });
 
-  it('未登入不可累加 pledgedQty', async () => {
+  it('未登入不可更新計數', async () => {
     await assertFails(
-      updateDoc(doc(anonDb(), 'supply_items/water'), { pledgedQty: increment(5) }),
+      updateDoc(doc(anonDb(), 'supply_items/water'), {
+        totalPledgedQty: increment(5),
+      }),
     );
   });
 
@@ -135,29 +140,22 @@ describe('supply_items', () => {
     await assertFails(updateDoc(doc(dbFor(BOB), 'supply_items/water'), { name: '假資料' }));
   });
 
-  it('不可竄改 neededQty', async () => {
-    await assertFails(updateDoc(doc(dbFor(BOB), 'supply_items/water'), { neededQty: 0 }));
-  });
-
-  it('不可在改 pledgedQty 的同時夾帶其他欄位', async () => {
+  it('不可在更新計數時夾帶型錄欄位', async () => {
     await assertFails(
       updateDoc(doc(dbFor(BOB), 'supply_items/water'), {
-        pledgedQty: increment(1),
+        totalPledgedQty: increment(1),
         category: '衣物',
       }),
     );
   });
 
-  it('不可新增未定義的欄位', async () => {
-    await assertFails(updateDoc(doc(dbFor(BOB), 'supply_items/water'), { owner: BOB }));
-  });
-
-  it('pledgedQty 不可設為負數', async () => {
-    await assertFails(updateDoc(doc(dbFor(BOB), 'supply_items/water'), { pledgedQty: -1 }));
-  });
-
-  it('pledgedQty 不可設為非整數', async () => {
-    await assertFails(updateDoc(doc(dbFor(BOB), 'supply_items/water'), { pledgedQty: 'many' }));
+  it('計數不可設為負數或非整數', async () => {
+    await assertFails(
+      updateDoc(doc(dbFor(BOB), 'supply_items/water'), { totalPledgedQty: -1 }),
+    );
+    await assertFails(
+      updateDoc(doc(dbFor(BOB), 'supply_items/water'), { totalRequestedQty: 'many' }),
+    );
   });
 
   it('任何人都不可刪除', async () => {
@@ -165,13 +163,13 @@ describe('supply_items', () => {
     await assertFails(deleteDoc(doc(dbFor(ALICE), 'supply_items/water')));
   });
 
-  it('種子寫入（欄位齊全、pledgedQty 為 0）可以建立', async () => {
+  it('目前 Dart 模型的種子欄位可以建立', async () => {
     await assertSucceeds(setDoc(doc(dbFor(ALICE), 'supply_items/blanket'), {
       ...seedItem,
       name: '毛毯',
       unit: '條',
       category: '生活用品',
-      neededQty: 150,
+      inventoryQty: 150,
     }));
   });
 
@@ -182,22 +180,154 @@ describe('supply_items', () => {
     }));
   });
 
-  it('建立時 pledgedQty 不為 0 會被擋下', async () => {
+  it('建立時不得預填需求或捐贈總量', async () => {
     await assertFails(setDoc(doc(dbFor(ALICE), 'supply_items/evil'), {
       ...seedItem,
-      pledgedQty: 9999,
+      totalRequestedQty: 9999,
+    }));
+    await assertFails(setDoc(doc(dbFor(ALICE), 'supply_items/evil'), {
+      ...seedItem,
+      totalPledgedQty: 9999,
     }));
   });
 
   it('建立時欄位型別錯誤會被擋下', async () => {
     await assertFails(setDoc(doc(dbFor(ALICE), 'supply_items/evil'), {
       ...seedItem,
-      neededQty: '500',
+      inventoryQty: '500',
     }));
   });
 
   it('建立時缺欄位會被擋下', async () => {
     await assertFails(setDoc(doc(dbFor(ALICE), 'supply_items/evil'), { name: '只有名字' }));
+  });
+});
+
+describe('supply_requests', () => {
+  const newRequest = (uid) => ({
+    userId: uid,
+    userName: 'Someone',
+    itemId: 'water',
+    itemName: '礦泉水',
+    unit: '瓶',
+    quantity: 3,
+    status: 'pending',
+    createdAt: serverTimestamp(),
+  });
+
+  it('可以建立自己的物資申請', async () => {
+    await assertSucceeds(
+      setDoc(doc(dbFor(BOB), 'supply_requests/request-bob'), newRequest(BOB)),
+    );
+  });
+
+  it('不可冒用他人 userId 建立申請', async () => {
+    await assertFails(
+      setDoc(doc(dbFor(BOB), 'supply_requests/request-fake'), newRequest(ALICE)),
+    );
+  });
+
+  it('數量必須為正整數，且狀態必須從 pending 開始', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), 'supply_requests/request-zero'), {
+      ...newRequest(BOB),
+      quantity: 0,
+    }));
+    await assertFails(setDoc(doc(dbFor(BOB), 'supply_requests/request-status'), {
+      ...newRequest(BOB),
+      status: 'fulfilled',
+    }));
+  });
+
+  it('建立時不可夾帶未定義欄位', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), 'supply_requests/request-extra'), {
+      ...newRequest(BOB),
+      role: 'admin',
+    }));
+  });
+
+  it('只有擁有者可以讀取、更新或刪除申請', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'supply_requests/request-alice'), newRequest(ALICE));
+    });
+
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), 'supply_requests/request-alice')));
+    await assertFails(getDoc(doc(dbFor(BOB), 'supply_requests/request-alice')));
+    await assertSucceeds(updateDoc(doc(dbFor(ALICE), 'supply_requests/request-alice'), {
+      quantity: 4,
+      status: 'cancelled',
+    }));
+    await assertFails(updateDoc(doc(dbFor(BOB), 'supply_requests/request-alice'), {
+      quantity: 4,
+    }));
+    await assertFails(updateDoc(doc(dbFor(ALICE), 'supply_requests/request-alice'), {
+      userId: BOB,
+    }));
+    await assertSucceeds(deleteDoc(doc(dbFor(ALICE), 'supply_requests/request-alice')));
+    await assertFails(deleteDoc(doc(dbFor(BOB), 'supply_requests/request-alice')));
+  });
+});
+
+describe('supply_pledges', () => {
+  const newSupplyPledge = (uid) => ({
+    userId: uid,
+    userName: 'Someone',
+    itemId: 'water',
+    itemName: '礦泉水',
+    unit: '瓶',
+    qty: 3,
+    status: 'pledged',
+    pledgedAt: serverTimestamp(),
+  });
+
+  it('可以建立自己的物資認領', async () => {
+    await assertSucceeds(
+      setDoc(doc(dbFor(BOB), 'supply_pledges/pledge-bob'), newSupplyPledge(BOB)),
+    );
+  });
+
+  it('不可冒用他人 userId 建立認領', async () => {
+    await assertFails(
+      setDoc(doc(dbFor(BOB), 'supply_pledges/pledge-fake'), newSupplyPledge(ALICE)),
+    );
+  });
+
+  it('數量必須為正整數，且狀態必須從 pledged 開始', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), 'supply_pledges/pledge-zero'), {
+      ...newSupplyPledge(BOB),
+      qty: 0,
+    }));
+    await assertFails(setDoc(doc(dbFor(BOB), 'supply_pledges/pledge-status'), {
+      ...newSupplyPledge(BOB),
+      status: 'delivered',
+    }));
+  });
+
+  it('建立時不可夾帶未定義欄位', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), 'supply_pledges/pledge-extra'), {
+      ...newSupplyPledge(BOB),
+      role: 'admin',
+    }));
+  });
+
+  it('只有擁有者可以讀取、更新或刪除認領', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'supply_pledges/pledge-alice'), newSupplyPledge(ALICE));
+    });
+
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), 'supply_pledges/pledge-alice')));
+    await assertFails(getDoc(doc(dbFor(BOB), 'supply_pledges/pledge-alice')));
+    await assertSucceeds(updateDoc(doc(dbFor(ALICE), 'supply_pledges/pledge-alice'), {
+      qty: 4,
+      status: 'delivered',
+    }));
+    await assertFails(updateDoc(doc(dbFor(BOB), 'supply_pledges/pledge-alice'), {
+      qty: 4,
+    }));
+    await assertFails(updateDoc(doc(dbFor(ALICE), 'supply_pledges/pledge-alice'), {
+      userId: BOB,
+    }));
+    await assertSucceeds(deleteDoc(doc(dbFor(ALICE), 'supply_pledges/pledge-alice')));
+    await assertFails(deleteDoc(doc(dbFor(BOB), 'supply_pledges/pledge-alice')));
   });
 });
 
@@ -275,118 +405,240 @@ describe('pledges', () => {
   });
 });
 
-// 完整認領流程：供給端（supply_items）與認領端（pledges）必須同時成立，
-// 對應 supply_screen.dart `_showPledgeSheet` 的 Future.wait([...])。
-describe('完整認領流程（supply_screen.dart 的實際呼叫）', () => {
-  it('新認領：建立 pledge + 累加他人物資的 pledgedQty', async () => {
+// 對應 supply_screen.dart 的 batch commit，保證紀錄與共用計數可原子寫入。
+describe('物資申請與認領批次流程（supply_screen.dart）', () => {
+  it('申請：建立 supply_requests + 累加 totalRequestedQty', async () => {
     const db = dbFor(BOB);
-    await assertSucceeds(setDoc(doc(db, 'pledges/pledge-bob'), {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'supply_requests/request-bob'), {
       userId: BOB,
       userName: 'Bob',
       itemId: 'water',
       itemName: '礦泉水',
       unit: '瓶',
       quantity: 7,
-      status: 'pledged',
-      pledgedAt: serverTimestamp(),
-    }));
-    await assertSucceeds(
-      updateDoc(doc(db, 'supply_items/water'), { pledgedQty: increment(7) }),
-    );
+      status: 'pending',
+      createdAt: serverTimestamp(),
+    });
+    batch.update(doc(db, 'supply_items/water'), {
+      totalRequestedQty: increment(7),
+    });
+    await assertSucceeds(batch.commit());
   });
 
-  it('修改認領：更新 pledge 數量 + 以差額調整 pledgedQty（差額可為負）', async () => {
-    const db = dbFor(ALICE);
-    await assertSucceeds(updateDoc(doc(db, 'pledges/pledge-alice'), {
-      quantity: 4,
-      updatedAt: serverTimestamp(),
-    }));
-    // 先把總量墊到 10，再以 -6 的差額調整
-    await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await updateDoc(doc(ctx.firestore(), 'supply_items/water'), { pledgedQty: 10 });
+  it('認領：建立 supply_pledges + 累加他人建立物資的 totalPledgedQty', async () => {
+    const db = dbFor(BOB);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'supply_pledges/pledge-bob'), {
+      userId: BOB,
+      userName: 'Bob',
+      itemId: 'water',
+      itemName: '礦泉水',
+      unit: '瓶',
+      qty: 7,
+      status: 'pledged',
+      pledgedAt: serverTimestamp(),
     });
-    await assertSucceeds(
-      updateDoc(doc(db, 'supply_items/water'), { pledgedQty: increment(-6) }),
-    );
+    batch.update(doc(db, 'supply_items/water'), {
+      totalPledgedQty: increment(7),
+    });
+    await assertSucceeds(batch.commit());
   });
 });
 
-describe('health_reports（issue #33：Detail Tier 只給 Reporter 本人與救援者）', () => {
-  const newReport = (uid) => ({
+// ADR-0005：Health Report 在後端分成兩份文件。
+//   health_reports/{uid}            Detail Tier：任何登入帳號都能讀
+//   health_report_sensitive/{uid}   Sensitive Tier：本人，或正接著這筆任務的 Verified Rescuer
+describe('health_reports／health_report_sensitive 分層揭露（ADR-0005）', () => {
+  const detailTier = (uid, extra = {}) => ({
     id: `report-${uid}`,
     reporterId: uid,
     name: 'Someone',
-    phone: '0900000000',
-    bloodType: null,
-    status: '輕傷',
-    description: null,
+    area: '台北市中正區',
+    status: '重傷',
+    description: '骨折',
     lat: 25.0,
     lng: 121.5,
-    reportTime: new Date().toISOString(),
+    reportTime: '2026-10-12T10:00:00.000Z',
+    ...extra,
+  });
+  const sensitiveTier = (uid) => ({
+    reporterId: uid,
+    phone: '0912345678',
+    bloodType: 'O',
+    medicalInfo: '盤尼西林過敏',
+    emergencyContactName: '王大明',
+    emergencyContactPhone: '0987654321',
+    emergencyContactRelation: '父親',
+  });
+  const seed = async (uid, extra = {}) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${uid}`), detailTier(uid, extra));
+      await setDoc(doc(ctx.firestore(), `health_report_sensitive/${uid}`), sensitiveTier(uid));
+    });
+  };
+  const sensitiveOf = (reader, uid) =>
+    getDoc(doc(dbFor(reader), `health_report_sensitive/${uid}`));
+
+  describe('Detail Tier', () => {
+    it('★ 任何登入帳號都能讀他人的回報', async () => {
+      await seed(ALICE);
+      await assertSucceeds(getDoc(doc(dbFor(BOB), `health_reports/${ALICE}`)));
+    });
+
+    it('★ 任何登入帳號都能列出待救援回報（health_screen 的互助任務查詢）', async () => {
+      await seed(ALICE);
+      await assertSucceeds(getDocs(query(
+        collection(dbFor(BOB), 'health_reports'),
+        where('status', 'in', ['輕傷', '重傷']),
+      )));
+    });
+
+    it('未登入不可讀', async () => {
+      await seed(ALICE);
+      await assertFails(getDoc(doc(anonDb(), `health_reports/${ALICE}`)));
+    });
+
+    it('可以建立自己的回報（文件 ID 是自己的 uid）', async () => {
+      await assertSucceeds(setDoc(doc(dbFor(BOB), `health_reports/${BOB}`), detailTier(BOB)));
+    });
+
+    it('不可冒用他人 reporterId 建立回報', async () => {
+      await assertFails(setDoc(doc(dbFor(BOB), 'health_reports/report-fake'), detailTier(ALICE)));
+    });
+
+    it('★ 建立時不能夾帶 Sensitive Tier 欄位（這份文件大家都讀得到）', async () => {
+      await assertFails(setDoc(doc(dbFor(BOB), `health_reports/${BOB}`), {
+        ...detailTier(BOB),
+        phone: '0900000000',
+      }));
+    });
+
+    it('★ 更新時也不能補上 Sensitive Tier 欄位', async () => {
+      await seed(ALICE);
+      await assertFails(
+        updateDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), { bloodType: 'O' }),
+      );
+    });
+
+    it('Reporter 可更新自己回報的狀態', async () => {
+      await seed(ALICE);
+      await assertSucceeds(
+        updateDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), { status: '輕傷' }),
+      );
+    });
+
+    it('Reporter 不可把自己的回報轉手給他人（會連帶交出 Sensitive Tier 的讀取權）', async () => {
+      await seed(ALICE);
+      await assertFails(
+        updateDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), { reporterId: BOB }),
+      );
+    });
+
+    it('Verified Rescuer 不因身分而能竄改或刪除他人的回報', async () => {
+      await seed(ALICE);
+      await assertFails(
+        updateDoc(doc(dbFor(RESCUER), `health_reports/${ALICE}`), { status: '安全' }),
+      );
+      await assertFails(deleteDoc(doc(dbFor(RESCUER), `health_reports/${ALICE}`)));
+    });
   });
 
-  it('★ 一般註冊帳號不可讀取他人的回報', async () => {
-    await assertFails(getDoc(doc(dbFor(BOB), 'health_reports/report-alice')));
-  });
+  describe('Sensitive Tier', () => {
+    it('Reporter 可讀寫自己的 Sensitive Tier', async () => {
+      await seed(ALICE);
+      await assertSucceeds(sensitiveOf(ALICE, ALICE));
+      await assertSucceeds(setDoc(
+        doc(dbFor(ALICE), `health_report_sensitive/${ALICE}`),
+        { ...sensitiveTier(ALICE), phone: '0911111111' },
+      ));
+    });
 
-  it('★ 一般註冊帳號不可列出全部回報（health_screen 的互助任務查詢）', async () => {
-    await assertFails(getDocs(query(
-      collection(dbFor(BOB), 'health_reports'),
-      where('status', 'in', ['輕傷', '重傷']),
-    )));
-  });
+    it('還沒回報過的人也能讀自己的 Sensitive Tier（文件不存在）', async () => {
+      await assertSucceeds(sensitiveOf(BOB, BOB));
+    });
 
-  it('未登入不可讀', async () => {
-    await assertFails(getDoc(doc(anonDb(), 'health_reports/report-alice')));
-  });
+    it('★ 一般登入帳號讀不到他人的 Sensitive Tier', async () => {
+      await seed(ALICE);
+      await assertFails(sensitiveOf(BOB, ALICE));
+    });
 
-  it('Reporter 可讀自己的回報', async () => {
-    await assertSucceeds(getDoc(doc(dbFor(ALICE), 'health_reports/report-alice')));
-  });
+    it('未登入讀不到', async () => {
+      await seed(ALICE);
+      await assertFails(getDoc(doc(anonDb(), `health_report_sensitive/${ALICE}`)));
+    });
 
-  it('Reporter 可用 reporterId 條件查詢自己的回報', async () => {
-    await assertSucceeds(getDocs(query(
-      collection(dbFor(ALICE), 'health_reports'),
-      where('reporterId', '==', ALICE),
-    )));
-  });
+    it('★ Verified Rescuer 還沒接下這筆任務時讀不到', async () => {
+      await seed(ALICE);
+      await assertFails(sensitiveOf(RESCUER, ALICE));
+    });
 
-  it('★ 救援者可讀取他人的回報', async () => {
-    await assertSucceeds(getDoc(doc(dbFor(RESCUER), 'health_reports/report-alice')));
-  });
+    it('★ 沒認證的協助者接下任務了也讀不到', async () => {
+      await seed(ALICE, { taskStatus: 'accepted', helperId: BOB });
+      await assertFails(sensitiveOf(BOB, ALICE));
+    });
 
-  it('★ 救援者可列出全部待救援回報（health_screen 的互助任務查詢）', async () => {
-    await assertSucceeds(getDocs(query(
-      collection(dbFor(RESCUER), 'health_reports'),
-      where('status', 'in', ['輕傷', '重傷']),
-    )));
-  });
+    it('★ Verified Rescuer 接下這筆任務後讀得到', async () => {
+      await seed(ALICE, { taskStatus: 'accepted', helperId: RESCUER });
+      await assertSucceeds(sensitiveOf(RESCUER, ALICE));
+    });
 
-  it('可以建立自己的回報', async () => {
-    await assertSucceeds(setDoc(doc(dbFor(BOB), 'health_reports/report-bob'), newReport(BOB)));
-  });
+    it('★ 只解鎖自己接的那幾筆：接了 Alice 的任務讀不到 Carol 的', async () => {
+      await seed(ALICE, { taskStatus: 'accepted', helperId: RESCUER });
+      await seed(CAROL);
+      await assertFails(sensitiveOf(RESCUER, CAROL));
+    });
 
-  it('不可冒用他人 reporterId 建立回報', async () => {
-    await assertFails(setDoc(doc(dbFor(BOB), 'health_reports/report-fake'), newReport(ALICE)));
-  });
+    it('★ 任務被別人接走時，Verified Rescuer 讀不到', async () => {
+      await seed(ALICE, { taskStatus: 'accepted', helperId: BOB });
+      await assertFails(sensitiveOf(RESCUER, ALICE));
+    });
 
-  it('Reporter 不可把自己的回報轉手給他人（會連帶交出讀取權）', async () => {
-    await assertFails(
-      updateDoc(doc(dbFor(ALICE), 'health_reports/report-alice'), { reporterId: BOB }),
-    );
-  });
+    it('★ 完成任務之後就讀不到', async () => {
+      await seed(ALICE, { taskStatus: 'done', helperId: RESCUER });
+      await assertFails(sensitiveOf(RESCUER, ALICE));
+    });
 
-  it('Reporter 可更新自己回報的狀態', async () => {
-    await assertSucceeds(
-      updateDoc(doc(dbFor(ALICE), 'health_reports/report-alice'), { status: '輕傷' }),
-    );
-  });
+    it('★ 實際流程：認領 → 讀得到 → 放棄 → 讀不到', async () => {
+      await seed(ALICE);
+      const ref = doc(dbFor(RESCUER), `health_reports/${ALICE}`);
+      await assertSucceeds(updateDoc(ref, { taskStatus: 'accepted', helperId: RESCUER }));
+      await assertSucceeds(sensitiveOf(RESCUER, ALICE));
+      await assertSucceeds(updateDoc(ref, { taskStatus: 'waiting', helperId: null }));
+      await assertFails(sensitiveOf(RESCUER, ALICE));
+    });
 
-  it('救援者不因身分而能竄改他人的回報', async () => {
-    await assertFails(
-      updateDoc(doc(dbFor(RESCUER), 'health_reports/report-alice'), { status: '安全' }),
-    );
-    await assertFails(deleteDoc(doc(dbFor(RESCUER), 'health_reports/report-alice')));
+    it('沒有對應的 Detail Tier 文件時，Verified Rescuer 讀不到', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), `health_report_sensitive/${CAROL}`), sensitiveTier(CAROL));
+      });
+      await assertFails(sensitiveOf(RESCUER, CAROL));
+    });
+
+    it('不能替別人寫 Sensitive Tier', async () => {
+      await assertFails(setDoc(
+        doc(dbFor(BOB), `health_report_sensitive/${ALICE}`),
+        sensitiveTier(ALICE),
+      ));
+      await assertFails(setDoc(
+        doc(dbFor(BOB), `health_report_sensitive/${ALICE}`),
+        sensitiveTier(BOB),
+      ));
+    });
+
+    it('接著任務的 Verified Rescuer 也不能改或刪 Sensitive Tier', async () => {
+      await seed(ALICE, { taskStatus: 'accepted', helperId: RESCUER });
+      const ref = doc(dbFor(RESCUER), `health_report_sensitive/${ALICE}`);
+      await assertFails(updateDoc(ref, { phone: '0900000000' }));
+      await assertFails(deleteDoc(ref));
+    });
+
+    it('不能夾帶未定義的欄位', async () => {
+      await assertFails(setDoc(doc(dbFor(BOB), `health_report_sensitive/${BOB}`), {
+        ...sensitiveTier(BOB),
+        idNumber: 'A123456789',
+      }));
+    });
   });
 });
 
@@ -406,10 +658,23 @@ describe('rescuers（issue #33：救援者身分不可自我提權）', () => {
     await assertFails(deleteDoc(doc(dbFor(RESCUER), `rescuers/${RESCUER}`)));
   });
 
-  it('★ 在 users 文件自填 role 不會取得救援者讀取權', async () => {
+  it('★ 在 users 文件自填 role 不會取得 Sensitive Tier 讀取權', async () => {
+    // 就算 Bob 接下了 Alice 的任務，自填的 role 也不算 Verified Rescuer。
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), {
+        reporterId: ALICE,
+        status: '重傷',
+        taskStatus: 'accepted',
+        helperId: BOB,
+      });
+      await setDoc(doc(ctx.firestore(), `health_report_sensitive/${ALICE}`), {
+        reporterId: ALICE,
+        phone: '0912345678',
+      });
+    });
     const db = dbFor(BOB);
     await assertSucceeds(setDoc(doc(db, `users/${BOB}`), { id: BOB, role: 'rescuer' }));
-    await assertFails(getDoc(doc(db, 'health_reports/report-alice')));
+    await assertFails(getDoc(doc(db, `health_report_sensitive/${ALICE}`)));
   });
 
   it('使用者可讀自己的救援者身分文件（供 App 判斷顯示）', async () => {
@@ -441,5 +706,177 @@ describe('users（issue #33：個人檔案含 PII，只能讀自己的）', () =
 
   it('未登入不可讀', async () => {
     await assertFails(getDoc(doc(anonDb(), `users/${ALICE}`)));
+  });
+});
+
+// health_reports 的任務狀態欄位（taskStatus / helperId）。
+//
+// 這裡的關鍵是：協助者**不是**回報者，卻必須能改動別人的文件才能認領任務——
+// 跟 supply_items 認領流程同一類問題。而 health_reports 文件裡有姓名、傷勢、
+// 精確座標，所以放寬的範圍必須嚴格限制在那兩個欄位上。
+describe('health_reports 互助任務狀態', () => {
+  const seedReport = {
+    id: 'report-uuid',
+    reporterId: ALICE,
+    name: 'Alice',
+    area: '台北市中正區',
+    status: '重傷',
+    description: '頭部受傷',
+    lat: 25.033,
+    lng: 121.5654,
+    reportTime: '2026-09-24T10:00:00.000Z',
+  };
+
+  const seed = async (extra = {}) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'health_reports/report-alice'), {
+        ...seedReport,
+        ...extra,
+      });
+    });
+  };
+
+  it('未登入不能改任務狀態', async () => {
+    await seed();
+    await assertFails(updateDoc(doc(anonDb(), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+    }));
+  });
+
+  it('協助者可以認領別人的回報（含還沒有 taskStatus 欄位的舊文件）', async () => {
+    await seed();
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+    }));
+  });
+
+  it('不能冒名把 helperId 填成第三人', async () => {
+    await seed();
+    await assertFails(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: CAROL,
+    }));
+  });
+
+  it('認領時不得順手竄改傷勢或聯絡資訊', async () => {
+    await seed();
+    const db = dbFor(BOB);
+    await assertFails(updateDoc(doc(db, 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+      status: '安全',
+    }));
+    await assertFails(updateDoc(doc(db, 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: BOB,
+      phone: '0900000000',
+    }));
+  });
+
+  it('已被接走的任務不能被別人搶走', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertFails(updateDoc(doc(dbFor(CAROL), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: CAROL,
+    }));
+  });
+
+  it('只有當初認領的人能標記完成', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertFails(updateDoc(doc(dbFor(CAROL), 'health_reports/report-alice'), {
+      taskStatus: 'done',
+      helperId: CAROL,
+    }));
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'done',
+      helperId: BOB,
+    }));
+  });
+
+  it('認領者可以放棄任務，任務回到等待中', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'waiting',
+      helperId: null,
+    }));
+  });
+
+  it('放棄之後，另一位夥伴可以接手（helperId 明確為 null 的狀態）', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertSucceeds(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'waiting',
+      helperId: null,
+    }));
+    await assertSucceeds(updateDoc(doc(dbFor(CAROL), 'health_reports/report-alice'), {
+      taskStatus: 'accepted',
+      helperId: CAROL,
+    }));
+  });
+
+  it('已完成的任務不能被翻回等待中', async () => {
+    await seed({ taskStatus: 'done', helperId: BOB });
+    await assertFails(updateDoc(doc(dbFor(BOB), 'health_reports/report-alice'), {
+      taskStatus: 'waiting',
+      helperId: null,
+    }));
+  });
+
+  it('回報者本人仍然可以完整更新與刪除自己的回報', async () => {
+    await seed();
+    const db = dbFor(ALICE);
+    await assertSucceeds(updateDoc(doc(db, 'health_reports/report-alice'), {
+      status: '輕傷',
+      description: '已包紮',
+    }));
+    await assertSucceeds(deleteDoc(doc(db, 'health_reports/report-alice')));
+  });
+
+  it('協助者不能刪除別人的回報', async () => {
+    await seed({ taskStatus: 'accepted', helperId: BOB });
+    await assertFails(deleteDoc(doc(dbFor(BOB), 'health_reports/report-alice')));
+  });
+});
+
+// 一人一筆：health_reports 的文件 ID 就是回報者的 uid（health_screen.dart 的 _select）。
+describe('health_reports 一人一筆', () => {
+  const ownReport = (uid) => ({
+    id: 'report-uuid',
+    reporterId: uid,
+    name: 'Alice',
+    area: '台北市中正區',
+    status: '輕傷',
+    description: '割傷',
+    lat: null,
+    lng: null,
+    reportTime: '2026-10-04T10:00:00.000Z',
+  });
+
+  it('可以在自己的 uid 底下建立回報', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), ownReport(ALICE)));
+  });
+
+  it('★ 不能先搶走別人的文件 ID（即使 reporterId 填自己）', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `health_reports/${ALICE}`), ownReport(BOB)));
+  });
+
+  it('不能用隨機 ID 建立回報（舊版 add() 的寫法）', async () => {
+    await assertFails(setDoc(doc(dbFor(ALICE), 'health_reports/random-id'), ownReport(ALICE)));
+  });
+
+  it('還沒回報過的人可以監聽自己 uid 的文件（文件不存在）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`)));
+  });
+
+  it('本人可以覆寫自己的回報', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), ownReport(ALICE));
+    });
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), {
+      ...ownReport(ALICE),
+      status: '安全',
+      description: null,
+    }));
   });
 });

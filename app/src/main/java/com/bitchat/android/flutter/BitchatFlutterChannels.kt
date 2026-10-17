@@ -48,6 +48,8 @@ class BitchatFlutterChannels(
     private val activity: Activity? = null,
     private val events: BridgeEventEmitter = BridgeEventEmitter(),
     additionalMethodHandlers: List<BridgeMethodHandler> = emptyList(),
+    /** `pickAvatarPhoto` 的實作；沒有 Activity（例如背景 engine）時為 null。 */
+    private val avatarPhotoPicker: AvatarPhotoPicker? = null,
     /** 回覆 method 的執行緒（主執行緒）；[destroy] 時取消。 */
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     /** 讀加密身分儲存區（keystore 與磁碟）的地方，不在主執行緒。 */
@@ -137,11 +139,11 @@ class BitchatFlutterChannels(
             }
 
             "checkPermissions" -> {
-                val requiredGranted = permissionManager.areRequiredPermissionsGranted()
-                val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
-                } else true
-                result.success(requiredGranted && notificationGranted)
+                // Only Bluetooth and location gate the setup screen. POST_NOTIFICATIONS is optional
+                // (PermissionManager.getRequiredPermissions, MeshForegroundService): once the user
+                // turns it off in the system settings the system never prompts for it again, so
+                // gating on it kept the setup screen re-requesting forever.
+                result.success(permissionManager.areRequiredPermissionsGranted())
             }
 
             "requestPermissions" -> {
@@ -157,6 +159,8 @@ class BitchatFlutterChannels(
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
+                // 設定頁（#80）靠這筆紀錄分辨「從沒問過」與「已被永久拒絕」。
+                permissionManager.markPermissionsRequested(permissions)
                 activity.requestPermissions(permissions.toTypedArray(), 1001)
                 result.success(true)
             }
@@ -171,6 +175,15 @@ class BitchatFlutterChannels(
                     result.success(true)
                 } catch (e: Exception) {
                     result.error("START_FAILED", e.message, null)
+                }
+            }
+
+            "pickAvatarPhoto" -> {
+                val picker = avatarPhotoPicker
+                if (picker == null) {
+                    result.error("NO_ACTIVITY", "Cannot open the photo picker without an activity", null)
+                } else {
+                    picker.pick(result)
                 }
             }
 
@@ -225,7 +238,7 @@ class BitchatFlutterChannels(
 
     /**
      * `isRegistered`：身分儲存區裡有沒有 static key。在 [ioDispatcher] 上讀，回到主執行緒回覆；
-     * 讀不到（例如 keystore 失效）時回 error，Dart 端照舊當作 false。
+     * 讀不到（例如 keystore 失效）時回 error；Dart 端不當作「尚未註冊」，改照本機資料與雲端繼續驗證（#71）。
      */
     private fun answerIsRegistered(result: MethodChannel.Result) {
         scope.launch {

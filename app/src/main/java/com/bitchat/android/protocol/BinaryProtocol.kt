@@ -39,6 +39,7 @@ object SpecialRecipients {
 /**
  * Content tags for HEALTH_REPORT(0x30) tagged-broadcast packets.
  * payload[0] identifies the content type; payload[1..] is the actual data.
+ * Receivers drop packets whose payload[0] is not listed here (or whose payload is empty).
  * Adding a new public broadcast type only requires a new entry here.
  */
 enum class BroadcastContentTag(val value: Byte) {

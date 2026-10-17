@@ -1,23 +1,20 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:math' as math;
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/mascot_service.dart';
+import '../services/profile_store.dart';
 import '../widgets/chat_navigation_host.dart';
+import '../widgets/user_avatar.dart';
 import 'knowledge_screen.dart';
 import 'shelter_screen.dart';
 import 'sos_screen.dart';
 import 'health_screen.dart';
 import 'chat_screen.dart';
 import 'experiment_screen.dart';
-import 'login_screen.dart';
+import 'settings_screen.dart';
 import 'supply_screen.dart';
-
-const _prefsKeyUser = 'app_user';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -62,24 +59,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void didPopNext() => mascotOptionsNotifier.value = homeOptions;
 
   Future<void> _loadUser() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefsKeyUser);
-    if (raw != null && mounted) {
-      setState(() => _user = AppUser.fromJson(jsonDecode(raw)));
-    }
+    final user = await ProfileStore().load();
+    if (user != null && mounted) setState(() => _user = user);
   }
 
-  void _showProfile() {
-    if (_user == null) return;
+  /// 點頭像開啟設定頁（#80）。回來時重讀本機的個人資料：設定頁可能改了它。
+  /// 登出或緊急清除時，設定頁直接換成登入畫面，首頁跟著移除。
+  Future<void> _openSettings() async {
+    final user = _user;
+    if (user == null) return;
     mascotOptionsNotifier.value = const [];
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _ProfileSheet(user: _user!),
-    ).whenComplete(() {
-      mascotOptionsNotifier.value = homeOptions;
-    });
+    await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => SettingsScreen(user: user)));
+    if (mounted) await _loadUser();
   }
 
   void _navigateTo(Widget screen) {
@@ -184,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     ),
                     const Spacer(),
                     GestureDetector(
-                      onTap: _showProfile,
+                      onTap: _openSettings,
                       child: _UserAvatar(user: _user),
                     ),
                   ],
@@ -314,7 +305,7 @@ class _SosHeroCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 7),
                   Text(
-                    '一鍵傳送 GPS 位置・即刻求援',
+                    '長按 3 秒・傳送 GPS 位置求援',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.85),
                       fontSize: 13,
@@ -507,38 +498,14 @@ class _UserAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const brown = Color(0xFF5C3D2E);
-    final initials = user != null && user!.name.isNotEmpty
-        ? user!.name.characters.first.toUpperCase()
-        : '?';
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-            color: brown,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: brown.withValues(alpha: 0.25),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Center(
-            child: Text(
-              initials,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
+        UserAvatarCircle(
+          avatarId: user?.avatar,
+          photo: user?.avatarPhoto,
+          name: user?.name,
+          size: 46,
         ),
         if (user != null)
           Padding(
@@ -553,208 +520,6 @@ class _UserAvatar extends StatelessWidget {
             ),
           ),
       ],
-    );
-  }
-}
-
-// ── 個人資料底部面板 ──────────────────────────────────────
-class _ProfileSheet extends StatelessWidget {
-  final AppUser user;
-  const _ProfileSheet({required this.user});
-
-  @override
-  Widget build(BuildContext context) {
-    const brown = Color(0xFF5C3D2E);
-    const green = Color(0xFF7AA67A);
-    const textPrimary = Color(0xFF3D2C1E);
-
-    final initials = user.name.isNotEmpty
-        ? user.name.characters.first.toUpperCase()
-        : '?';
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
-      decoration: const BoxDecoration(
-        color: Color(0xFFFEFDF9),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 拖曳條
-          Container(
-            width: 36, height: 4,
-            decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
-          ),
-          const SizedBox(height: 24),
-
-          // 頭像 + 姓名 + ID
-          Container(
-            width: 68,
-            height: 68,
-            decoration: BoxDecoration(
-              color: brown,
-              shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: brown.withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4))],
-            ),
-            child: Center(
-              child: Text(initials,
-                  style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800)),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(user.name,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: textPrimary)),
-          const SizedBox(height: 6),
-
-          // User ID 顯示 + 複製
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: user.id));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('User ID 已複製'),
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  margin: const EdgeInsets.all(16),
-                  backgroundColor: brown,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: brown.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.fingerprint_rounded, size: 15, color: brown),
-                  const SizedBox(width: 6),
-                  Text(user.id,
-                      style: const TextStyle(fontSize: 12, color: brown, fontWeight: FontWeight.w700,
-                          fontFamily: 'monospace')),
-                  const SizedBox(width: 6),
-                  const Icon(Icons.copy_rounded, size: 13, color: brown),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-
-          // 基本資料
-          _ProfileRow(Icons.phone_outlined, '手機號碼', user.phone),
-          _ProfileRow(Icons.location_on_outlined, '居住區域', user.area),
-          _ProfileRow(Icons.people_outline_rounded,
-              '緊急聯絡人', '${user.emergencyContactName}（${user.emergencyContactRelation}）・${user.emergencyContactPhone}'),
-          if (user.bloodType != null)
-            _ProfileRow(Icons.favorite_outline_rounded, '血型', user.bloodType!),
-          if (user.medicalInfo != null && user.medicalInfo!.isNotEmpty)
-            _ProfileRow(Icons.medical_information_outlined, '醫療資訊', user.medicalInfo!),
-
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: green.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline_rounded, size: 15, color: green),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '此 ID 為你在防災系統中的唯一識別碼，管理端透過此 ID 識別你的身份',
-                    style: const TextStyle(fontSize: 12, color: green),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 登出按鈕
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('登出'),
-                    content: const Text('確定要登出嗎？'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('取消'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('登出', style: TextStyle(color: Colors.red)),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirm != true) return;
-
-                await FirebaseAuth.instance.signOut();
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.remove('app_user');
-
-                if (context.mounted) {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                    (_) => false,
-                  );
-                }
-              },
-              icon: const Icon(Icons.logout_rounded, color: Colors.red),
-              label: const Text('登出', style: TextStyle(color: Colors.red, fontSize: 15)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.red),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfileRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  const _ProfileRow(this.icon, this.label, this.value);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 17, color: const Color(0xFF8C7B6E)),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 72,
-            child: Text(label,
-                style: const TextStyle(fontSize: 13, color: Color(0xFF8C7B6E))),
-          ),
-          Expanded(
-            child: Text(value,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF3D2C1E))),
-          ),
-        ],
-      ),
     );
   }
 }

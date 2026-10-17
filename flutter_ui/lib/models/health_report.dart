@@ -2,67 +2,112 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
-/// 本機自填的完整 Health Report —— 含 Detail Tier 欄位（姓名、電話、血型、自由文字、
-/// 精確座標）。這份資料只走「Reporter 對後端的自願揭露」路徑（Firestore `health_reports`）
-/// 與自己的畫面，**不會**原樣進入 BLE 廣播；廣播出去的是 [BroadcastHealthReport] 對應的
+/// 本機自填的完整 Health Report。上傳到後端時拆成兩份文件（ADR-0005）：
+///
+/// * [toDetailJson] → `health_reports/{uid}`：Detail Tier（姓名、居住區域、Status 與傷勢
+///   細項、精確座標、回報時間），任何登入帳號都讀得到。
+/// * [toSensitiveJson] → `health_report_sensitive/{uid}`：Sensitive Tier（電話、血型、
+///   病史、緊急聯絡人），只有本人與正接著這筆任務的 Verified Rescuer 讀得到。
+///
+/// 兩者都**不會**原樣進入 BLE 廣播；廣播出去的是 [BroadcastHealthReport] 對應的
 /// Broadcast Tier（見 ADR-0003）。
 class HealthReport {
   final String id;          // UUID v4，管理端追蹤用唯一識別碼
   final String reporterId;  // 回報者 ID
+
+  // ── Detail Tier ──
   final String name;        // 回報者姓名
-  final String phone;       // 聯絡電話
-  final String? bloodType;  // 血型（可選）
+  final String? area;       // 居住區域
   final String status;      // 健康狀態：'安全' / '輕傷' / '重傷'
-  final String? description; // 補充說明（可選）
+  final String? description; // 傷勢細項（選項，不是自由輸入；可選）
   final double? lat;         // 緯度（可選）
   final double? lng;         // 經度（可選）
   final DateTime reportTime; // 回報時間
+
+  // ── Sensitive Tier ──
+  final String? phone;                    // 聯絡電話
+  final String? bloodType;                // 血型（可選）
+  final String? medicalInfo;              // 慢性病 / 藥物過敏（可選）
+  final String? emergencyContactName;     // 緊急聯絡人姓名
+  final String? emergencyContactPhone;    // 緊急聯絡人電話
+  final String? emergencyContactRelation; // 與緊急聯絡人關係
 
   HealthReport({
     String? id,
     required this.reporterId,
     required this.name,
-    required this.phone,
-    this.bloodType,
+    this.area,
     required this.status,
     this.description,
     this.lat,
     this.lng,
     required this.reportTime,
+    this.phone,
+    this.bloodType,
+    this.medicalInfo,
+    this.emergencyContactName,
+    this.emergencyContactPhone,
+    this.emergencyContactRelation,
   }) : id = id ?? _uuid.v4();
 
-  Map<String, dynamic> toJson() => {
+  /// `health_reports/{uid}` 的內容。欄位必須與 firestore.rules 的 detailTierKeys() 一致，
+  /// 規則會擋下任何多出來的欄位——這份文件大家都讀得到。
+  Map<String, dynamic> toDetailJson() => {
         'id': id,
         'reporterId': reporterId,
         'name': name,
-        'phone': phone,
-        'bloodType': bloodType,
+        'area': area,
         'status': status,
         'description': description,
         'lat': lat,
         'lng': lng,
-        'reportTime': reportTime.toIso8601String(),
+        // 一律存 UTC（結尾帶 Z）。存本地時間的字串沒有時區資訊，不同時區的裝置
+        // 混在同一個 collection 裡就無法比較先後，字典序也不再等於時間序。
+        'reportTime': reportTime.toUtc().toIso8601String(),
       };
 
-  factory HealthReport.fromJson(Map<String, dynamic> json) => HealthReport(
-        id: json['id'] as String?,
-        reporterId: json['reporterId'] as String,
-        name: json['name'] as String,
-        phone: json['phone'] as String,
-        bloodType: json['bloodType'] as String?,
-        status: json['status'] as String,
-        description: json['description'] as String?,
-        lat: (json['lat'] as num?)?.toDouble(),
-        lng: (json['lng'] as num?)?.toDouble(),
-        reportTime: DateTime.parse(json['reportTime'] as String),
+  /// `health_report_sensitive/{uid}` 的內容。
+  Map<String, dynamic> toSensitiveJson() => {
+        'reporterId': reporterId,
+        'phone': phone,
+        'bloodType': bloodType,
+        'medicalInfo': medicalInfo,
+        'emergencyContactName': emergencyContactName,
+        'emergencyContactPhone': emergencyContactPhone,
+        'emergencyContactRelation': emergencyContactRelation,
+      };
+
+  /// 從 `health_reports/{uid}`（[detail]）組回一份回報；讀得到 Sensitive Tier 時一併傳入
+  /// [sensitive]。
+  factory HealthReport.fromJson(
+    Map<String, dynamic> detail, {
+    Map<String, dynamic>? sensitive,
+  }) =>
+      HealthReport(
+        id: detail['id'] as String?,
+        reporterId: detail['reporterId'] as String,
+        name: detail['name'] as String,
+        area: detail['area'] as String?,
+        status: detail['status'] as String,
+        description: detail['description'] as String?,
+        lat: (detail['lat'] as num?)?.toDouble(),
+        lng: (detail['lng'] as num?)?.toDouble(),
+        // 舊文件是沒有時區的本地時間字串，parse 後當成本地時間；帶 Z 的新文件
+        // 會解析成 UTC，這裡統一轉回本地時間再交給 UI。
+        reportTime: DateTime.parse(detail['reportTime'] as String).toLocal(),
+        phone: sensitive?['phone'] as String?,
+        bloodType: sensitive?['bloodType'] as String?,
+        medicalInfo: sensitive?['medicalInfo'] as String?,
+        emergencyContactName: sensitive?['emergencyContactName'] as String?,
+        emergencyContactPhone: sensitive?['emergencyContactPhone'] as String?,
+        emergencyContactRelation: sensitive?['emergencyContactRelation'] as String?,
       );
 }
 
 /// 從 BLE 廣播收到的 Health Report —— 只有 Broadcast Tier。
 ///
 /// 與本機自填的 [HealthReport] 是**不同來源**：這裡永遠沒有真實姓名、電話、血型、
-/// 自由文字或精確座標。UI 不得假設收到的回報帶有這些欄位；聯絡資訊須另行透過
-/// Detail Tier 請求（A2，見 ADR-0003）。
+/// 傷勢細項或精確座標。UI 不得假設收到的回報帶有這些欄位。
 class BroadcastHealthReport {
   /// 不具識別性的固定長度識別碼，不可反推回帳號或 Firestore 文件。
   final String reporterHandle;

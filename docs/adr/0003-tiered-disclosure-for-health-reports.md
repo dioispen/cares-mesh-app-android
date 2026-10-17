@@ -1,5 +1,7 @@
 # Health Report 採分層揭露
 
+> **後端部分已由 [ADR-0005](0005-detail-tier-for-all-sensitive-tier-for-helping-verified-rescuers.md) 改寫**：Firestore 上的 Detail Tier（姓名、居住區域、精確座標等）改為對所有登入帳號公開，電話、血型、病史、緊急聯絡人另列為 Sensitive Tier。BLE 的 Broadcast Tier 不受影響。
+
 現況是把姓名、手機、血型、狀態、補充說明與精確經緯度包成單一明文結構，廣播給藍牙範圍內的所有裝置。我們將其拆為 **Broadcast Tier**（不具識別性的 reporter handle、Status enum、降精度 geohash，約 18 bytes）與 **Detail Tier**（真實姓名、電話、血型、精確座標、自由文字；僅在特定救援者提出請求時，透過既有的 Noise session 釋出）。Broadcast Tier 先做（A1），Detail Tier 為條件性項目（A2），進度落後時第一個砍。
 
 ## Considered Options

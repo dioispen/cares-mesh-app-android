@@ -30,6 +30,13 @@ void main() async{
     debugPrint('Firebase initialization warning: $e');
   }
 
+  try {
+    await loadMascotEnabled();
+  } catch (e) {
+    // 讀不到偏好時維持預設：顯示小助理。
+    debugPrint('Mascot preference unavailable: $e');
+  }
+
   runApp(const BitchatFlutterUiApp());
 }
 
@@ -71,7 +78,8 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   /// 主動檢查一次初始狀態，避免錯過 Stream 的第一次推送
   Future<void> _checkInitialStatus() async {
     try {
-      // 擴展 Bridge 增加 getSystemStatus
+      // 沒有原生實作時回傳 null；原生回報的錯誤（PlatformException）會拋出，在下面記下即可，
+      // 之後的狀態仍會經事件串流推來（#71）。
       final status = await BitchatBridge.getSystemStatus();
       if (status != null) {
         _handleStatusUpdate(status);

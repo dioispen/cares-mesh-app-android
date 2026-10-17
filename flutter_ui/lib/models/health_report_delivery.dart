@@ -6,22 +6,27 @@ import '../bridge/bitchat_bridge.dart';
 /// 上傳雲端（Firestore）。兩條路互不影響（附近廣播失敗仍會上傳），提示要如實反映兩者：在沒有網路的
 /// 災害現場，使用者需要知道附近的救援者是不是真的收得到。
 class HealthReportDelivery {
-  const HealthReportDelivery({this.broadcastFailure, this.uploadFailure});
+  const HealthReportDelivery({this.broadcastFailure, this.uploadFailure, this.uploadQueued = false});
 
   /// 附近廣播沒有送出的原因（給使用者看）；null 表示原生已交給 mesh 廣播。
   final String? broadcastFailure;
 
-  /// 雲端上傳失敗的原因；null 表示已上傳。
+  /// 雲端上傳失敗的原因；null 表示已上傳或已暫存（見 [uploadQueued]）。
   final String? uploadFailure;
 
+  /// 離線：上傳已進本機佇列，恢復連線後會自動送出，但伺服器還沒收到。
+  final bool uploadQueued;
+
   /// 兩條路都成功。
-  bool get complete => broadcastFailure == null && uploadFailure == null;
+  bool get complete => broadcastFailure == null && uploadFailure == null && !uploadQueued;
 
   /// 兩條路都失敗：這份回報誰都沒收到。
   bool get failed => broadcastFailure != null && uploadFailure != null;
 
   /// 給使用者的提示；[status] 是回報的 Status（例如「重傷」）。
   String message(String status) => switch ((broadcastFailure, uploadFailure)) {
+        (null, null) when uploadQueued => '已向附近廣播：$status，目前離線，恢復連線後自動上傳雲端',
+        (final broadcast?, null) when uploadQueued => '已記錄：$status，但附近廣播失敗（$broadcast），目前離線，恢復連線後自動上傳雲端',
         (null, null) => '已回報：$status',
         (final broadcast?, null) => '已上傳雲端，但附近廣播失敗：$broadcast',
         (null, final upload?) => '已向附近廣播：$status，但雲端上傳失敗：$upload',

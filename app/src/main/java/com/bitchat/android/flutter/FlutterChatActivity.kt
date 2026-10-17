@@ -1,8 +1,13 @@
 package com.bitchat.android.flutter
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -13,6 +18,8 @@ import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.ui.ChatViewModel
+import com.bitchat.android.util.AppConstants
+import com.bitchat.android.utils.DeviceUtils
 import com.bitchat.android.wifiaware.WifiAwareController
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -55,8 +62,23 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     /** The notification tap Dart has yet to act on; kept across Activity recreation. */
     private val pendingNavigation: PendingChatNavigation by viewModels()
 
+    /** 大頭貼選圖；registerForActivityResult 必須在 STARTED 之前，所以在欄位初始化時建立。 */
+    private val avatarPhotoPicker = AvatarPhotoPicker(this)
+
     private var channels: BitchatFlutterChannels? = null
     private var chatBridge: ChatBridge? = null
+    private var settingsBridge: SettingsBridge? = null
+
+    /**
+     * The ongoing notification's quit action: AppShutdownCoordinator broadcasts this before it
+     * kills the process, as MainActivity listens for it. Without it the UI stayed on screen until
+     * the kill up to 5 s later and looked like a crash.
+     */
+    private val forceFinishReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == AppConstants.UI.ACTION_FORCE_FINISH) finishAffinity()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Resolve the mesh instances before super.onCreate(): when the Activity is recreated,
@@ -66,6 +88,24 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         meshService = MeshServiceHolder.getOrCreate(applicationContext)
         unifiedMeshService = MeshServiceHolder.getUnifiedOrCreate(applicationContext)
         super.onCreate(savedInstanceState)
+
+        ContextCompat.registerReceiver(
+            this,
+            forceFinishReceiver,
+            IntentFilter(AppConstants.UI.ACTION_FORCE_FINISH),
+            AppConstants.UI.PERMISSION_FORCE_FINISH,
+            null,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        // Phones stay portrait, tablets rotate — what OrientationAwareActivity does, which this
+        // FlutterFragmentActivity can't extend. With configChanges in the manifest a rotation
+        // re-lays out Flutter instead of recreating the Activity (#78).
+        requestedOrientation = if (DeviceUtils.isTablet(this)) {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
 
         // Foreground: the ChatViewModel is the mesh delegate while resumed (mirrors MainActivity's
         // onResume/onPause); paused, the foreground service owns DM notifications.
@@ -84,6 +124,11 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         // A notification tap that started the Activity (cold start). Not when it is recreated:
         // its intent is the one it was first started with, and that tap is already pending.
         if (savedInstanceState == null) receiveNotificationTap(intent)
+    }
+
+    override fun onDestroy() {
+        try { unregisterReceiver(forceFinishReceiver) } catch (_: IllegalArgumentException) { }
+        super.onDestroy()
     }
 
     /** A notification tapped while the Activity exists (singleTop / CLEAR_TOP bring it back). */
@@ -107,11 +152,18 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // One emitter per engine, shared by both bridges; BitchatFlutterChannels registers the
-        // only method/stream handlers and hands chat methods on to ChatBridge.
+        // One emitter per engine, shared by the bridges; BitchatFlutterChannels registers the
+        // only method/stream handlers and hands chat and settings methods on to ChatBridge and
+        // SettingsBridge.
         val events = BridgeEventEmitter()
         val chat = ChatBridge(chatViewModel, events, pendingNavigation = pendingNavigation)
         chatBridge = chat
+        val settings = SettingsBridge(
+            device = AndroidSettingsDevice(this, activity = this),
+            meshSettings = UpstreamMeshBackgroundSettings(applicationContext),
+            panicClear = chatViewModel::panicClearAllData
+        )
+        settingsBridge = settings
         // 傳遞 activity (this) 給 channels，以便支援權限請求
         channels = BitchatFlutterChannels(
             context = this,
@@ -119,7 +171,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             activity = this,
             events = events,
             // ExperimentTools: debug-only field-experiment methods (#70); none in release.
-            additionalMethodHandlers = listOf(chat) + ExperimentTools.bridgeHandlers()
+            additionalMethodHandlers = listOf(chat, settings) + ExperimentTools.bridgeHandlers(),
+            avatarPhotoPicker = avatarPhotoPicker
         )
     }
 
@@ -128,6 +181,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         channels = null
         chatBridge?.destroy()
         chatBridge = null
+        settingsBridge?.destroy()
+        settingsBridge = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

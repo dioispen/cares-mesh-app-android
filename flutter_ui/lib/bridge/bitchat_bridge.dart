@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 
 /// 聊天 method 名稱，對應 Kotlin `ChatBridge` 的 companion 常數（命名規則 `chat_<動詞><受詞>`）。
@@ -63,6 +64,40 @@ abstract final class ExperimentErrors {
 
   /// [ExperimentMethods.startSender]：發送器已在等待開始或發送中，要先停止。
   static const alreadyRunning = 'ALREADY_RUNNING';
+}
+
+/// 設定頁 method 名稱，對應 Kotlin `SettingsBridge` 的 companion 常數（命名規則 `settings_<動詞><受詞>`，#80）。
+abstract final class SettingsMethods {
+  static const getState = 'settings_getState';
+  static const requestPermission = 'settings_requestPermission';
+  static const openAppSettings = 'settings_openAppSettings';
+  static const requestEnableBluetooth = 'settings_requestEnableBluetooth';
+  static const requestIgnoreBatteryOptimization = 'settings_requestIgnoreBatteryOptimization';
+  static const setBackgroundEnabled = 'settings_setBackgroundEnabled';
+  static const setAutoStartEnabled = 'settings_setAutoStartEnabled';
+  static const setNotificationAutoRestore = 'settings_setNotificationAutoRestore';
+  static const panicClear = 'settings_panicClear';
+}
+
+/// 設定頁 method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `SettingsBridge` 的 `ERROR_*`。
+abstract final class SettingsErrors {
+  /// 沒有 Activity 可以開系統的詢問或設定畫面。
+  static const noActivity = 'NO_ACTIVITY';
+
+  /// 這個 Android 版本不會要求這類權限。
+  static const unavailable = 'UNAVAILABLE';
+
+  /// 要先允許「附近的裝置」，系統才肯詢問開啟藍牙。
+  static const permissionRequired = 'PERMISSION_REQUIRED';
+
+  /// 已經有一次緊急清除在進行。
+  static const panicInProgress = 'PANIC_IN_PROGRESS';
+
+  /// 緊急清除跑完了，但無法確認聊天紀錄已刪除；原生讓 mesh 維持停止。
+  static const panicIncomplete = 'PANIC_INCOMPLETE';
+
+  /// 緊急清除途中出錯。
+  static const panicFailed = 'PANIC_FAILED';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -132,55 +167,65 @@ class BitchatBridge {
         .asBroadcastStream();
   }
 
-  /// 獲取當前系統狀態 (藍牙、位置、權限)
-  static Future<Map<String, dynamic>?> getSystemStatus() async {
+  /// 設定流程用的舊方法（[getSystemStatus]、[checkPermissions]、[requestPermissions]、[isRegistered]、
+  /// [startMesh]）共用的錯誤處理（#71）。
+  ///
+  /// 只有 [MissingPluginException] 會降級成 [fallback]：這個平台沒有原生實作（iOS、測試、engine 尚未
+  /// 接上）。iOS 的 setup 流程依賴這個降級，例如 [isRegistered] 回 false 才會往登入走，所以不能拿掉，
+  /// 但會留下 log，分得出是「沒有原生」而不是原生真的這樣回答。
+  ///
+  /// 原生以 `result.error(...)` 回報的 [PlatformException]（例如 `START_FAILED`、`NO_ACTIVITY`）照常
+  /// 往上拋，連同錯誤碼與原因，由呼叫端決定怎麼告訴使用者（與 [setNickname] 等方法一致）。
+  static Future<T> _degradeWithoutNative<T>(String method, T fallback, Future<T> Function() call) async {
     try {
-      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getSystemStatus');
-      return result?.map((k, v) => MapEntry(k.toString(), v));
-    } catch (e) {
-      return null;
+      return await call();
+    } on MissingPluginException {
+      debugPrint('BitchatBridge: $method has no native implementation on this platform; using $fallback');
+      return fallback;
     }
   }
 
-  /// 檢查權限是否已開啟 (通知、藍牙、位置)
-  static Future<bool> checkPermissions() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('checkPermissions');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 獲取當前系統狀態 (藍牙、位置、權限)。沒有原生實作時回傳 null；原生錯誤（[PlatformException]）
+  /// 往上拋。
+  static Future<Map<String, dynamic>?> getSystemStatus() =>
+      _degradeWithoutNative<Map<String, dynamic>?>('getSystemStatus', null, () async {
+        final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getSystemStatus');
+        return result?.map((k, v) => MapEntry(k.toString(), v));
+      });
 
-  /// 請求權限
-  static Future<bool> requestPermissions() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('requestPermissions');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 從裝置相簿挑一張照片當大頭貼。回傳已在原生端裁成正方形、縮成小圖的 JPEG；
+  /// 使用者取消時為 null。沒有原生實作的平台（例如 iOS 開發用模擬機）會丟
+  /// [MissingPluginException]，呼叫端要自行處理。
+  static Future<Uint8List?> pickAvatarPhoto() =>
+      _method.invokeMethod<Uint8List>('pickAvatarPhoto');
 
-  /// 檢查是否已註冊
-  static Future<bool> isRegistered() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('isRegistered');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 檢查權限是否已開啟 (通知、藍牙、位置)。沒有原生實作時回傳 false；原生錯誤（[PlatformException]）
+  /// 往上拋，不當成「沒有權限」。
+  static Future<bool> checkPermissions() => _degradeWithoutNative('checkPermissions', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('checkPermissions');
+        return result ?? false;
+      });
 
-  /// 啟動 Mesh 服務
-  static Future<bool> startMesh() async {
-    try {
-      final bool? result = await _method.invokeMethod<bool>('startMesh');
-      return result ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// 請原生跳出權限請求。回傳是否已發出請求（不是使用者是否允許）；沒有原生實作時回傳 false。
+  /// 原生沒有發出請求時（例如 `NO_ACTIVITY`）以 [PlatformException] 往上拋。
+  static Future<bool> requestPermissions() => _degradeWithoutNative('requestPermissions', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('requestPermissions');
+        return result ?? false;
+      });
+
+  /// 檢查原生端是否已有身分資料（已註冊）。沒有原生實作時回傳 false（iOS 的 setup 流程依賴它）；
+  /// 原生讀不到身分資料時（例如 `IDENTITY_UNAVAILABLE`）以 [PlatformException] 往上拋，不當成「尚未註冊」。
+  static Future<bool> isRegistered() => _degradeWithoutNative('isRegistered', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('isRegistered');
+        return result ?? false;
+      });
+
+  /// 啟動 Mesh 服務。回傳 true 表示已啟動；沒有原生實作時回傳 false。原生啟動失敗時（例如
+  /// `START_FAILED`）以 [PlatformException] 往上拋，[PlatformException.message] 是 Kotlin 回報的原因。
+  static Future<bool> startMesh() => _degradeWithoutNative('startMesh', false, () async {
+        final bool? result = await _method.invokeMethod<bool>('startMesh');
+        return result ?? false;
+      });
 
   /// 把使用者輸入的文字交給原生聊天核心（`ChatViewModel.sendMessage`）。
   ///
@@ -366,4 +411,48 @@ class BitchatBridge {
   /// [startExperimentSender]。bridge 錯誤會往上拋。
   static Future<Map<dynamic, dynamic>?> stopExperimentSender() =>
       _method.invokeMethod<Map>(ExperimentMethods.stopSender);
+
+  // ── 設定頁（#80）：以下 bridge 錯誤（[PlatformException]、[MissingPluginException]）一律往上拋，
+  // 錯誤碼見 [SettingsErrors]。
+
+  /// 一次取得權限、藍牙、電池最佳化、mesh 背景運作的三個開關與版本號（見 `models/settings_state.dart`）。
+  static Future<Map<String, dynamic>> getSettingsState() async {
+    final Map<dynamic, dynamic>? state = await _method.invokeMethod<Map>(SettingsMethods.getState);
+    if (state == null) {
+      throw PlatformException(code: 'NO_STATE', message: '${SettingsMethods.getState} answered null');
+    }
+    return state.map((k, v) => MapEntry(k.toString(), v));
+  }
+
+  /// 處理某一類權限（`SettingsPermissionCategory.wireName`）：還沒允許時跳出系統的詢問，已允許或
+  /// 系統不再詢問時開啟 App 資訊頁讓使用者自己切換，電池最佳化則請系統排除本 App。回傳原生做了哪一個
+  /// （`prompted`、`openedAppSettings`、`requestedBatteryExemption`）。
+  static Future<String?> requestSettingsPermission(String category) =>
+      _method.invokeMethod<String>(SettingsMethods.requestPermission, <String, dynamic>{'category': category});
+
+  /// 開啟系統設定裡本 App 的資訊頁。
+  static Future<void> openAppSettings() => _method.invokeMethod<void>(SettingsMethods.openAppSettings);
+
+  /// 請系統詢問使用者是否開啟藍牙（App 不能直接開關系統藍牙）。
+  static Future<void> requestEnableBluetooth() => _method.invokeMethod<void>(SettingsMethods.requestEnableBluetooth);
+
+  /// 請系統詢問是否讓本 App 不受電池最佳化限制。
+  static Future<void> requestIgnoreBatteryOptimization() =>
+      _method.invokeMethod<void>(SettingsMethods.requestIgnoreBatteryOptimization);
+
+  /// 背景執行；關閉時原生會停止前景服務。
+  static Future<void> setBackgroundEnabled(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setBackgroundEnabled, <String, dynamic>{'enabled': enabled});
+
+  /// 開機自動啟動。
+  static Future<void> setAutoStartEnabled(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setAutoStartEnabled, <String, dynamic>{'enabled': enabled});
+
+  /// 常駐通知被滑掉時立即恢復；原生會立刻重發一次通知讓設定生效。
+  static Future<void> setNotificationAutoRestore(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setNotificationAutoRestore, <String, dynamic>{'enabled': enabled});
+
+  /// 原生 `ChatViewModel.panicClearAllData()`：清除聊天紀錄、身分金鑰、媒體檔與通知，換一組新身分。
+  /// 原生清除完才回來；沒有清乾淨時以 [SettingsErrors] 的錯誤碼往上拋。
+  static Future<void> panicClear() => _method.invokeMethod<void>(SettingsMethods.panicClear);
 }

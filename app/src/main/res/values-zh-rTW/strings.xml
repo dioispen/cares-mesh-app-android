@@ -55,7 +55,6 @@
   <string name="verify_success_body">你已驗證 %1$s</string>
   <string name="verify_success_system_message">已驗證 %1$s</string>
 
-  <string name="app_name">bitchat</string>
   <string name="permission_bluetooth_rationale">點對點傳訊需要藍牙權限，無需網際網路。</string>
   <string name="permission_location_rationale">需要位置權限才能透過藍牙探索附近的裝置。</string>
   <string name="permission_notification_rationale">需要通知權限才能提醒你有新訊息。</string>
@@ -188,7 +187,7 @@
   <string name="cd_open_map">開啟地圖</string>
   <string name="cd_remove_bookmark">移除書籤</string>
   <string name="cd_teleport">傳送</string>
-  <string name="notification_action_quit_bitchat">結束 bitchat</string>
+  <string name="notification_action_quit_bitchat">結束 cares-mesh-app</string>
   <string name="about_background_title">在背景執行</string>
   <string name="about_background_desc">應用程式關閉時保持 mesh 網路運作中（前景服務）</string>
   <string name="cd_leave_channel">離開頻道</string>

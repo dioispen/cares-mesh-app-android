@@ -10,6 +10,8 @@ class AppUser {
   final String? bloodType;               // 血型（可選）
   final String? medicalInfo;             // 慢性病 / 藥物過敏（可選）
   final DateTime registeredAt;           // 註冊時間
+  final String? avatar;                  // 預設大頭貼 id（widgets/user_avatar.dart），舊帳號為 null
+  final String? avatarPhoto;             // avatar 為 'photo' 時的自選照片：256px JPEG 的 base64
 
   AppUser({
     required this.id,
@@ -23,7 +25,55 @@ class AppUser {
     this.bloodType,
     this.medicalInfo,
     required this.registeredAt,
+    this.avatar,
+    this.avatarPhoto,
   });
+
+  /// 換大頭貼用。選回預設頭像時 [avatarPhoto] 傳 null，舊照片會一併清掉，
+  /// 不在本機或雲端留下用不到的個人照片。
+  AppUser withAvatar(String avatar, {String? avatarPhoto}) => AppUser(
+        id: id,
+        email: email,
+        name: name,
+        phone: phone,
+        area: area,
+        emergencyContactName: emergencyContactName,
+        emergencyContactPhone: emergencyContactPhone,
+        emergencyContactRelation: emergencyContactRelation,
+        bloodType: bloodType,
+        medicalInfo: medicalInfo,
+        registeredAt: registeredAt,
+        avatar: avatar,
+        avatarPhoto: avatarPhoto,
+      );
+
+  /// 設定頁編輯個人資料用（#80）：Email、User ID、註冊時間與大頭貼不變。
+  /// [bloodType]、[medicalInfo] 傳 null 表示清空。
+  AppUser withProfile({
+    required String name,
+    required String phone,
+    required String area,
+    required String emergencyContactName,
+    required String emergencyContactPhone,
+    required String emergencyContactRelation,
+    required String? bloodType,
+    required String? medicalInfo,
+  }) =>
+      AppUser(
+        id: id,
+        email: email,
+        name: name,
+        phone: phone,
+        area: area,
+        emergencyContactName: emergencyContactName,
+        emergencyContactPhone: emergencyContactPhone,
+        emergencyContactRelation: emergencyContactRelation,
+        bloodType: bloodType,
+        medicalInfo: medicalInfo,
+        registeredAt: registeredAt,
+        avatar: avatar,
+        avatarPhoto: avatarPhoto,
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -37,6 +87,8 @@ class AppUser {
         'bloodType': bloodType,
         'medicalInfo': medicalInfo,
         'registeredAt': registeredAt.toIso8601String(),
+        'avatar': avatar,
+        'avatarPhoto': avatarPhoto,
       };
 
   factory AppUser.fromJson(Map<String, dynamic> json) => AppUser(
@@ -51,5 +103,7 @@ class AppUser {
         bloodType: json['bloodType'] as String?,
         medicalInfo: json['medicalInfo'] as String?,
         registeredAt: DateTime.parse(json['registeredAt'] as String),
+        avatar: json['avatar'] as String?,
+        avatarPhoto: json['avatarPhoto'] as String?,
       );
 }
