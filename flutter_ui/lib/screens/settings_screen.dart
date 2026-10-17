@@ -559,7 +559,8 @@ class _PermissionTile extends StatelessWidget {
     final battery = permission.category == SettingsPermissionCategory.batteryOptimization;
     final status = switch ((battery, permission.granted)) {
       (true, true) => '已排除',
-      (true, false) => '未排除',
+      // Android 14 起「允許背景使用」打開後預設仍是「最佳化」，只有「不受限制」才算排除。
+      (true, false) => '未排除・需設為「不受限制」',
       (false, true) => '已允許',
       (false, false) => '未允許',
     };
