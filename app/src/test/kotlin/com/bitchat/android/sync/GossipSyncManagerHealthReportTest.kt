@@ -4,6 +4,7 @@ import com.bitchat.android.model.RequestSyncPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
+import com.bitchat.android.testsupport.RecordingExperimentRecorder
 import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +31,7 @@ class GossipSyncManagerHealthReportTest {
 
     private var now = 1_800_000_000_000L
     private val sent = mutableListOf<Pair<String, BitchatPacket>>()
+    private val recorder = RecordingExperimentRecorder()
     private lateinit var scope: CoroutineScope
     private lateinit var manager: GossipSyncManager
 
@@ -44,7 +46,8 @@ class GossipSyncManagerHealthReportTest {
                 override fun gcsMaxBytes(): Int = SyncDefaults.DEFAULT_FILTER_BYTES
                 override fun gcsTargetFpr(): Double = FPR
             },
-            nowMs = { now }
+            nowMs = { now },
+            experimentRecorder = recorder
         )
         manager.delegate = object : GossipSyncManager.Delegate {
             override fun sendPacket(packet: BitchatPacket) {}
@@ -187,6 +190,23 @@ class GossipSyncManagerHealthReportTest {
         )
 
         assertEquals(emptyList<BitchatPacket>(), syncedHealthReports())
+    }
+
+    @Test
+    fun `each sync reply is reported to the experiment recorder with the requester as peer`() {
+        val announce = announce(reporterA, now - 20_000)
+        val report = healthReport(reporterA, now - 10_000)
+        val alreadyHeld = healthReport(reporterB, now - 5_000)
+        manager.onPublicPacketSeen(announce)
+        manager.onPublicPacketSeen(report)
+        manager.onPublicPacketSeen(alreadyHeld)
+
+        manager.handleRequestSync(requester, requestHaving(alreadyHeld))
+
+        assertEquals(
+            listOf("SYNC:${announce.timestamp}:$requester", "SYNC:${report.timestamp}:$requester"),
+            recorder.events
+        )
     }
 
     @Test

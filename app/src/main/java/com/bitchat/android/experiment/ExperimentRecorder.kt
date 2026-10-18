@@ -38,6 +38,15 @@ interface ExperimentRecorder {
      */
     fun onBroadcastDropped(packet: BitchatPacket)
 
+    /**
+     * `SYNC`：回應 [peerID] 的 REQUEST_SYNC，把它缺的 [packet] 交給傳輸層單獨送給它（#91）。
+     *
+     * 接收端分不出封包是 flood 還是同步送來的：兩者是同一個已簽章封包，TTL 也可能都是 0。分析時
+     * 以這一列對照接收端的 `RX`：同一個 `(src, pts)`、這裡的 `peer` 是接收端、接收端 `RX` 的 `peer`
+     * 是本機，即為同步送達。
+     */
+    fun onSyncSent(packet: BitchatPacket, peerID: String)
+
     /** `QFULL`：[deviceAddress] 這條鏈路的送出佇列已滿，[data]（線路上的封包）被拒收。 */
     fun onSendQueueFull(deviceAddress: String, data: ByteArray)
 
@@ -60,6 +69,7 @@ interface ExperimentRecorder {
         override fun onDuplicate(packet: BitchatPacket, ingressAddress: String?) = Unit
         override fun onBroadcastWritten(packet: BitchatPacket, wireBytes: Int, fanout: Int) = Unit
         override fun onBroadcastDropped(packet: BitchatPacket) = Unit
+        override fun onSyncSent(packet: BitchatPacket, peerID: String) = Unit
         override fun onSendQueueFull(deviceAddress: String, data: ByteArray) = Unit
         override fun onLinkUp(deviceAddress: String, peerID: String) = Unit
         override fun onLinkDown(deviceAddress: String, peerID: String) = Unit

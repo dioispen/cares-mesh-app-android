@@ -56,6 +56,10 @@ class ExperimentEventRecorder(
         }
     }
 
+    override fun onSyncSent(packet: BitchatPacket, peerID: String) {
+        emit(packetEvent(Kind.SYNC, clock(), packet, packet.bleLength(), peer = peerID))
+    }
+
     override fun onSendQueueFull(deviceAddress: String, data: ByteArray) {
         val now = clock()
         val peer = probe.peerAt(deviceAddress)

@@ -1,6 +1,7 @@
 package com.bitchat.android.sync
 
 import android.util.Log
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.mesh.BluetoothPacketBroadcaster
 import com.bitchat.android.model.RequestSyncPacket
 import com.bitchat.android.protocol.BitchatPacket
@@ -19,7 +20,9 @@ class GossipSyncManager(
     private val myPeerID: String,
     private val scope: CoroutineScope,
     private val configProvider: ConfigProvider,
-    private val nowMs: () -> Long = System::currentTimeMillis
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    /** Field-experiment SYNC hook (#70, #91); only the BLE mesh passes a recording one. */
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
 ) {
     interface Delegate {
         fun sendPacket(packet: BitchatPacket)
@@ -217,7 +220,7 @@ class GossipSyncManager(
             if (!mightContain(idBytes)) {
                 // Send original packet unchanged to requester only (keep local TTL)
                 val toSend = pkt.copy(ttl = com.bitchat.android.util.AppConstants.SYNC_TTL_HOPS)
-                delegate?.sendPacketToPeer(fromPeerID, toSend)
+                sendSyncReply(fromPeerID, toSend)
                 Log.d(TAG, "Sent sync announce: Type ${toSend.type} from ${toSend.senderID.toHexString()} to $fromPeerID packet id ${idBytes.toHexString()}")
             }
         }
@@ -229,7 +232,7 @@ class GossipSyncManager(
             if (!mightContain(idBytes)) {
                 // Original signed packet, neighbor only; the receiver verifies and dedups as usual
                 val toSend = pkt.copy(ttl = AppConstants.SYNC_TTL_HOPS)
-                delegate?.sendPacketToPeer(fromPeerID, toSend)
+                sendSyncReply(fromPeerID, toSend)
                 Log.d(TAG, "Sent sync health report from ${toSend.senderID.toHexString()} to $fromPeerID packet id ${idBytes.toHexString()}")
             }
         }
@@ -240,10 +243,17 @@ class GossipSyncManager(
             val idBytes = PacketIdUtil.computeIdBytes(pkt)
             if (!mightContain(idBytes)) {
                 val toSend = pkt.copy(ttl = com.bitchat.android.util.AppConstants.SYNC_TTL_HOPS)
-                delegate?.sendPacketToPeer(fromPeerID, toSend)
+                sendSyncReply(fromPeerID, toSend)
                 Log.d(TAG, "Sent sync message: Type ${toSend.type} to $fromPeerID packet id ${idBytes.toHexString()}")
             }
         }
+    }
+
+    // Receivers cannot tell a synced copy from a flooded one (same signed packet, TTL may be 0
+    // either way), so field experiments record each reply on the serving side instead (#91)
+    private fun sendSyncReply(peerID: String, packet: BitchatPacket) {
+        delegate?.sendPacketToPeer(peerID, packet)
+        experimentRecorder.onSyncSent(packet, peerID)
     }
 
     private fun hexStringToByteArray(hexString: String): ByteArray {

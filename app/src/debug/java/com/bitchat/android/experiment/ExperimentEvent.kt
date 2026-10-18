@@ -20,7 +20,10 @@ data class ExperimentEvent(
     val ttl: Int? = null,
     /** 線路上的封包長度（bytes）。 */
     val len: Int? = null,
-    /** `RX`／`DUP`／`QFULL`：那條鏈路的 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居 peerID 前 8 碼。 */
+    /**
+     * `RX`／`DUP`／`QFULL`：那條鏈路的 peerID 前 8 碼；`SYNC`：要求同步的鄰居 peerID 前 8 碼；
+     * `LINK_*`／`STAT`／`RSSI`：鄰居 peerID 前 8 碼。
+     */
     val peer: String? = null,
     /** `TX`／`RELAY`：實際寫出的鏈路數。 */
     val fanout: Int? = null,
@@ -40,7 +43,7 @@ data class ExperimentEvent(
     /** Android 系統省電模式是否開著，輸出為 `1`／`0`。 */
     val sysSaver: Boolean? = null
 ) {
-    enum class Kind { TX, RX, DUP, RELAY, QFULL, LINK_UP, LINK_DOWN, STAT, RSSI }
+    enum class Kind { TX, RX, DUP, RELAY, SYNC, QFULL, LINK_UP, LINK_DOWN, STAT, RSSI }
 
     fun toCsvRow(): String = listOf(
         tMs,

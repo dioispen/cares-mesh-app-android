@@ -114,7 +114,7 @@
 | `pts` | 封包標頭的 timestamp（發送端時鐘，ms）。**`(src, pts)` 可以唯一識別一個封包** |
 | `ttl` | 收到或送出時的 TTL |
 | `len` | 封包長度（bytes） |
-| `peer` | `RX`／`DUP`：上一跳的 peerID 前 8 碼；`QFULL`：那條鏈路的 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居的 peerID 前 8 碼 |
+| `peer` | `RX`／`DUP`：上一跳的 peerID 前 8 碼；`QFULL`：那條鏈路的 peerID 前 8 碼；`SYNC`：要求同步、收到這份回送的鄰居 peerID 前 8 碼；`LINK_*`／`STAT`／`RSSI`：鄰居的 peerID 前 8 碼 |
 | `fanout` | `TX`／`RELAY`：實際寫出的鏈路數；0 代表沒有鏈路可送，或藍牙傳輸沒在跑而直接丟棄 |
 | `rssi` | `RSSI`：這次掃描收到對方廣播的強度（dBm）；`LINK_UP`／`STAT`：該鄰居最近 60 s 內最新的一筆，沒有就留空。程式不讀連線中的 RSSI（連線的值只在連上時抄一次，不會更新），所以一律用廣播 RSSI |
 | `mode` | 當下 app 自己的電源模式（見 2.1） |
@@ -128,6 +128,7 @@
 | `RX` | 第一次收到某封包（已去重、已驗簽），每個封包只有一列 | `SecurityManager.validatePacket` 通過之後 |
 | `DUP` | 之後收到的副本（只比對封包 ID，不驗簽；直連鄰居重送的 ANNOUNCE 也記在這裡） | `validatePacket` 的重複判斷分支 |
 | `RELAY` | 轉發別人的封包 | `BluetoothPacketBroadcaster` 實際寫出時 |
+| `SYNC` | 回應鄰居的 REQUEST_SYNC，把它缺的封包單獨送給它（[#91](https://github.com/dioispen/cares-mesh-app-android/issues/91)）。所有類型都記，`ttl` 一律為 0；交給傳輸層時記，沒有 `fanout` | `GossipSyncManager.handleRequestSync` |
 | `QFULL` | 單一鏈路的送出佇列已滿 | `BluetoothPacketBroadcaster.enqueueSend` |
 | `LINK_UP` / `LINK_DOWN` | 與直連鄰居建立或中斷連線 | 連線追蹤（`BluetoothConnectionTracker`） |
 | `STAT` | 每 60 s 一筆狀態快照 | 計時器 |
@@ -156,6 +157,14 @@ Debug 限定的畫面，可設定的參數：
 **(c) 現場即時計數**
 
 實驗畫面顯示最近 20 s／60 s 內依實驗 handle 收到的筆數、目前的直連數、電源模式與系統省電模式，以及發送器的「寫出結果」。只算實驗 handle，一般 Health 畫面送出的 Health Report 不會出現在這裡。這是現場用的回饋：放置中繼（E2-C）、判斷要不要重做某個 run，都靠這個畫面，不必等回去拉 log 才發現資料是壞的。
+
+**(d) 分辨 flood 與同步送達**
+
+[#91](https://github.com/dioispen/cares-mesh-app-android/issues/91) 之後，Health Report 也會經 anti-entropy 同步補送：鄰居連上 1 s 後、以及之後每 30 s，會向對方要它缺的封包。接收端分不出一筆 `RX` 是 flood 還是同步送來的：兩者是同一個已簽章封包，同步送來的 TTL 為 0，但 TTL 3 的 Health Report 經 3 次轉發也是 0。因此改在**送出端**記 `SYNC`，分析時對照：
+
+> 接收端 Q 的一筆 `RX`（`src`、`pts`、`peer` = P），若 P 的 `exp.csv` 有同一個 `(src, pts)`、`peer` = Q 的 `SYNC` 列，就是同步送達；否則是 flood。
+
+對照只用 `(src, pts)` 與 peerID，不需要校正時鐘。同一份封包 P 可能送給 Q 不只一次（Q 沒收下，例如驗不過簽章，見 [#95](https://github.com/dioispen/cares-mesh-app-android/issues/95)），所以 `SYNC` 列比對應的 `RX` 多是正常的。
 
 ### 3.3 跳數與延遲的推算
 
@@ -322,7 +331,7 @@ adb logcat -d -v epoch > "raw/$SESSION/$CODE.logcat.txt"
 
 | 指標 | 符號 | 定義 | 計算方式 |
 |---|---|---|---|
-| 送達率 | PDR | 接收端收到的唯一封包數 ÷ 發送數 | 以 `(src, pts)` 對齊 `TX` 與 `RX` |
+| 送達率 | PDR | 接收端收到的唯一封包數 ÷ 發送數 | 以 `(src, pts)` 對齊 `TX` 與 `RX`。依 3.2 (d) 分開報 flood PDR 與含同步的 PDR；與 #91 之前的資料比較時只用 flood PDR |
 | 端到端延遲 | L | 收到時間 − 封包時間戳（已校正時鐘偏移） | 報 p50、p95、最大值 |
 | 跳數 | h | 封包從來源到接收端經過的鏈路數 | `TTL_送出 − TTL_收到 + 1` |
 | 每跳延遲 | ΔL | 延遲對跳數的斜率 | 對 (h, L) 做線性迴歸 |

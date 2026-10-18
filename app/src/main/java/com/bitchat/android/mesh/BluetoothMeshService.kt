@@ -170,7 +170,8 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                 override fun gcsTargetFpr(): Double = try {
                     com.bitchat.android.ui.debug.DebugPreferenceManager.getGcsFprPercent(1.0) / 100.0
                 } catch (_: Exception) { 0.01 }
-            }
+            },
+            experimentRecorder = ExperimentTools.recorder
         )
 
         com.bitchat.android.service.MeshServiceHolder.setGossipManager(gossipSyncManager) { packet ->
