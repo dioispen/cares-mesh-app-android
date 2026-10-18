@@ -171,7 +171,8 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                     com.bitchat.android.ui.debug.DebugPreferenceManager.getGcsFprPercent(1.0) / 100.0
                 } catch (_: Exception) { 0.01 }
             },
-            experimentRecorder = ExperimentTools.recorder
+            experimentRecorder = ExperimentTools.recorder,
+            cachedAnnouncementFor = securityManager::healthReportAnnouncementFor
         )
 
         com.bitchat.android.service.MeshServiceHolder.setGossipManager(gossipSyncManager) { packet ->

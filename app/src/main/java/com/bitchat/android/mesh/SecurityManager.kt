@@ -316,6 +316,7 @@ class SecurityManager(
                     peerID,
                     announcement.noisePublicKey,
                     announcement.signingPublicKey,
+                    packet,
                     now,
                     authenticated = keyCheck == AnnouncedKeyCheck.AUTHENTICATED
                 )
@@ -432,6 +433,14 @@ class SecurityManager(
      */
     fun hasCachedHealthReportSigningKey(peerID: String): Boolean =
         healthReportSigningKeys.signingKeyFor(peerID, nowMs()) != null
+
+    /**
+     * The verified ANNOUNCE the cached key of [peerID] came from. A relay that holds [peerID]'s
+     * Health Report but no stored announcement (it learned the key from an old one) sends this
+     * first, so the next hop can verify the report too (#95).
+     */
+    fun healthReportAnnouncementFor(peerID: String): BitchatPacket? =
+        healthReportSigningKeys.announcementFor(peerID, nowMs())
 
     /**
      * Check if we have encryption keys for a peer

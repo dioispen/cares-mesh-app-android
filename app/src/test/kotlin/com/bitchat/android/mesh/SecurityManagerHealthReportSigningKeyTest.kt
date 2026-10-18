@@ -8,7 +8,9 @@ import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.util.AppConstants
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -151,6 +153,25 @@ class SecurityManagerHealthReportSigningKeyTest {
 
         assertTrue(securityManager.validatePacket(healthReport(), reporterPeerID))
         assertArrayEquals(signingKey, encryption.lastVerifyKey)
+    }
+
+    @Test
+    fun `a stale announce is kept whole so it can be passed on with the report`() {
+        val stale = announce(ageMs = AnnouncementIdentityValidator.MAX_CLOCK_SKEW_MS + 60_000)
+
+        securityManager.validatePacket(stale, reporterPeerID)
+
+        assertEquals(stale, securityManager.healthReportAnnouncementFor(reporterPeerID))
+    }
+
+    @Test
+    fun `a rejected announce is not kept to be passed on`() {
+        securityManager.validatePacket(
+            announce(ageMs = AnnouncementIdentityValidator.MAX_CLOCK_SKEW_MS + 60_000, signature = invalidSignature),
+            reporterPeerID
+        )
+
+        assertNull(securityManager.healthReportAnnouncementFor(reporterPeerID))
     }
 
     @Test

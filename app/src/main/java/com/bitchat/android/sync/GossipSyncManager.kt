@@ -22,7 +22,13 @@ class GossipSyncManager(
     private val configProvider: ConfigProvider,
     private val nowMs: () -> Long = System::currentTimeMillis,
     /** Field-experiment SYNC hook (#70, #91); only the BLE mesh passes a recording one. */
-    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp,
+    /**
+     * The announcement a sender's Health Report signing key was learned from, by sender peerID
+     * (`SecurityManager.healthReportAnnouncementFor`). Used for a held report whose sender has no
+     * stored announcement because we only ever heard an old one (#95).
+     */
+    private val cachedAnnouncementFor: (senderPeerID: String) -> BitchatPacket? = { null }
 ) {
     interface Delegate {
         fun sendPacket(packet: BitchatPacket)
@@ -228,10 +234,18 @@ class GossipSyncManager(
         }
 
         // 2) Health reports: send latest per sender if remote doesn't have them
-        for ((_, pair) in latestHealthReportBySender.entries) {
+        for ((sender, pair) in latestHealthReportBySender.entries) {
             val (id, pkt) = pair
             val idBytes = hexToBytes(id)
             if (!mightContain(idBytes)) {
+                // Without a stored announcement for the sender, the one our key came from goes
+                // first, or a requester that never met the sender cannot verify the report
+                cachedAnnouncementOfHeldReport(sender)
+                    ?.takeIf { !mightContain(PacketIdUtil.computeIdBytes(it)) }
+                    ?.let { announcement ->
+                        sendSyncReply(fromPeerID, announcement.copy(ttl = AppConstants.SYNC_TTL_HOPS))
+                        Log.d(TAG, "Sent cached announce of $sender ahead of their health report to $fromPeerID")
+                    }
                 // Original signed packet, neighbor only; the receiver verifies and dedups as usual
                 val toSend = pkt.copy(ttl = AppConstants.SYNC_TTL_HOPS)
                 sendSyncReply(fromPeerID, toSend)
@@ -249,6 +263,15 @@ class GossipSyncManager(
                 Log.d(TAG, "Sent sync message: Type ${toSend.type} to $fromPeerID packet id ${idBytes.toHexString()}")
             }
         }
+    }
+
+    // A stored announcement always wins: it is sent and advertised in its own right (#95).
+    // Only one older than the peer timeout is passed on: sent at TTL 0, the receiver then uses it
+    // for the key alone and does not take the sender to be present. The signature covers every
+    // field but TTL, so the announcement itself cannot carry such a mark.
+    private fun cachedAnnouncementOfHeldReport(sender: String): BitchatPacket? {
+        if (latestAnnouncementByPeer.containsKey(sender)) return null
+        return cachedAnnouncementFor(sender)?.takeIf { isStaleAnnouncement(it, nowMs()) }
     }
 
     // Receivers cannot tell a synced copy from a flooded one (same signed packet, TTL may be 0
@@ -290,9 +313,11 @@ class GossipSyncManager(
         for ((_, pair) in latestAnnouncementByPeer) {
             list.add(pair.second)
         }
-        // health reports
-        for ((_, pair) in latestHealthReportBySender) {
+        // health reports, and the cached announcement of any sender we hold no announcement for
+        // (otherwise the neighbor that sent it to us would resend it every round)
+        for ((sender, pair) in latestHealthReportBySender) {
             list.add(pair.second)
+            cachedAnnouncementOfHeldReport(sender)?.let(list::add)
         }
         // messages
         synchronized(messages) {

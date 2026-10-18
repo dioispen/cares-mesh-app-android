@@ -117,7 +117,12 @@ class MeshCore(
     private val directPeers = ConcurrentHashMap.newKeySet<String>()
 
     val gossipSyncManager: GossipSyncManager =
-        sharedGossipManager ?: GossipSyncManager(myPeerID = myPeerID, scope = scope, configProvider = gossipConfigProvider)
+        sharedGossipManager ?: GossipSyncManager(
+            myPeerID = myPeerID,
+            scope = scope,
+            configProvider = gossipConfigProvider,
+            cachedAnnouncementFor = securityManager::healthReportAnnouncementFor
+        )
     private val ownsGossipManager: Boolean = sharedGossipManager == null
 
     var delegate: MeshDelegate? = null
