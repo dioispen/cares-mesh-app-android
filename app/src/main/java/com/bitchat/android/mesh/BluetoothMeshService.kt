@@ -423,6 +423,9 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                 return encryptionService.verifyEd25519Signature(signature, data, publicKey)
             }
 
+            override fun hasCachedHealthReportSigningKey(peerID: String): Boolean =
+                securityManager.hasCachedHealthReportSigningKey(peerID)
+
             override fun getAuthenticatedSigningKey(noisePublicKey: ByteArray): ByteArray? =
                 authenticatedPeerState.persistedSigningKeyFor(noisePublicKey)
             

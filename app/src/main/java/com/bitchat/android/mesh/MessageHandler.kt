@@ -596,7 +596,11 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         val peerID = routed.peerID ?: "unknown"
 
         val peerInfo = delegate?.getPeerInfo(peerID)
-        if (peerInfo == null || !peerInfo.isVerifiedNickname) {
+        // A Reporter who already left is no longer a peer; SecurityManager then verified the
+        // signature with the key from their last verified ANNOUNCE instead (#95).
+        val verifiedWithCachedKey = peerInfo?.signingPublicKey == null &&
+            delegate?.hasCachedHealthReportSigningKey(peerID) == true
+        if (peerInfo?.isVerifiedNickname != true && !verifiedWithCachedKey) {
             Log.w(TAG, "Dropping health report from unverified peer ${peerID.take(8)}")
             return
         }
@@ -787,6 +791,8 @@ interface MessageHandlerDelegate {
     ): com.bitchat.android.noise.NoiseDecryptionResult?
     fun verifyEd25519Signature(signature: ByteArray, data: ByteArray, publicKey: ByteArray): Boolean
     fun getAuthenticatedSigningKey(noisePublicKey: ByteArray): ByteArray? = null
+    /** Whether a departed Reporter's Health Report can be verified with a cached signing key (#95). */
+    fun hasCachedHealthReportSigningKey(peerID: String): Boolean = false
     
     // Noise protocol operations
     fun hasNoiseSession(peerID: String): Boolean

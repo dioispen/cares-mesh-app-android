@@ -3,12 +3,14 @@ package com.bitchat.android.mesh
 import android.util.Log
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.experiment.ExperimentRecorder
+import com.bitchat.android.model.IdentityAnnouncement
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.sync.PacketIdUtil
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.noise.AuthenticatedNoiseSession
 import com.bitchat.android.noise.NoiseDecryptionResult
+import com.bitchat.android.util.AppConstants
 import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.*
 import java.util.*
@@ -23,11 +25,17 @@ class SecurityManager(
     private val encryptionService: EncryptionService,
     private val myPeerID: String,
     /** Field-experiment RX / DUP hook (#70); only the BLE mesh passes a recording one. */
-    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp,
+    private val nowMs: () -> Long = System::currentTimeMillis
 ) {
     
     companion object {
         private const val TAG = "SecurityManager"
+        // A relay keeps a sender's latest ANNOUNCE as long as their Health Report (#95), so an
+        // announcement up to that old (plus clock skew) may still teach the key to verify it.
+        private const val MAX_STALE_ANNOUNCE_AGE_MS =
+            AppConstants.Sync.HEALTH_REPORT_RETENTION_MS +
+                AnnouncementIdentityValidator.MAX_CLOCK_SKEW_MS
         private const val MESSAGE_TIMEOUT = com.bitchat.android.util.AppConstants.Security.MESSAGE_TIMEOUT_MS // 5 minutes (same as iOS)
         private const val CLEANUP_INTERVAL = com.bitchat.android.util.AppConstants.Security.CLEANUP_INTERVAL_MS // 5 minutes
         private const val MAX_PROCESSED_MESSAGES = com.bitchat.android.util.AppConstants.Security.MAX_PROCESSED_MESSAGES
@@ -41,6 +49,9 @@ class SecurityManager(
     private val messageTimestamps = Collections.synchronizedMap(mutableMapOf<String, Long>())
     private val keyExchangeTimestamps = Collections.synchronizedMap(mutableMapOf<String, Long>())
     
+    // Signing keys from verified ANNOUNCEs that outlive the live peer entry, for HEALTH_REPORT only
+    private val healthReportSigningKeys = HealthReportSigningKeyCache()
+
     // Delegate for callbacks
     var delegate: SecurityManagerDelegate? = null
     
@@ -64,7 +75,7 @@ class SecurityManager(
         }
         
         // Replay attack protection (same 5-minute window as iOS)
-        val currentTime = System.currentTimeMillis()
+        val currentTime = nowMs()
         val messageType = MessageType.fromValue(packet.type)
 
         // LEAVE mutates presence immediately and cannot be safely replayed after the in-memory
@@ -284,34 +295,35 @@ class SecurityManager(
             }
 
             if (MessageType.fromValue(packet.type) == MessageType.ANNOUNCE) {
-                val announcement = AnnouncementIdentityValidator.verify(packet, peerID) { signature, data, key ->
-                    encryptionService.verifyEd25519Signature(signature, data, key)
-                } ?: run {
+                val now = nowMs()
+                val freshAnnouncement = AnnouncementIdentityValidator.verify(packet, peerID, now, ::verifyEd25519)
+                // Past the clock-skew tolerance, a valid ANNOUNCE still proves the sender's
+                // signing key, though nothing about the sender being present (#95)
+                val announcement = freshAnnouncement ?: AnnouncementIdentityValidator.verifyStale(
+                    packet,
+                    peerID,
+                    now,
+                    MAX_STALE_ANNOUNCE_AGE_MS,
+                    ::verifyEd25519
+                ) ?: run {
                     Log.w(TAG, "Rejecting malformed, unbound, or invalidly signed ANNOUNCE from $peerID")
                     return false
                 }
 
-                val persistedSigningKey = delegate?.getAuthenticatedSigningKey(announcement.noisePublicKey)
-                if (persistedSigningKey != null &&
-                    !persistedSigningKey.contentEquals(announcement.signingPublicKey)
-                ) {
-                    Log.w(TAG, "Rejecting ANNOUNCE Ed key that conflicts with authenticated peer state for $peerID")
-                    return false
-                }
+                val keyCheck = checkAnnouncedKeys(announcement, peerID)
+                if (keyCheck == AnnouncedKeyCheck.CONFLICT) return false
+                healthReportSigningKeys.remember(
+                    peerID,
+                    announcement.noisePublicKey,
+                    announcement.signingPublicKey,
+                    now,
+                    authenticated = keyCheck == AnnouncedKeyCheck.AUTHENTICATED
+                )
 
-                val existingPeer = delegate?.getPeerInfo(peerID)
-                if (
-                    existingPeer?.noisePublicKey != null &&
-                    !existingPeer.noisePublicKey!!.contentEquals(announcement.noisePublicKey)
-                ) {
-                    Log.w(TAG, "Rejecting ANNOUNCE Noise-key replacement for $peerID")
-                    return false
-                }
-                if (
-                    existingPeer?.signingPublicKey != null &&
-                    !existingPeer.signingPublicKey!!.contentEquals(announcement.signingPublicKey)
-                ) {
-                    Log.w(TAG, "Rejecting ANNOUNCE signing-key replacement without authenticated peer state for $peerID")
+                if (freshAnnouncement == null || isLingeringSyncedAnnounce(packet, now)) {
+                    // Keep it away from the peer list, last-seen and relay: the sender may have
+                    // left long ago, and a relay only resent this to go with their Health Report.
+                    Log.d(TAG, "Learned Health Report signing key from an old ANNOUNCE of $peerID; not treating it as present")
                     return false
                 }
                 return true
@@ -323,9 +335,15 @@ class SecurityManager(
                 return false
             }
             
-            // 2. Get Signing Public Key
+            // 2. Get Signing Public Key. A Health Report may also be verified with the key its
+            // Reporter announced before leaving: relays resend it long after the peer entry is gone.
             val peerInfo = delegate?.getPeerInfo(peerID)
             val signingPublicKey = peerInfo?.signingPublicKey
+                ?: if (MessageType.fromValue(packet.type) == MessageType.HEALTH_REPORT) {
+                    healthReportSigningKeys.signingKeyFor(peerID, nowMs())
+                } else {
+                    null
+                }
             
             if (signingPublicKey == null) {
                 // If we don't have a key (and it's not an announce), we can't verify.
@@ -362,6 +380,59 @@ class SecurityManager(
         }
     }
     
+    private enum class AnnouncedKeyCheck { CONFLICT, UNPROVEN, AUTHENTICATED }
+
+    /**
+     * Applies the ANNOUNCE key rules: the signing key must match authenticated peer state when
+     * there is one, and must not replace the live peer's Noise or signing key.
+     */
+    private fun checkAnnouncedKeys(announcement: IdentityAnnouncement, peerID: String): AnnouncedKeyCheck {
+        val persistedSigningKey = delegate?.getAuthenticatedSigningKey(announcement.noisePublicKey)
+        if (persistedSigningKey != null &&
+            !persistedSigningKey.contentEquals(announcement.signingPublicKey)
+        ) {
+            Log.w(TAG, "Rejecting ANNOUNCE Ed key that conflicts with authenticated peer state for $peerID")
+            return AnnouncedKeyCheck.CONFLICT
+        }
+
+        val existingPeer = delegate?.getPeerInfo(peerID)
+        if (
+            existingPeer?.noisePublicKey != null &&
+            !existingPeer.noisePublicKey!!.contentEquals(announcement.noisePublicKey)
+        ) {
+            Log.w(TAG, "Rejecting ANNOUNCE Noise-key replacement for $peerID")
+            return AnnouncedKeyCheck.CONFLICT
+        }
+        if (
+            existingPeer?.signingPublicKey != null &&
+            !existingPeer.signingPublicKey!!.contentEquals(announcement.signingPublicKey)
+        ) {
+            Log.w(TAG, "Rejecting ANNOUNCE signing-key replacement without authenticated peer state for $peerID")
+            return AnnouncedKeyCheck.CONFLICT
+        }
+        return if (persistedSigningKey != null) AnnouncedKeyCheck.AUTHENTICATED else AnnouncedKeyCheck.UNPROVEN
+    }
+
+    /**
+     * A relay keeps a departed Reporter's last ANNOUNCE as long as their Health Report and resends
+     * both by sync (TTL [AppConstants.SYNC_TTL_HOPS]). Such a copy older than the peer timeout says
+     * nothing about the sender still being around, even within the clock-skew tolerance. A copy
+     * that still has hops left is left alone, so senders with a skewed clock keep appearing.
+     */
+    private fun isLingeringSyncedAnnounce(packet: BitchatPacket, now: Long): Boolean =
+        packet.ttl == AppConstants.SYNC_TTL_HOPS &&
+            now - packet.timestamp.toLong() > AppConstants.Mesh.STALE_PEER_TIMEOUT_MS
+
+    private fun verifyEd25519(signature: ByteArray, data: ByteArray, publicKey: ByteArray): Boolean =
+        encryptionService.verifyEd25519Signature(signature, data, publicKey)
+
+    /**
+     * Whether a Health Report from [peerID] can be verified with a cached key, i.e. one the
+     * Reporter announced before leaving, rather than a live peer's key.
+     */
+    fun hasCachedHealthReportSigningKey(peerID: String): Boolean =
+        healthReportSigningKeys.signingKeyFor(peerID, nowMs()) != null
+
     /**
      * Check if we have encryption keys for a peer
      */
@@ -398,7 +469,7 @@ class SecurityManager(
         managerScope.launch {
             while (isActive) {
                 delay(CLEANUP_INTERVAL)
-                cleanupOldData()
+                cleanupOldData(nowMs())
             }
         }
     }
@@ -446,6 +517,8 @@ class SecurityManager(
             processedKeyExchanges.removeAll(toRemove.toSet())
             toRemove.forEach { keyExchangeTimestamps.remove(it) }
         }
+
+        healthReportSigningKeys.pruneExpired(nowMs)
     }
     
     /**
@@ -465,6 +538,7 @@ class SecurityManager(
         processedKeyExchanges.clear()
         messageTimestamps.clear()
         keyExchangeTimestamps.clear()
+        healthReportSigningKeys.clear()
     }
     
     /**

@@ -36,6 +36,9 @@ object AppConstants {
         // packet timestamp. Long enough for a Rescuer to walk into range within tens of minutes,
         // short enough that reports from people who left or changed Status don't linger (#91).
         const val HEALTH_REPORT_RETENTION_MS: Long = 2 * 60 * 60 * 1000L
+        // Upper bound on senders whose signing key is remembered, after they leave, for verifying
+        // their synced Health Reports (#95). Well above the sync set's per-sender capacity.
+        const val MAX_HEALTH_REPORT_SIGNING_KEYS: Int = 1_000
     }
 
     object Fragmentation {
