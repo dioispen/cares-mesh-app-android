@@ -240,6 +240,25 @@ DateTime? _reportTime(ReportEntry report) {
   return raw is String ? DateTime.tryParse(raw) : null;
 }
 
+/// 一筆 BLE 廣播任務，連同它所依據的 Health Report 的 reportTime。
+typedef BleTaskEntry = ({MutualAidTask task, DateTime reportTime});
+
+/// 把收到的一份 BLE 廣播回報併入清單：同一 Reporter Handle 只留 reportTime 最新的一份。
+///
+/// 抵達順序不等於回報順序：封包會經不同路徑晚到，anti-entropy 同步也會在重新連上後
+/// 補送斷線期間的回報（#91）。reportTime 較舊的直接忽略並回傳原本那份清單（identical），
+/// 呼叫端可據此略過重繪。時間相同時以後到的為準——線路上只到秒，分不出先後。
+List<BleTaskEntry> mergeBleReport(
+  List<BleTaskEntry> current,
+  BleTaskEntry incoming,
+) {
+  final index =
+      current.indexWhere((r) => r.task.userId == incoming.task.userId);
+  if (index < 0) return [...current, incoming];
+  if (incoming.reportTime.isBefore(current[index].reportTime)) return current;
+  return [...current]..[index] = incoming;
+}
+
 /// 兩點間距離（公里）。任一端缺座標就回 null。
 double? distanceKmBetween(
   double? fromLat,
