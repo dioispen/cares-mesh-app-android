@@ -32,6 +32,10 @@ object AppConstants {
 
     object Sync {
         const val CLEANUP_INTERVAL_MS: Long = 60_000L
+        // How long each sender's latest Health Report stays in the sync set, counted from the
+        // packet timestamp. Long enough for a Rescuer to walk into range within tens of minutes,
+        // short enough that reports from people who left or changed Status don't linger (#91).
+        const val HEALTH_REPORT_RETENTION_MS: Long = 2 * 60 * 60 * 1000L
     }
 
     object Fragmentation {
