@@ -13,6 +13,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.service.MeshServiceHolder
@@ -169,7 +170,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             messenger = flutterEngine.dartExecutor.binaryMessenger,
             activity = this,
             events = events,
-            additionalMethodHandlers = listOf(chat, settings),
+            // ExperimentTools: debug-only field-experiment methods (#70); none in release.
+            additionalMethodHandlers = listOf(chat, settings) + ExperimentTools.bridgeHandlers(),
             avatarPhotoPicker = avatarPhotoPicker
         )
     }

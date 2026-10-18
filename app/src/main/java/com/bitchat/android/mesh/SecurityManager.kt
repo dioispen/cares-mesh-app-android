@@ -2,6 +2,7 @@ package com.bitchat.android.mesh
 
 import android.util.Log
 import com.bitchat.android.crypto.EncryptionService
+import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.sync.PacketIdUtil
 import com.bitchat.android.protocol.MessageType
@@ -18,7 +19,12 @@ import kotlin.collections.mutableSetOf
  * replay attack protection, and key exchange handling
  * Extracted from BluetoothMeshService for better separation of concerns
  */
-class SecurityManager(private val encryptionService: EncryptionService, private val myPeerID: String) {
+class SecurityManager(
+    private val encryptionService: EncryptionService,
+    private val myPeerID: String,
+    /** Field-experiment RX / DUP hook (#70); only the BLE mesh passes a recording one. */
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+) {
     
     companion object {
         private const val TAG = "SecurityManager"
@@ -47,8 +53,11 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
     
     /**
      * Validate packet security (timestamp, replay attacks, duplicates, signatures)
+     *
+     * [ingressAddress] is the link the packet arrived on; it is only passed on to the
+     * experiment recorder.
      */
-    fun validatePacket(packet: BitchatPacket, peerID: String): Boolean {
+    fun validatePacket(packet: BitchatPacket, peerID: String, ingressAddress: String? = null): Boolean {
         // Skip validation for our own packets
         if (peerID == myPeerID) {
             return false
@@ -76,8 +85,9 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
 
         // Duplicate detection
         val messageID = generateMessageID(packet, peerID)
-        
-        if (processedMessages.contains(messageID)) {
+        val alreadyProcessed = processedMessages.contains(messageID)
+
+        if (alreadyProcessed) {
             // Check for ANNOUNCE exception: allow if it looks like a direct neighbor (max TTL)
             // This ensures we observe the same peer on a new direct transport connection,
             // while still dropping looped/relayed duplicates.
@@ -85,6 +95,9 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
                     packet.ttl >= com.bitchat.android.util.AppConstants.MESSAGE_TTL_HOPS
 
             if (!isFreshAnnounce) {
+                // Matched by message ID only: verifying every dropped copy would add a signature
+                // check per duplicate on the flood path.
+                experimentRecorder.onDuplicate(packet, ingressAddress)
                 return false
             }
         }
@@ -100,6 +113,12 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
         processedMessages.add(messageID)
         messageTimestamps[messageID] = currentTime
 
+        // A direct ANNOUNCE let through again above is still a copy of one already received.
+        if (alreadyProcessed) {
+            experimentRecorder.onDuplicate(packet, ingressAddress)
+        } else {
+            experimentRecorder.onReceived(packet, ingressAddress)
+        }
         return true
     }
     

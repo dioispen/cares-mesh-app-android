@@ -1,0 +1,2 @@
+run_id,date,start,end,location,weather_temp,wifi_ap_count,topology,sender,ttl,n,interval_ms,battery_start,battery_end,power_mode,app_commit,anomalies,recorder
+E1C-s0.8-r1,,,,,,,,,,,,,,,,,

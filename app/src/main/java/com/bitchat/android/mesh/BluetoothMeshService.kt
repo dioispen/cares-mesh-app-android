@@ -3,6 +3,7 @@ package com.bitchat.android.mesh
 import android.content.Context
 import android.util.Log
 import com.bitchat.android.crypto.EncryptionService
+import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.AuthenticatedPeerState
 import com.bitchat.android.model.PeerCapabilities
@@ -107,10 +108,10 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
             fragment = fragmentManager::createFragments
         )
     }
-    private val securityManager = SecurityManager(encryptionService, myPeerID)
+    private val securityManager = SecurityManager(encryptionService, myPeerID, ExperimentTools.recorder)
     private val storeForwardManager = StoreForwardManager()
     private val messageHandler = MessageHandler(myPeerID, context.applicationContext)
-    internal val connectionManager = BluetoothConnectionManager(context, myPeerID, fragmentManager) // Made internal for access
+    internal val connectionManager = BluetoothConnectionManager(context, myPeerID, fragmentManager, ExperimentTools.recorder) // Made internal for access
     private val packetProcessor = PacketProcessor(myPeerID)
     private data class VoiceFrameRequest(val recipientPeerID: String?, val payload: ByteArray)
     private val voiceFrameQueue = Channel<VoiceFrameRequest>(capacity = 128)
@@ -550,8 +551,12 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
         
         // PacketProcessor delegates
         packetProcessor.delegate = object : PacketProcessorDelegate {
-            override fun validatePacketSecurity(packet: BitchatPacket, peerID: String): Boolean {
-                return securityManager.validatePacket(packet, peerID)
+            override fun validatePacketSecurity(routed: RoutedPacket): Boolean {
+                return securityManager.validatePacket(
+                    routed.packet,
+                    routed.peerID ?: "unknown",
+                    routed.relayAddress
+                )
             }
             
             override fun updatePeerLastSeen(peerID: String) {
