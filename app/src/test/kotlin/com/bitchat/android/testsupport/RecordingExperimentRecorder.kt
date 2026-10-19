@@ -23,6 +23,10 @@ internal class RecordingExperimentRecorder : ExperimentRecorder {
         events += "DROPPED:${packet.timestamp}"
     }
 
+    override fun onSyncSent(packet: BitchatPacket, peerID: String) {
+        events += "SYNC:${packet.timestamp}:$peerID"
+    }
+
     override fun onSendQueueFull(deviceAddress: String, data: ByteArray) {
         events += "QFULL:$deviceAddress"
     }

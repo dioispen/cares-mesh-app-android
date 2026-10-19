@@ -73,6 +73,18 @@ class ExperimentEventRecorderTest {
     }
 
     @Test
+    fun `a sync reply is a SYNC row naming the requester`() {
+        val packet = healthReport(OTHER, ttl = 0u)
+
+        recorder.onSyncSent(packet, NEIGHBOUR)
+
+        assertEquals(
+            listOf("$now,SYNC,0x30,a1b2c3d4,1700000000123,0,${packet.bleLength()},88990011,,,BALANCED,2,,,0"),
+            rows
+        )
+    }
+
+    @Test
     fun `a full queue identifies the rejected packet from its wire bytes`() {
         val data = healthReport(OTHER).toBinaryData(padding = true)!!
 

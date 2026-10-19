@@ -345,6 +345,58 @@ void main() {
     });
   });
 
+  group('mergeBleReport', () {
+    final t1 = DateTime.utc(2026, 10, 7, 18, 1);
+    final t2 = DateTime.utc(2026, 10, 7, 18, 6);
+
+    test('較新的回報取代同一 Reporter Handle 的舊回報', () {
+      final merged = mergeBleReport(
+        [(task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1)],
+        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t2),
+      );
+
+      expect(
+        [for (final r in merged) (r.task.injury, r.reportTime)],
+        [('重傷', t2)],
+      );
+    });
+
+    test('較舊的回報晚到（同步補送、繞路）時忽略，回傳原本那份', () {
+      final current = [
+        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t2),
+      ];
+
+      final merged = mergeBleReport(
+        current,
+        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1),
+      );
+
+      expect(identical(merged, current), isTrue);
+      expect(merged.single.task.injury, '重傷');
+    });
+
+    test('reportTime 相同時以後到的為準', () {
+      final merged = mergeBleReport(
+        [(task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1)],
+        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t1),
+      );
+
+      expect(merged.single.task.injury, '重傷');
+    });
+
+    test('不同 Reporter Handle 各留一筆，新來的排在後面', () {
+      final merged = mergeBleReport(
+        [(task: _bleTask(handle: 'bbbbbbbbbbbb'), reportTime: t2)],
+        (task: _bleTask(handle: 'aaaaaaaaaaaa'), reportTime: t1),
+      );
+
+      expect(
+        [for (final r in merged) r.task.userId],
+        ['bbbbbbbbbbbb', 'aaaaaaaaaaaa'],
+      );
+    });
+  });
+
   group('navigationUris', () {
     test('iOS 先開原生地圖，再退到 Google Maps 網頁', () {
       final uris = navigationUris(

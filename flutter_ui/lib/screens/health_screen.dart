@@ -59,7 +59,7 @@ class _HealthScreenState extends State<HealthScreen>
   String? _myBroadcastHandle;
   Future<String>? _broadcastHandleFuture;
   List<ReportEntry> _reports = [];
-  final List<MutualAidTask> _bleTasks = [];
+  List<BleTaskEntry> _bleTaskEntries = [];
   final Map<String, TaskStatus> _taskStatusOverrides = {};
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tasksSubscription;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
@@ -199,14 +199,13 @@ class _HealthScreenState extends State<HealthScreen>
         isBle: true,
       );
 
-      setState(() {
-        final index = _bleTasks.indexWhere((t) => t.userId == newTask.userId);
-        if (index >= 0) {
-          _bleTasks[index] = newTask;
-        } else {
-          _bleTasks.add(newTask);
-        }
-      });
+      // 同一 Reporter Handle 只留 reportTime 最新的一份；同步補送的舊回報晚到時不會蓋掉新的。
+      final merged = mergeBleReport(
+        _bleTaskEntries,
+        (task: newTask, reportTime: report.reportTime),
+      );
+      if (identical(merged, _bleTaskEntries)) return;
+      setState(() => _bleTaskEntries = merged);
     }, onError: (Object e) {
       // 沒有原生端的平台（iOS 模擬機、桌機）會丟 MissingPluginException。
       // 收不到 BLE 廣播不影響 Firestore 那條路，記錄下來就好，不要變成未處理例外。
@@ -526,7 +525,7 @@ class _HealthScreenState extends State<HealthScreen>
 
   List<MutualAidTask> _buildTaskList() => buildMutualAidTasks(
         reports: _reports,
-        bleTasks: _bleTasks,
+        bleTasks: [for (final r in _bleTaskEntries) r.task],
         currentUserId: _currentUserId,
         myLat: _currentPosition?.latitude,
         myLng: _currentPosition?.longitude,

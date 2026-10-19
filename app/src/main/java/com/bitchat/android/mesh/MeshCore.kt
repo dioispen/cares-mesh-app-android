@@ -481,7 +481,7 @@ class MeshCore(
                 try {
                     val pkt = routed.packet
                     val isBroadcast = (pkt.recipientID == null || pkt.recipientID.contentEquals(SpecialRecipients.BROADCAST))
-                    if (isBroadcast && pkt.type == MessageType.MESSAGE.value) {
+                    if (isBroadcast && (pkt.type == MessageType.MESSAGE.value || pkt.type == MessageType.HEALTH_REPORT.value)) {
                         gossipSyncManager.onPublicPacketSeen(pkt)
                     }
                 } catch (_: Exception) { }
