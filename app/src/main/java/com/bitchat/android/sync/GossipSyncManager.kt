@@ -22,7 +22,13 @@ class GossipSyncManager(
     private val configProvider: ConfigProvider,
     private val nowMs: () -> Long = System::currentTimeMillis,
     /** Field-experiment SYNC hook (#70, #91); only the BLE mesh passes a recording one. */
-    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp,
+    /**
+     * The announcement a sender's Health Report signing key was learned from, by sender peerID
+     * (`SecurityManager.healthReportAnnouncementFor`). Used for a held report whose sender has no
+     * stored announcement because we only ever heard an old one (#95).
+     */
+    private val cachedAnnouncementFor: (senderPeerID: String) -> BitchatPacket? = { null }
 ) {
     interface Delegate {
         fun sendPacket(packet: BitchatPacket)
@@ -49,7 +55,10 @@ class GossipSyncManager(
     // Stored packets for sync:
     // - broadcast messages: keep up to seenCapacity() most recent, keyed by packetId
     private val messages = LinkedHashMap<String, BitchatPacket>()
-    // - announcements: only keep latest per sender peerID
+    // - announcements: only keep latest per sender peerID. Dropped once older than
+    //   STALE_PEER_TIMEOUT_MS or when the peer is removed, except while we still hold that sender's
+    //   Health Report: a receiver that never met the sender needs it first to learn the signing
+    //   key the report is verified with (#95). handleRequestSync sends announcements first.
     private val latestAnnouncementByPeer = ConcurrentHashMap<String, Pair<String, BitchatPacket>>()
     // - health reports: only keep latest per sender peerID. Expire by their own timestamp
     //   (HEALTH_REPORT_RETENTION_MS), not with the sender's announcement: a Reporter whose phone
@@ -138,9 +147,8 @@ class GossipSyncManager(
         } else if (isAnnouncement) {
             // Ignore stale announcements older than STALE_PEER_TIMEOUT
             val now = nowMs()
-            val age = now - packet.timestamp.toLong()
-            if (age > com.bitchat.android.util.AppConstants.Mesh.STALE_PEER_TIMEOUT_MS) {
-                Log.d(TAG, "Ignoring stale ANNOUNCE (age=${age}ms > ${com.bitchat.android.util.AppConstants.Mesh.STALE_PEER_TIMEOUT_MS}ms)")
+            if (isStaleAnnouncement(packet, now)) {
+                Log.d(TAG, "Ignoring stale ANNOUNCE (age=${now - packet.timestamp.toLong()}ms > ${AppConstants.Mesh.STALE_PEER_TIMEOUT_MS}ms)")
                 return
             }
             // senderID is fixed-size 8 bytes; map to hex string for key
@@ -226,10 +234,18 @@ class GossipSyncManager(
         }
 
         // 2) Health reports: send latest per sender if remote doesn't have them
-        for ((_, pair) in latestHealthReportBySender.entries) {
+        for ((sender, pair) in latestHealthReportBySender.entries) {
             val (id, pkt) = pair
             val idBytes = hexToBytes(id)
             if (!mightContain(idBytes)) {
+                // Without a stored announcement for the sender, the one our key came from goes
+                // first, or a requester that never met the sender cannot verify the report
+                cachedAnnouncementOfHeldReport(sender)
+                    ?.takeIf { !mightContain(PacketIdUtil.computeIdBytes(it)) }
+                    ?.let { announcement ->
+                        sendSyncReply(fromPeerID, announcement.copy(ttl = AppConstants.SYNC_TTL_HOPS))
+                        Log.d(TAG, "Sent cached announce of $sender ahead of their health report to $fromPeerID")
+                    }
                 // Original signed packet, neighbor only; the receiver verifies and dedups as usual
                 val toSend = pkt.copy(ttl = AppConstants.SYNC_TTL_HOPS)
                 sendSyncReply(fromPeerID, toSend)
@@ -247,6 +263,15 @@ class GossipSyncManager(
                 Log.d(TAG, "Sent sync message: Type ${toSend.type} to $fromPeerID packet id ${idBytes.toHexString()}")
             }
         }
+    }
+
+    // A stored announcement always wins: it is sent and advertised in its own right (#95).
+    // Only one older than the peer timeout is passed on: sent at TTL 0, the receiver then uses it
+    // for the key alone and does not take the sender to be present. The signature covers every
+    // field but TTL, so the announcement itself cannot carry such a mark.
+    private fun cachedAnnouncementOfHeldReport(sender: String): BitchatPacket? {
+        if (latestAnnouncementByPeer.containsKey(sender)) return null
+        return cachedAnnouncementFor(sender)?.takeIf { isStaleAnnouncement(it, nowMs()) }
     }
 
     // Receivers cannot tell a synced copy from a flooded one (same signed packet, TTL may be 0
@@ -288,9 +313,11 @@ class GossipSyncManager(
         for ((_, pair) in latestAnnouncementByPeer) {
             list.add(pair.second)
         }
-        // health reports
-        for ((_, pair) in latestHealthReportBySender) {
+        // health reports, and the cached announcement of any sender we hold no announcement for
+        // (otherwise the neighbor that sent it to us would resend it every round)
+        for ((sender, pair) in latestHealthReportBySender) {
             list.add(pair.second)
+            cachedAnnouncementOfHeldReport(sender)?.let(list::add)
         }
         // messages
         synchronized(messages) {
@@ -315,40 +342,31 @@ class GossipSyncManager(
         return RequestSyncPacket(p = params.p, m = mVal, data = params.data).encode()
     }
 
-    // Periodically remove stale announcements and all their messages
+    // Periodically remove stale announcements and all their messages. The announcement of a
+    // sender whose Health Report we still hold stays (#95); their messages go regardless.
     internal fun pruneStaleAnnouncements() {
         val now = nowMs()
-        val stalePeers = mutableListOf<String>()
+        val stale = latestAnnouncementByPeer.entries
+            .filter { (_, pair) -> isStaleAnnouncement(pair.second, now) }
+            .map { it.key to it.value }
+        if (stale.isEmpty()) return
 
-        // Identify stale announcements by age
-        for ((peerID, pair) in latestAnnouncementByPeer.entries) {
-            val pkt = pair.second
-            val age = now - pkt.timestamp.toLong()
-            if (age > com.bitchat.android.util.AppConstants.Mesh.STALE_PEER_TIMEOUT_MS) {
-                stalePeers.add(peerID)
-            }
-        }
-
-        if (stalePeers.isEmpty()) return
-
-        // Remove announcements and their messages
+        var prunedAnnouncements = 0
         var totalPrunedMsgs = 0
-        for (peerID in stalePeers) {
-            // Count messages to be pruned for logging
-            val toRemove = mutableListOf<String>()
-            synchronized(messages) {
-                for ((id, message) in messages) {
-                    val sender = message.senderID.joinToString("") { b -> "%02x".format(b) }
-                    if (sender == peerID) toRemove.add(id)
-                }
+        for ((peerID, pair) in stale) {
+            totalPrunedMsgs += removeMessagesFromSender(peerID)
+            // Conditional remove: a newer announcement may have replaced it meanwhile
+            if (!latestHealthReportBySender.containsKey(peerID) &&
+                latestAnnouncementByPeer.remove(peerID, pair)
+            ) {
+                prunedAnnouncements++
+                restoreAnnouncementIfReportArrived(peerID, pair)
             }
-            totalPrunedMsgs += toRemove.size
-
-            // Reuse existing removal which also clears announcement entry
-            removeAnnouncementForPeer(peerID)
         }
 
-        Log.d(TAG, "Pruned ${stalePeers.size} stale announcements and $totalPrunedMsgs messages")
+        if (prunedAnnouncements > 0 || totalPrunedMsgs > 0) {
+            Log.d(TAG, "Pruned $prunedAnnouncements stale announcements and $totalPrunedMsgs messages")
+        }
     }
 
     // Periodically remove health reports older than HEALTH_REPORT_RETENTION_MS
@@ -361,39 +379,53 @@ class GossipSyncManager(
                 latestHealthReportBySender.remove(sender, pair)
             ) {
                 pruned++
+                // The announcement was only kept for this report (#95)
+                latestAnnouncementByPeer[sender]?.let { announcement ->
+                    if (isStaleAnnouncement(announcement.second, now) &&
+                        latestAnnouncementByPeer.remove(sender, announcement)
+                    ) {
+                        restoreAnnouncementIfReportArrived(sender, announcement)
+                    }
+                }
             }
         }
         if (pruned > 0) Log.d(TAG, "Pruned $pruned expired health reports")
     }
 
-    // Explicitly remove stored announcement for a given peer (hex ID).
-    // Health reports are kept on purpose: they expire on their own (pruneExpiredHealthReports).
+    // The checks above test for a held Health Report and then remove the announcement in two
+    // steps; a report stored in between would be left without the announcement it needs (#95)
+    private fun restoreAnnouncementIfReportArrived(sender: String, announcement: Pair<String, BitchatPacket>) {
+        if (latestHealthReportBySender.containsKey(sender)) {
+            latestAnnouncementByPeer.putIfAbsent(sender, announcement)
+        }
+    }
+
+    private fun isStaleAnnouncement(packet: BitchatPacket, now: Long): Boolean =
+        now - packet.timestamp.toLong() > AppConstants.Mesh.STALE_PEER_TIMEOUT_MS
+
+    // Explicitly remove stored announcement for a given peer (hex ID), along with their messages.
+    // Health reports are kept on purpose: they expire on their own (pruneExpiredHealthReports),
+    // and so does the announcement while one of them is held (#95).
     fun removeAnnouncementForPeer(peerID: String) {
         val key = peerID.lowercase()
-        if (latestAnnouncementByPeer.remove(key) != null) {
-            Log.d(TAG, "Removed stored announcement for peer $peerID")
+        if (!latestHealthReportBySender.containsKey(key)) {
+            latestAnnouncementByPeer.remove(key)?.let { removed ->
+                Log.d(TAG, "Removed stored announcement for peer $peerID")
+                restoreAnnouncementIfReportArrived(key, removed)
+            }
         }
 
-        // Collect IDs to remove first to avoid modifying collection while iterating
-        val idsToRemove = mutableListOf<String>()
-        synchronized(messages) {
-            for ((id, message) in messages) {
-                val sender = message.senderID.joinToString("") { b -> "%02x".format(b) }
-                if (sender == key) {
-                    idsToRemove.add(id)
-                }
-            }
+        val prunedMsgs = removeMessagesFromSender(key)
+        if (prunedMsgs > 0) {
+            Log.d(TAG, "Pruned $prunedMsgs messages with senders without announcements")
         }
-        
-        // Now remove the collected IDs
-        synchronized(messages) {
-            for (id in idsToRemove) {
-                messages.remove(id)
-            }
+    }
+
+    private fun removeMessagesFromSender(sender: String): Int = synchronized(messages) {
+        val before = messages.size
+        messages.values.removeAll { message ->
+            message.senderID.joinToString("") { b -> "%02x".format(b) } == sender
         }
-        
-        if (idsToRemove.isNotEmpty()) {
-            Log.d(TAG, "Pruned ${idsToRemove.size} messages with senders without announcements")
-        }
+        before - messages.size
     }
 }

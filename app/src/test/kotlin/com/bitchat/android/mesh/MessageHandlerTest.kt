@@ -239,6 +239,37 @@ class MessageHandlerTest {
         verify(delegate).onMessageReceived(any())
     }
 
+    // #95：Reporter 已離開、不在 peer 列表，SecurityManager 改用他最後一次 ANNOUNCE 的 key 驗過簽章。
+    @Test
+    fun `health report from a departed reporter verified with a cached key is delivered`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(null)
+        whenever(delegate.hasCachedHealthReportSigningKey(peerID)).thenReturn(true)
+
+        handler.handleMessage(RoutedPacket(healthReportPacket(), peerID, "sync-link"))
+
+        verify(delegate).onMessageReceived(any())
+    }
+
+    @Test
+    fun `health report from an unknown sender without a cached key is not delivered`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(null)
+        whenever(delegate.hasCachedHealthReportSigningKey(peerID)).thenReturn(false)
+
+        handler.handleMessage(RoutedPacket(healthReportPacket(), peerID, "sync-link"))
+
+        verify(delegate, never()).onMessageReceived(any())
+    }
+
+    @Test
+    fun `cached key does not vouch for an unverified peer that has its own key`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey).copy(isVerifiedNickname = false))
+        whenever(delegate.hasCachedHealthReportSigningKey(peerID)).thenReturn(true)
+
+        handler.handleMessage(RoutedPacket(healthReportPacket(), peerID, "direct-link"))
+
+        verify(delegate, never()).onMessageReceived(any())
+    }
+
     // handleHealthReport() 第一步就是 delegate.getPeerInfo()；handleMessage() 走廣播路徑時不會先呼叫它，
     // 所以 getPeerInfo 從未被呼叫即代表封包沒有進到 handleHealthReport()。
     @Test

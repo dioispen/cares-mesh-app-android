@@ -117,7 +117,12 @@ class MeshCore(
     private val directPeers = ConcurrentHashMap.newKeySet<String>()
 
     val gossipSyncManager: GossipSyncManager =
-        sharedGossipManager ?: GossipSyncManager(myPeerID = myPeerID, scope = scope, configProvider = gossipConfigProvider)
+        sharedGossipManager ?: GossipSyncManager(
+            myPeerID = myPeerID,
+            scope = scope,
+            configProvider = gossipConfigProvider,
+            cachedAnnouncementFor = securityManager::healthReportAnnouncementFor
+        )
     private val ownsGossipManager: Boolean = sharedGossipManager == null
 
     var delegate: MeshDelegate? = null
@@ -361,6 +366,9 @@ class MeshCore(
             override fun verifyEd25519Signature(signature: ByteArray, data: ByteArray, publicKey: ByteArray): Boolean {
                 return encryptionService.verifyEd25519Signature(signature, data, publicKey)
             }
+
+            override fun hasCachedHealthReportSigningKey(peerID: String): Boolean =
+                securityManager.hasCachedHealthReportSigningKey(peerID)
 
             override fun getAuthenticatedSigningKey(noisePublicKey: ByteArray): ByteArray? =
                 authenticatedPeerState.persistedSigningKeyFor(noisePublicKey)

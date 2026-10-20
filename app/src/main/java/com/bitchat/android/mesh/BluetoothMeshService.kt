@@ -171,7 +171,8 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                     com.bitchat.android.ui.debug.DebugPreferenceManager.getGcsFprPercent(1.0) / 100.0
                 } catch (_: Exception) { 0.01 }
             },
-            experimentRecorder = ExperimentTools.recorder
+            experimentRecorder = ExperimentTools.recorder,
+            cachedAnnouncementFor = securityManager::healthReportAnnouncementFor
         )
 
         com.bitchat.android.service.MeshServiceHolder.setGossipManager(gossipSyncManager) { packet ->
@@ -422,6 +423,9 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
             override fun verifyEd25519Signature(signature: ByteArray, data: ByteArray, publicKey: ByteArray): Boolean {
                 return encryptionService.verifyEd25519Signature(signature, data, publicKey)
             }
+
+            override fun hasCachedHealthReportSigningKey(peerID: String): Boolean =
+                securityManager.hasCachedHealthReportSigningKey(peerID)
 
             override fun getAuthenticatedSigningKey(noisePublicKey: ByteArray): ByteArray? =
                 authenticatedPeerState.persistedSigningKeyFor(noisePublicKey)

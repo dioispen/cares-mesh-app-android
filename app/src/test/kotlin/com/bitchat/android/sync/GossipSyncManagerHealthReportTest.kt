@@ -11,6 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -32,6 +33,8 @@ class GossipSyncManagerHealthReportTest {
     private var now = 1_800_000_000_000L
     private val sent = mutableListOf<Pair<String, BitchatPacket>>()
     private val recorder = RecordingExperimentRecorder()
+    /** What SecurityManager's key cache holds: announcements learned too old to be stored for sync. */
+    private val cachedAnnouncements = mutableMapOf<String, BitchatPacket>()
     private lateinit var scope: CoroutineScope
     private lateinit var manager: GossipSyncManager
 
@@ -47,7 +50,8 @@ class GossipSyncManagerHealthReportTest {
                 override fun gcsTargetFpr(): Double = FPR
             },
             nowMs = { now },
-            experimentRecorder = recorder
+            experimentRecorder = recorder,
+            cachedAnnouncementFor = { cachedAnnouncements[it] }
         )
         manager.delegate = object : GossipSyncManager.Delegate {
             override fun sendPacket(packet: BitchatPacket) {}
@@ -168,7 +172,200 @@ class GossipSyncManagerHealthReportTest {
         manager.pruneStaleAnnouncements()
 
         assertEquals(listOf(report), syncedHealthReports())
-        assertTrue(sent.none { it.second.type == MessageType.ANNOUNCE.value })
+    }
+
+    // #95：接收端要先學到發送者的 signing key 才驗得過補送的 Health Report，
+    // 所以只要還保留某發送者的 Health Report，就一併保留他最新的 ANNOUNCE。
+
+    @Test
+    fun `announcement outlives the stale timeout while the sender's health report is held`() {
+        val announcement = announce(reporterA, now - 10_000)
+        manager.onPublicPacketSeen(announcement)
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 10_000))
+
+        now += AppConstants.Mesh.STALE_PEER_TIMEOUT_MS + 1
+        manager.pruneStaleAnnouncements()
+
+        assertEquals(listOf(announcement), syncedAnnouncements())
+    }
+
+    @Test
+    fun `announcement survives peer removal while the sender's health report is held`() {
+        val announcement = announce(reporterA, now - 10_000)
+        manager.onPublicPacketSeen(announcement)
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 10_000))
+
+        manager.removeAnnouncementForPeer(reporterA)
+
+        assertEquals(listOf(announcement), syncedAnnouncements())
+    }
+
+    @Test
+    fun `retained announcement is sent before the sender's health report`() {
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 10_000))
+        manager.onPublicPacketSeen(announce(reporterA, now - 10_000))
+        now += AppConstants.Mesh.STALE_PEER_TIMEOUT_MS + 1
+        manager.pruneStaleAnnouncements()
+
+        sent.clear()
+        manager.handleRequestSync(requester, emptyRequest())
+
+        assertEquals(
+            listOf(MessageType.ANNOUNCE.value, MessageType.HEALTH_REPORT.value),
+            sent.map { it.second.type }
+        )
+    }
+
+    // A relay that learned the key from an old announcement (C in A → B → C → E) passes that
+    // announcement on with the report, so the next hop can verify it too (#95)
+
+    @Test
+    fun `cached announcement of a held report's sender is sent before the report`() {
+        val oldAnnouncement = announce(reporterA, now - 30 * 60_000)
+        cachedAnnouncements[reporterA] = oldAnnouncement
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 40 * 60_000))
+
+        manager.handleRequestSync(requester, emptyRequest())
+
+        assertEquals(
+            listOf(
+                oldAnnouncement.copy(ttl = AppConstants.SYNC_TTL_HOPS),
+                healthReport(reporterA, now - 40 * 60_000).copy(ttl = AppConstants.SYNC_TTL_HOPS)
+            ),
+            sent.map { it.second }
+        )
+    }
+
+    @Test
+    fun `cached announcement the requester already has is not resent`() {
+        val oldAnnouncement = announce(reporterA, now - 30 * 60_000)
+        cachedAnnouncements[reporterA] = oldAnnouncement
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 40 * 60_000))
+
+        manager.handleRequestSync(requester, requestHaving(oldAnnouncement))
+
+        assertEquals(listOf(MessageType.HEALTH_REPORT.value), sent.map { it.second.type })
+    }
+
+    @Test
+    fun `cached announcement is not sent when the requester already has the report`() {
+        val report = healthReport(reporterA, now - 40 * 60_000)
+        cachedAnnouncements[reporterA] = announce(reporterA, now - 30 * 60_000)
+        manager.onPublicPacketSeen(report)
+
+        manager.handleRequestSync(requester, requestHaving(report))
+
+        assertEquals(emptyList<BitchatPacket>(), sent.map { it.second })
+    }
+
+    @Test
+    fun `own gcs filter advertises the cached announcement of a held report's sender`() {
+        val oldAnnouncement = announce(reporterA, now - 30 * 60_000)
+        cachedAnnouncements[reporterA] = oldAnnouncement
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 40 * 60_000))
+
+        assertTrue(gcsContains(oldAnnouncement))
+    }
+
+    @Test
+    fun `cached announcement of a sender without a held report is neither advertised nor sent`() {
+        val oldAnnouncement = announce(reporterA, now - 30 * 60_000)
+        cachedAnnouncements[reporterA] = oldAnnouncement
+
+        manager.handleRequestSync(requester, emptyRequest())
+
+        assertEquals(emptyList<BitchatPacket>(), sent.map { it.second })
+        assertFalse(gcsContains(oldAnnouncement))
+    }
+
+    @Test
+    fun `cached announcement recent enough to look like presence is not passed on`() {
+        // Received at TTL 0 and no older than the peer timeout, it would put the sender back on
+        // the receiver's peer list
+        val recent = announce(reporterA, now - AppConstants.Mesh.STALE_PEER_TIMEOUT_MS)
+        cachedAnnouncements[reporterA] = recent
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 40 * 60_000))
+
+        manager.handleRequestSync(requester, emptyRequest())
+
+        assertEquals(listOf(MessageType.HEALTH_REPORT.value), sent.map { it.second.type })
+        assertFalse(gcsContains(recent))
+    }
+
+    @Test
+    fun `stored announcement is preferred over the cached one`() {
+        val stored = announce(reporterA, now - 10_000)
+        cachedAnnouncements[reporterA] = announce(reporterA, now - 30 * 60_000)
+        manager.onPublicPacketSeen(stored)
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 20_000))
+
+        manager.handleRequestSync(requester, emptyRequest())
+
+        assertEquals(
+            listOf(stored.copy(ttl = AppConstants.SYNC_TTL_HOPS)),
+            sent.map { it.second }.filter { it.type == MessageType.ANNOUNCE.value }
+        )
+    }
+
+    @Test
+    fun `stale announcement without a held health report is still pruned`() {
+        manager.onPublicPacketSeen(announce(reporterA, now - 10_000))
+        manager.onPublicPacketSeen(healthReport(reporterB, now - 10_000))
+
+        now += AppConstants.Mesh.STALE_PEER_TIMEOUT_MS + 1
+        manager.pruneStaleAnnouncements()
+
+        assertEquals(emptyList<BitchatPacket>(), syncedAnnouncements())
+    }
+
+    @Test
+    fun `peer removal still drops the announcement of a sender without a health report`() {
+        manager.onPublicPacketSeen(announce(reporterA, now - 10_000))
+
+        manager.removeAnnouncementForPeer(reporterA)
+
+        assertEquals(emptyList<BitchatPacket>(), syncedAnnouncements())
+    }
+
+    @Test
+    fun `stale sender's broadcast messages are pruned even while the announcement is retained`() {
+        manager.onPublicPacketSeen(announce(reporterA, now - 10_000))
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 10_000))
+        manager.onPublicPacketSeen(broadcastMessage(reporterA, now - 10_000))
+
+        now += AppConstants.Mesh.STALE_PEER_TIMEOUT_MS + 1
+        manager.pruneStaleAnnouncements()
+
+        sent.clear()
+        manager.handleRequestSync(requester, emptyRequest())
+        assertTrue(sent.none { it.second.type == MessageType.MESSAGE.value })
+    }
+
+    @Test
+    fun `retained announcement goes once the sender's health report expires`() {
+        manager.onPublicPacketSeen(announce(reporterA, now - 10_000))
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 10_000))
+        now += AppConstants.Mesh.STALE_PEER_TIMEOUT_MS + 1
+        manager.pruneStaleAnnouncements()
+
+        now += AppConstants.Sync.HEALTH_REPORT_RETENTION_MS
+        manager.pruneExpiredHealthReports()
+
+        sent.clear()
+        manager.handleRequestSync(requester, emptyRequest())
+        assertEquals(emptyList<Pair<String, BitchatPacket>>(), sent)
+    }
+
+    @Test
+    fun `fresh announcement stays when the sender's health report expires`() {
+        manager.onPublicPacketSeen(healthReport(reporterA, now - 10_000))
+        now += AppConstants.Sync.HEALTH_REPORT_RETENTION_MS
+        val announcement = announce(reporterA, now - 10_000)
+        manager.onPublicPacketSeen(announcement)
+
+        manager.pruneExpiredHealthReports()
+
+        assertEquals(listOf(announcement), syncedAnnouncements())
     }
 
     @Test
@@ -226,6 +423,21 @@ class GossipSyncManagerHealthReportTest {
             .map { it.copy(ttl = HEALTH_REPORT_TTL) }
     }
 
+    private fun syncedAnnouncements(): List<BitchatPacket> {
+        sent.clear()
+        manager.handleRequestSync(requester, emptyRequest())
+        return sent.map { it.second }
+            .filter { it.type == MessageType.ANNOUNCE.value }
+            .map { it.copy(ttl = ANNOUNCE_TTL) }
+    }
+
+    private fun gcsContains(packet: BitchatPacket): Boolean {
+        val request = RequestSyncPacket.decode(manager.buildGcsPayload())!!
+        val sorted = GCSFilter.decodeToSortedSet(request.p, request.m, request.data)
+        val v = GCSFilter.h64(PacketIdUtil.computeIdBytes(packet)) % request.m
+        return GCSFilter.contains(sorted, if (v == 0L) 1L else v)
+    }
+
     private fun emptyRequest(): RequestSyncPacket =
         RequestSyncPacket(p = GCSFilter.deriveP(FPR), m = 1, data = ByteArray(0))
 
@@ -257,6 +469,14 @@ class GossipSyncManagerHealthReportTest {
         senderID = hex(sender),
         timestamp = timestamp.toULong(),
         payload = byteArrayOf(1, 2, 3),
+        ttl = ANNOUNCE_TTL
+    )
+
+    private fun broadcastMessage(sender: String, timestamp: Long) = BitchatPacket(
+        type = MessageType.MESSAGE.value,
+        senderID = hex(sender),
+        timestamp = timestamp.toULong(),
+        payload = byteArrayOf(4, 5, 6),
         ttl = 7u
     )
 
@@ -266,6 +486,7 @@ class GossipSyncManagerHealthReportTest {
         // 與 BitchatFlutterChannels.sendHealthReportPacket 送出時的 TTL 相同；同步回送會改成 SYNC_TTL_HOPS，
         // 比對前還原回來
         val HEALTH_REPORT_TTL: UByte = 3u
+        val ANNOUNCE_TTL: UByte = 7u
 
         // ConfigProvider.gcsTargetFpr() 回傳的是 0..1 的比例，不是百分比
         const val FPR = 0.01
