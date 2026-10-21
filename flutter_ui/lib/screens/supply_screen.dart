@@ -126,23 +126,6 @@ class _SupplyScreenState extends State<SupplyScreen>
     await batch.commit();
   }
 
-  Future<void> _submitCustomRequest(
-      String itemName, String unit, int qty) async {
-    if (_currentUser == null) return;
-    final request = SupplyRequest(
-      userId: _currentUser!.id,
-      userName: _currentUser!.name,
-      itemId: 'custom',
-      itemName: itemName,
-      unit: unit.isEmpty ? '件' : unit,
-      qty: qty,
-    );
-    await FirebaseFirestore.instance
-        .collection('supply_requests')
-        .doc(request.requestId)
-        .set(request.toMap());
-  }
-
   Future<void> _submitPledge(SupplyItem item, int qty) async {
     if (_currentUser == null) return;
     final pledge = SupplyPledge(
@@ -216,21 +199,21 @@ class _SupplyScreenState extends State<SupplyScreen>
       children: [
         _categoryFilter(),
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-            itemCount: items.length + 1, // +1 for custom card
-            separatorBuilder: (_, _) => const SizedBox(height: 10),
-            itemBuilder: (_, i) {
-              if (i < items.length) {
-                final item = items[i];
-                return SupplyRequestCard(
-                  item: item,
-                  onRequest: (qty) => _submitRequest(item, qty),
-                );
-              }
-              return SupplyCustomRequestCard(onSubmit: _submitCustomRequest);
-            },
-          ),
+          // 只提供型錄上的品項，不開放自行填寫物品名稱：管理端才能統一盤點與調度。
+          child: items.isEmpty
+              ? _emptyState()
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                  itemCount: items.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final item = items[i];
+                    return SupplyRequestCard(
+                      item: item,
+                      onRequest: (qty) => _submitRequest(item, qty),
+                    );
+                  },
+                ),
         ),
       ],
     );
@@ -258,7 +241,7 @@ class _SupplyScreenState extends State<SupplyScreen>
               : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                   itemCount: _filteredItems.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (_, i) {
                     final item = _filteredItems[i];
                     return SupplyDonateCard(
@@ -317,200 +300,6 @@ class _SupplyScreenState extends State<SupplyScreen>
   }
 }
 
-// ── 自填需求 卡片 ────────────────────────────────────────────────
-/// 自填需求卡片。公開只為了讓排版測試（#79）能單獨建立它；物資頁本身要連 Firestore。
-@visibleForTesting
-class SupplyCustomRequestCard extends StatefulWidget {
-  final Future<void> Function(String itemName, String unit, int qty) onSubmit;
-  const SupplyCustomRequestCard({super.key, required this.onSubmit});
-
-  @override
-  State<SupplyCustomRequestCard> createState() => _CustomRequestCardState();
-}
-
-class _CustomRequestCardState extends State<SupplyCustomRequestCard> {
-  static const _card = Color(0xFFFEFDF9);
-  static const _brown = Color(0xFF5C3D2E);
-  static const _textPrimary = Color(0xFF3D2C1E);
-  static const _textSecondary = Color(0xFF8C7B6E);
-
-  final _nameCtrl = TextEditingController();
-  final _unitCtrl = TextEditingController();
-  final _qtyCtrl = TextEditingController();
-  bool _isSubmitting = false;
-
-  @override
-  void dispose() {
-    _nameCtrl.dispose();
-    _unitCtrl.dispose();
-    _qtyCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    final name = _nameCtrl.text.trim();
-    final qty = int.tryParse(_qtyCtrl.text.trim());
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('請輸入物品名稱'), behavior: SnackBarBehavior.floating));
-      return;
-    }
-    if (qty == null || qty <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('請輸入有效數量'), behavior: SnackBarBehavior.floating));
-      return;
-    }
-    setState(() => _isSubmitting = true);
-    try {
-      await widget.onSubmit(name, _unitCtrl.text.trim(), qty);
-      _nameCtrl.clear();
-      _unitCtrl.clear();
-      _qtyCtrl.clear();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('申請成功！'), behavior: SnackBarBehavior.floating));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('申請失敗：$e'), behavior: SnackBarBehavior.floating));
-      }
-    } finally {
-      if (mounted) setState(() => _isSubmitting = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _brown.withValues(alpha: 0.35), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _brown.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.edit_note_rounded,
-                    color: _brown, size: 20),
-              ),
-              const SizedBox(width: 12),
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('其他需求',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: _textPrimary)),
-                  Text('找不到品項？自行填寫申請',
-                      style: TextStyle(fontSize: 12, color: _textSecondary)),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _nameCtrl,
-            decoration: InputDecoration(
-              hintText: '物品名稱（例：輪椅、嬰兒車）',
-              isDense: true,
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: _brown, width: 2)),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: TextField(
-                  controller: _qtyCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    hintText: '數量',
-                    isDense: true,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            const BorderSide(color: _brown, width: 2)),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                flex: 2,
-                child: TextField(
-                  controller: _unitCtrl,
-                  decoration: InputDecoration(
-                    hintText: '單位（件）',
-                    isDense: true,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            const BorderSide(color: _brown, width: 2)),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                height: 42,
-                child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _brown,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    disabledBackgroundColor: _brown.withValues(alpha: 0.5),
-                  ),
-                  child: _isSubmitting
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2))
-                      : const Text('申請',
-                          style: TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ── 申請物資 卡片 ────────────────────────────────────────────────
 /// 申請物資卡片。公開只為了讓排版測試（#79）能單獨建立它；物資頁本身要連 Firestore。
 @visibleForTesting
@@ -518,20 +307,27 @@ class SupplyRequestCard extends StatefulWidget {
   final SupplyItem item;
   final Future<void> Function(int qty) onRequest;
 
-  const SupplyRequestCard({super.key, required this.item, required this.onRequest});
+  /// 一開始就展開。物資頁一律收起；排版測試用它檢查展開後的內容放不放得下。
+  final bool initiallyExpanded;
+
+  const SupplyRequestCard({
+    super.key,
+    required this.item,
+    required this.onRequest,
+    this.initiallyExpanded = false,
+  });
 
   @override
   State<SupplyRequestCard> createState() => _RequestCardState();
 }
 
 class _RequestCardState extends State<SupplyRequestCard> {
-  static const _card = Color(0xFFFEFDF9);
   static const _brown = Color(0xFF5C3D2E);
-  static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
 
   final _qtyCtrl = TextEditingController();
   bool _isSubmitting = false;
+  late bool _expanded = widget.initiallyExpanded;
 
   @override
   void dispose() {
@@ -551,6 +347,7 @@ class _RequestCardState extends State<SupplyRequestCard> {
     try {
       await widget.onRequest(qty);
       _qtyCtrl.clear();
+      if (mounted) setState(() => _expanded = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('申請成功！'),
@@ -573,50 +370,19 @@ class _RequestCardState extends State<SupplyRequestCard> {
     final catColor =
         kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
-        ],
-      ),
-      child: Column(
+    return _SupplyCardShell(
+      item: item,
+      expanded: _expanded,
+      onToggle: () => setState(() => _expanded = !_expanded),
+      expandLabel: '填寫申請數量',
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: catColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                    kCategoryIcons[item.category] ??
-                        Icons.inventory_2_rounded,
-                    color: catColor,
-                    size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(item.name,
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: _textPrimary)),
-                    Text(item.category,
-                        style: TextStyle(fontSize: 12, color: catColor)),
-                  ],
-                ),
-              ),
+              Text(item.category,
+                  style: TextStyle(fontSize: 12, color: catColor)),
+              const Spacer(),
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -635,61 +401,21 @@ class _RequestCardState extends State<SupplyRequestCard> {
             ],
           ),
           if (item.totalRequestedQty > 0) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Text(
               '已申請 ${item.totalRequestedQty} ${item.unit}，仍缺 ${item.netNeededQty} ${item.unit}',
-              style:
-                  const TextStyle(fontSize: 12, color: _textSecondary),
+              style: const TextStyle(fontSize: 12, color: _textSecondary),
             ),
           ],
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _qtyCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    hintText: '申請數量',
-                    suffixText: item.unit,
-                    isDense: true,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            const BorderSide(color: _brown, width: 2)),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                height: 42,
-                child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _brown,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    disabledBackgroundColor:
-                        _brown.withValues(alpha: 0.5),
-                  ),
-                  child: _isSubmitting
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2))
-                      : const Text('申請',
-                          style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ],
+          const SizedBox(height: 10),
+          _QtyInputRow(
+            controller: _qtyCtrl,
+            hint: '申請數量',
+            unit: item.unit,
+            buttonLabel: '申請',
+            buttonColor: _brown,
+            submitting: _isSubmitting,
+            onSubmit: _submit,
           ),
         ],
       ),
@@ -704,20 +430,26 @@ class SupplyDonateCard extends StatefulWidget {
   final SupplyItem item;
   final Future<void> Function(int qty) onPledge;
 
-  const SupplyDonateCard({super.key, required this.item, required this.onPledge});
+  /// 一開始就展開。物資頁一律收起；排版測試用它檢查展開後的內容放不放得下。
+  final bool initiallyExpanded;
+
+  const SupplyDonateCard({
+    super.key,
+    required this.item,
+    required this.onPledge,
+    this.initiallyExpanded = false,
+  });
 
   @override
   State<SupplyDonateCard> createState() => _DonateCardState();
 }
 
 class _DonateCardState extends State<SupplyDonateCard> {
-  static const _card = Color(0xFFFEFDF9);
-  static const _brown = Color(0xFF5C3D2E);
-  static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
 
   final _qtyCtrl = TextEditingController();
   bool _isSubmitting = false;
+  late bool _expanded = widget.initiallyExpanded;
 
   @override
   void dispose() {
@@ -737,6 +469,7 @@ class _DonateCardState extends State<SupplyDonateCard> {
     try {
       await widget.onPledge(qty);
       _qtyCtrl.clear();
+      if (mounted) setState(() => _expanded = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('感謝您的捐贈承諾！'),
@@ -783,62 +516,20 @@ class _DonateCardState extends State<SupplyDonateCard> {
         kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
     final progress = item.fulfillProgress;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
-        ],
+    return _SupplyCardShell(
+      item: item,
+      expanded: _expanded,
+      onToggle: () => setState(() => _expanded = !_expanded),
+      expandLabel: '填寫捐贈數量',
+      // 收起時仍看得到完成度，不必一張張點開才知道哪些最缺。
+      trailing: Text(
+        '${(progress * 100).toStringAsFixed(0)}%',
+        style: TextStyle(
+            fontSize: 13, fontWeight: FontWeight.w700, color: catColor),
       ),
-      child: Column(
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 標題列
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: catColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                    kCategoryIcons[item.category] ??
-                        Icons.inventory_2_rounded,
-                    color: catColor,
-                    size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(item.name,
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: _textPrimary)),
-                    Text(item.category,
-                        style: TextStyle(fontSize: 12, color: catColor)),
-                  ],
-                ),
-              ),
-              Text(
-                '${(progress * 100).toStringAsFixed(0)}%',
-                style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: catColor),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
           // 統計數字列：需求 / 庫存 / 已承諾 / 仍需
           Container(
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
@@ -882,58 +573,204 @@ class _DonateCardState extends State<SupplyDonateCard> {
             ),
           ),
           const SizedBox(height: 12),
-
-          // 輸入列
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _qtyCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    hintText: '捐贈數量',
-                    suffixText: item.unit,
-                    isDense: true,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            const BorderSide(color: _brown, width: 2)),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                height: 42,
-                child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: catColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    disabledBackgroundColor:
-                        catColor.withValues(alpha: 0.5),
-                  ),
-                  child: _isSubmitting
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2))
-                      : const Text('承諾捐贈',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ],
+          _QtyInputRow(
+            controller: _qtyCtrl,
+            hint: '捐贈數量',
+            unit: item.unit,
+            buttonLabel: '承諾捐贈',
+            buttonColor: catColor,
+            submitting: _isSubmitting,
+            onSubmit: _submit,
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── 共用：可展開的物資卡片外框 ──────────────────────────────────
+/// 收起時只有圖示、品名與右側的小展開按鈕，一個畫面看得到更多品項；
+/// 點按鈕（或整列）才展開細節與數量欄位。
+class _SupplyCardShell extends StatelessWidget {
+  final SupplyItem item;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final String expandLabel;
+  final Widget body;
+  final Widget? trailing;
+
+  const _SupplyCardShell({
+    required this.item,
+    required this.expanded,
+    required this.onToggle,
+    required this.expandLabel,
+    required this.body,
+    this.trailing,
+  });
+
+  static const _card = Color(0xFFFEFDF9);
+  static const _brown = Color(0xFF5C3D2E);
+  static const _textPrimary = Color(0xFF3D2C1E);
+
+  @override
+  Widget build(BuildContext context) {
+    final catColor =
+        kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
+
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: expanded ? catColor.withValues(alpha: 0.45) : Colors.transparent,
+        ),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 2))
+        ],
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: onToggle,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: catColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                        kCategoryIcons[item.category] ??
+                            Icons.inventory_2_rounded,
+                        color: catColor,
+                        size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(item.name,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: _textPrimary)),
+                  ),
+                  if (trailing != null) ...[
+                    trailing!,
+                    const SizedBox(width: 8),
+                  ],
+                  Semantics(
+                    button: true,
+                    label: expanded ? '收起' : expandLabel,
+                    child: AnimatedRotation(
+                      turns: expanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: _brown.withValues(alpha: 0.08),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.expand_more_rounded,
+                            size: 20, color: _brown),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: expanded
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                    child: body,
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 數量輸入欄＋送出按鈕。
+class _QtyInputRow extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+  final String unit;
+  final String buttonLabel;
+  final Color buttonColor;
+  final bool submitting;
+  final VoidCallback onSubmit;
+
+  const _QtyInputRow({
+    required this.controller,
+    required this.hint,
+    required this.unit,
+    required this.buttonLabel,
+    required this.buttonColor,
+    required this.submitting,
+    required this.onSubmit,
+  });
+
+  static const _brown = Color(0xFF5C3D2E);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              hintText: hint,
+              suffixText: unit,
+              isDense: true,
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _brown, width: 2)),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          height: 42,
+          child: ElevatedButton(
+            onPressed: submitting ? null : onSubmit,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: buttonColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              disabledBackgroundColor: buttonColor.withValues(alpha: 0.5),
+            ),
+            child: submitting
+                ? const SizedBox(
+                    height: 16,
+                    width: 16,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : Text(buttonLabel,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ],
     );
   }
 }
