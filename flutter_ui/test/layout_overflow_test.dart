@@ -323,27 +323,29 @@ void main() {
       totalPledgedQty: 12345,
     );
 
-    Future<void> pumpCards(WidgetTester tester) => tester.pumpWidget(MaterialApp(
+    // 卡片平常是收起的；數量欄位與統計在展開後才出現，所以兩種狀態都要放得下。
+    Future<void> pumpCards(WidgetTester tester, {required bool expanded}) => tester.pumpWidget(MaterialApp(
           home: Scaffold(
             body: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                SupplyRequestCard(item: item, onRequest: (qty) async {}),
-                SupplyCustomRequestCard(onSubmit: (name, unit, qty) async {}),
-                SupplyDonateCard(item: item, onPledge: (qty) async {}),
+                SupplyRequestCard(item: item, onRequest: (qty) async {}, initiallyExpanded: expanded),
+                SupplyDonateCard(item: item, onPledge: (qty) async {}, initiallyExpanded: expanded),
               ],
             ),
           ),
         ));
 
     for (final screen in _allCases) {
-      testWidgets('large quantities fit on $screen', (tester) async {
-        useScreen(tester, screen);
+      for (final expanded in [false, true]) {
+        testWidgets('large quantities fit on $screen (${expanded ? 'expanded' : 'collapsed'})', (tester) async {
+          useScreen(tester, screen);
 
-        await pumpCards(tester);
+          await pumpCards(tester, expanded: expanded);
 
-        expect(tester.takeException(), isNull);
-      });
+          expect(tester.takeException(), isNull);
+        });
+      }
     }
   });
 }
