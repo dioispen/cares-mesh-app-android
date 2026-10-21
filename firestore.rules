@@ -22,6 +22,22 @@ service cloud.firestore {
       return request.auth != null && userId == request.auth.uid;
     }
 
+    // 健康回報的狀況調查：依 ADR-0007 拆在兩份文件（Detail Tier 的 survey、Sensitive Tier
+    // 的 surveySensitive）。只檢查最外層的 keys() 擋不到巢狀 map 裡的內容，所以這兩個欄位
+    // 自己也要用 hasOnly() 鎖住，敏感項目才不會誤寫進大家都讀得到的 Detail Tier。
+    // 欄位可以不存在或為 null（沒有填調查）。
+    function mapFieldHasOnly(data, field, allowed) {
+      return !(field in data)
+          || data[field] == null
+          || (data[field] is map && data[field].keys().hasOnly(allowed));
+    }
+    function detailSurveyKeys() {
+      return ['mobility', 'location', 'companions', 'housing', 'needs'];
+    }
+    function sensitiveSurveyKeys() {
+      return ['vulnerable', 'notes'];
+    }
+
     match /rescuers/{uid} {
       // 只能查自己是不是 Verified Rescuer；名單本身不外流。
       allow read: if request.auth != null && request.auth.uid == uid;
@@ -45,7 +61,7 @@ service cloud.firestore {
       function newHelper() { return request.resource.data.get('helperId', null); }
       function detailTierKeys() {
         return ['id', 'reporterId', 'name', 'area', 'status', 'description',
-                'lat', 'lng', 'reportTime', 'taskStatus', 'helperId'];
+                'lat', 'lng', 'reportTime', 'taskStatus', 'helperId', 'survey'];
       }
 
       allow read: if request.auth != null;
@@ -55,13 +71,15 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && docId == request.auth.uid
                     && request.resource.data.reporterId == request.auth.uid
-                    && request.resource.data.keys().hasOnly(detailTierKeys());
+                    && request.resource.data.keys().hasOnly(detailTierKeys())
+                    && mapFieldHasOnly(request.resource.data, 'survey', detailSurveyKeys());
       // update 不得改動 reporterId：轉手給他人等於把這份回報和它的 Sensitive Tier
       // 讀取權交給對方。
       allow update: if request.auth != null
                     && resource.data.reporterId == request.auth.uid
                     && request.resource.data.reporterId == resource.data.reporterId
-                    && request.resource.data.keys().hasOnly(detailTierKeys());
+                    && request.resource.data.keys().hasOnly(detailTierKeys())
+                    && mapFieldHasOnly(request.resource.data, 'survey', detailSurveyKeys());
       allow delete: if request.auth != null
                     && resource.data.reporterId == request.auth.uid;
 
@@ -120,7 +138,9 @@ service cloud.firestore {
                             && request.resource.data.keys().hasOnly(
                                  ['reporterId', 'phone', 'bloodType', 'medicalInfo',
                                   'emergencyContactName', 'emergencyContactPhone',
-                                  'emergencyContactRelation']);
+                                  'emergencyContactRelation', 'surveySensitive'])
+                            && mapFieldHasOnly(request.resource.data, 'surveySensitive',
+                                               sensitiveSurveyKeys());
       allow delete: if request.auth != null && uid == request.auth.uid;
     }
 
