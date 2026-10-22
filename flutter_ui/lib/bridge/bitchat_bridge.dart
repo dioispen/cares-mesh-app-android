@@ -34,7 +34,7 @@ abstract final class ChatErrors {
 /// `sendHealthReport` 沒有送出時原生回的錯誤碼（[PlatformException.code]），對應 Kotlin
 /// `BitchatFlutterChannels` 的 `"sendHealthReport"` 分支。
 abstract final class HealthReportErrors {
-  /// 原生認不得這份 Broadcast Tier（例如 handle 或 Status 不合法）。
+  /// 原生認不得這份 Broadcast Tier（例如 handle 或 Status 不合法，或 Status 與 SOS 的組合不合法）。
   static const invalidFormat = 'INVALID_FORMAT';
 
   /// mesh 服務沒有在跑。
@@ -348,17 +348,30 @@ class BitchatBridge {
     await _method.invokeMethod<void>(ChatMethods.clearSuggestions);
   }
 
-  /// 發送 Health Report 的 Broadcast Tier（BLE 廣播 + 網路回報）。
+  /// 經 BLE mesh 廣播一份 Health Report 的 Broadcast Tier。
   ///
-  /// 傳入的 map 只應含不具識別性的欄位：`reporterHandle`、`status`（中文 label）、
-  /// 以及原始 `lat`/`lng`（由原生端就地降精度為 geohash）。姓名、電話、血型、自由文字
-  /// 等 Detail Tier 欄位不要放進來——原生端也會忽略（見 ADR-0003）。
+  /// 只帶不具識別性的欄位：[reporterHandle]、[status]（中文 label）、[sos]，以及原始
+  /// [lat]/[lng]（由原生端就地降精度為 geohash）。姓名、電話、血型、自由文字等 Detail Tier
+  /// 欄位不會、也不該進入廣播（見 ADR-0003）。「未宣告」只能和 [sos] 一起送，「安全」不能帶
+  /// [sos]（ADR-0004），否則原生回 [HealthReportErrors.invalidFormat]。
   ///
   /// 正常完成才表示原生已把它交給 mesh 廣播。沒有送出時往上拋，呼叫端必須讓使用者知道附近的人
   /// 收不到：[PlatformException] 是原生回報的原因（錯誤碼見 [HealthReportErrors]）；
   /// [MissingPluginException] 是這個平台沒有原生 mesh（例如 iOS、測試）。
-  static Future<void> sendHealthReport(Map<String, dynamic> broadcastTier) =>
-      _method.invokeMethod<void>('sendHealthReport', broadcastTier);
+  static Future<void> sendHealthReport({
+    required String reporterHandle,
+    required String status,
+    required double? lat,
+    required double? lng,
+    required bool sos,
+  }) =>
+      _method.invokeMethod<void>('sendHealthReport', <String, dynamic>{
+        'reporterHandle': reporterHandle,
+        'status': status,
+        'lat': lat,
+        'lng': lng,
+        'sos': sos,
+      });
 
   /// 實驗畫面（#70，debug 限定）讀取現場即時狀態，回傳：
   ///

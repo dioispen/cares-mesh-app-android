@@ -14,6 +14,29 @@ void main() {
     notes: '  家中長者的降血壓藥快用完了  ',
   );
 
+  test('傷勢選項都是本人填得出來的：失去意識、意識不清的人無法自己填表', () {
+    const all = [...HealthSurvey.minorInjuryOptions, ...HealthSurvey.severeInjuryOptions];
+    expect(all, isNot(contains('失去意識')));
+    expect(all, isNot(contains('意識不清')));
+    // 現在清醒、但之前昏過去，是填得出來而且救援者需要知道的（頭部外傷的警訊）。
+    expect(HealthSurvey.severeInjuryOptions, contains('曾短暫失去意識'));
+  });
+
+  test('同行人數改成 0 時，清掉需要特別照顧的「人」，寵物不算人數所以保留', () {
+    const s = HealthSurvey(companions: 2, vulnerable: ['長者', '寵物', '幼童']);
+
+    expect(s.withCompanions(0).vulnerable, ['寵物']);
+    expect(s.withCompanions(0).companions, 0);
+    expect(s.withCompanions(1).vulnerable, ['長者', '寵物', '幼童']);
+  });
+
+  test('只有寵物不需要有同行的人', () {
+    expect(HealthSurvey.needsCompanion('寵物'), isFalse);
+    for (final person in HealthSurvey.vulnerableOptions.where((o) => o != '寵物')) {
+      expect(HealthSurvey.needsCompanion(person), isTrue, reason: person);
+    }
+  });
+
   test('injurySummary 沿用 description 的寫法；沒有傷勢時為 null', () {
     expect(survey.injurySummary, '割傷、扭傷');
     expect(const HealthSurvey().injurySummary, isNull);

@@ -17,10 +17,15 @@ import java.nio.ByteOrder
  *   [0]        version        1 byte   目前為 VERSION；未知版本一律拒收，不做盡力解析
  *   [1..6]     reporterHandle 6 bytes  不具識別性、不可反推回帳號的固定長度識別碼
  *   [7]        status         1 byte   HealthStatus.wire
- *   [8]        geohashLen     1 byte   0 或 GEOHASH_PRECISION
- *   [9..]      geohash        geohashLen bytes  ASCII base32，降精度近似位置
+ *   [8]        flags          1 byte   bit0 = SOS；其餘位元發送端填 0，接收端忽略
+ *   [9]        geohashLen     1 byte   0 或 GEOHASH_PRECISION
+ *   [10..]     geohash        geohashLen bytes  ASCII base32，降精度近似位置
  *   [末 4]     reportTime     4 bytes  Unix 秒（unsigned，big-endian）
  * ```
+ *
+ * 版本 1 沒有 flags byte，解碼時仍接受、視為沒有 SOS。SOS 是 Health Report 上的標記，
+ * 不是另一種廣播內容（ADR-0004）：帶 SOS 的回報其 Status 必定是輕傷、重傷或未宣告，
+ * 「未宣告」沒有 SOS、或「安全」帶 SOS 都不合法，編碼端拒絕、解碼端拒收。
  *
  * 這一份格式定義（Kotlin）與 Dart 端 `ble_packet_decoder.dart` 的 `HealthReportPayload`
  * 必須對應同一組權威向量（見 `DisasterReportTest` 與 `health_report_payload_test.dart`）。
@@ -32,7 +37,9 @@ data class HealthReportPayload(
     /** 降精度 geohash；無位置資訊時為空字串。 */
     val geohash: String,
     /** 回報時間（epoch millis）。線路上只保留到秒，解碼後的毫秒位固定為 0。 */
-    val reportTimeMillis: Long
+    val reportTimeMillis: Long,
+    /** Reporter 是否正舉著 SOS（見 CONTEXT.md 的 SOS）。 */
+    val sos: Boolean = false
 ) {
 
     fun encode(): ByteArray {
@@ -44,12 +51,14 @@ data class HealthReportPayload(
         require(ghBytes.isEmpty() || ghBytes.size == GEOHASH_PRECISION) {
             "geohash 長度必須為 0 或 $GEOHASH_PRECISION"
         }
+        require(isLegal(status, sos)) { "Status ${status.name} 不能${if (sos) "帶" else "不帶"} SOS" }
 
-        val size = 1 + HANDLE_BYTES + 1 + 1 + ghBytes.size + 4
+        val size = 1 + HANDLE_BYTES + 1 + 1 + 1 + ghBytes.size + 4
         val buffer = ByteBuffer.allocate(size).apply { order(ByteOrder.BIG_ENDIAN) }
         buffer.put(VERSION.toByte())
         buffer.put(handleBytes)
         buffer.put(status.wire)
+        buffer.put(if (sos) FLAG_SOS else 0)
         buffer.put(ghBytes.size.toByte())
         buffer.put(ghBytes)
         buffer.putInt((reportTimeMillis / 1000L).toInt())
@@ -63,14 +72,20 @@ data class HealthReportPayload(
     companion object {
         private const val TAG = "HealthReportPayload"
 
-        const val VERSION = 1
+        /**
+         * 目前編碼的版本。[VERSION] 與 [BroadcastContentTag.HEALTH_REPORT] 是不同層的概念
+         * （payload 版本 vs. 廣播內容類型），不得互相假設相等。
+         */
+        const val VERSION = 2
+
+        /** 仍接受解碼的舊版本：沒有 flags byte。 */
+        private const val VERSION_WITHOUT_FLAGS = 1
+
         const val HANDLE_BYTES = 6
 
-        /**
-         * 合法的 reporterHandle 形式：HANDLE_BYTES * 2 個十六進位字元。
-         * 注意 [VERSION] 與 [BroadcastContentTag.HEALTH_REPORT] 的數值目前都是 1，
-         * 但兩者是不同層的概念（payload 版本 vs. 廣播內容類型），不得互相假設相等。
-         */
+        private const val FLAG_SOS: Byte = 0x01
+
+        /** 合法的 reporterHandle 形式：HANDLE_BYTES * 2 個十六進位字元。 */
         val HANDLE_REGEX = Regex("[0-9a-fA-F]{${HANDLE_BYTES * 2}}")
 
         /**
@@ -79,10 +94,18 @@ data class HealthReportPayload(
          */
         const val GEOHASH_PRECISION = 5
 
-        /** Broadcast Tier 的位元組上界：1 + handle + status + geohashLen + geohash + time。 */
-        const val MAX_ENCODED_SIZE = 1 + HANDLE_BYTES + 1 + 1 + GEOHASH_PRECISION + 4
+        /** Broadcast Tier 的位元組上界：1 + handle + status + flags + geohashLen + geohash + time。 */
+        const val MAX_ENCODED_SIZE = 1 + HANDLE_BYTES + 1 + 1 + 1 + GEOHASH_PRECISION + 4
 
+        /** 最短的合法 payload：版本 1、沒有 geohash。 */
         private const val MIN_ENCODED_SIZE = 1 + HANDLE_BYTES + 1 + 1 + 4
+
+        /** 「未宣告」只能和 SOS 一起出現；「安全」不能帶 SOS（ADR-0004）。 */
+        fun isLegal(status: HealthStatus, sos: Boolean): Boolean = when (status) {
+            HealthStatus.UNDECLARED -> sos
+            HealthStatus.SAFE -> !sos
+            HealthStatus.MINOR, HealthStatus.SEVERE -> true
+        }
 
         /**
          * 由完整資料建構 Broadcast Tier：座標在此就地降精度為 geohash，
@@ -93,7 +116,8 @@ data class HealthReportPayload(
             status: HealthStatus,
             lat: Double?,
             lng: Double?,
-            reportTimeMillis: Long
+            reportTimeMillis: Long,
+            sos: Boolean = false
         ): HealthReportPayload {
             require(HANDLE_REGEX.matches(reporterHandle)) {
                 "reporterHandle 必須是 ${HANDLE_BYTES * 2} 個十六進位字元"
@@ -103,12 +127,12 @@ data class HealthReportPayload(
             } else {
                 ""
             }
-            return HealthReportPayload(reporterHandle.lowercase(), status, gh, reportTimeMillis)
+            return HealthReportPayload(reporterHandle.lowercase(), status, gh, reportTimeMillis, sos)
         }
 
         /**
          * 解碼 Broadcast Tier payload。
-         * 遇到未知版本或格式不符一律回傳 null（拒收），不做盡力解析。
+         * 遇到未知版本、格式不符或不合法的 Status／SOS 組合一律回傳 null（拒收），不做盡力解析。
          * 日誌只輸出長度與版本號，不輸出任何欄位內容。
          */
         fun decode(data: ByteArray): HealthReportPayload? {
@@ -118,7 +142,7 @@ data class HealthReportPayload(
                 val buffer = ByteBuffer.wrap(data).apply { order(ByteOrder.BIG_ENDIAN) }
 
                 val version = buffer.get().toInt() and 0xFF
-                if (version != VERSION) {
+                if (version != VERSION && version != VERSION_WITHOUT_FLAGS) {
                     Log.w(TAG, "拒收健康報告：未知 payload 版本 $version")
                     return null
                 }
@@ -127,6 +151,8 @@ data class HealthReportPayload(
                 buffer.get(handleBytes)
 
                 val status = HealthStatus.fromWire(buffer.get()) ?: return null
+                val sos = version == VERSION && (buffer.get().toInt() and FLAG_SOS.toInt()) != 0
+                if (!isLegal(status, sos)) return null
 
                 val ghLen = buffer.get().toInt() and 0xFF
                 if (ghLen != 0 && ghLen != GEOHASH_PRECISION) return null
@@ -141,7 +167,8 @@ data class HealthReportPayload(
                     reporterHandle = bytesToHex(handleBytes),
                     status = status,
                     geohash = geohash,
-                    reportTimeMillis = reportTimeSecs * 1000L
+                    reportTimeMillis = reportTimeSecs * 1000L,
+                    sos = sos
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "健康報告解碼失敗，長度 ${data.size}")

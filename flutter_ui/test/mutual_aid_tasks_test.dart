@@ -19,6 +19,7 @@ ReportEntry _report({
   String? helperId,
   String? reportTime,
   String? area,
+  bool? sos,
 }) =>
     (
       id: id,
@@ -27,6 +28,7 @@ ReportEntry _report({
         'name': name,
         'area': ?area,
         'status': status,
+        'sos': ?sos,
         'description': description,
         'lat': lat,
         'lng': lng,
@@ -40,6 +42,7 @@ MutualAidTask _bleTask({
   required String handle,
   String injury = '重傷',
   double? distanceKm,
+  bool sos = false,
 }) =>
     MutualAidTask(
       id: 'ble_$handle',
@@ -50,6 +53,7 @@ MutualAidTask _bleTask({
       distanceKm: distanceKm,
       note: '來自 BLE 廣播',
       isBle: true,
+      sos: sos,
     );
 
 void main() {
@@ -245,6 +249,101 @@ void main() {
       );
 
       expect(ble.status, TaskStatus.waiting);
+    });
+
+    test('BLE：帶 SOS 的不論 Status 都列出，「未宣告」照原樣顯示', () {
+      final tasks = buildMutualAidTasks(
+        reports: const [],
+        bleTasks: [
+          _bleTask(handle: 'aaaaaaaaaaaa', injury: '未宣告', sos: true),
+          _bleTask(handle: 'bbbbbbbbbbbb', injury: '重傷', sos: true),
+        ],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(
+        [for (final t in tasks) (t.userId, t.injury, t.sos)],
+        [('aaaaaaaaaaaa', '未宣告', true), ('bbbbbbbbbbbb', '重傷', true)],
+      );
+    });
+
+    test('BLE：SOS 排在距離更近的非 SOS 任務前面', () {
+      final tasks = buildMutualAidTasks(
+        reports: const [],
+        bleTasks: [
+          _bleTask(handle: 'aaaaaaaaaaaa', distanceKm: 1),
+          _bleTask(handle: 'bbbbbbbbbbbb', injury: '未宣告', sos: true, distanceKm: 5),
+          _bleTask(handle: 'cccccccccccc', sos: true),
+        ],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      // SOS 組內照舊：近的在前、距離未知排最後
+      expect(tasks.map((t) => t.userId), ['bbbbbbbbbbbb', 'cccccccccccc', 'aaaaaaaaaaaa']);
+    });
+
+    test('BLE：套用本機進度時不會弄丟 SOS 標記', () {
+      final tasks = buildMutualAidTasks(
+        reports: const [],
+        bleTasks: [_bleTask(handle: 'aaaaaaaaaaaa', sos: true)],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+        bleStatusOverrides: const {'ble_aaaaaaaaaaaa': TaskStatus.accepted},
+      );
+
+      expect(tasks.single.sos, isTrue);
+      expect(tasks.single.status, TaskStatus.accepted);
+    });
+
+    test('Firestore：「未宣告＋SOS」會列出；SOS 撤回後的重傷照常列出但不標示 SOS', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(id: 'undeclared', status: '未宣告', sos: true),
+          _report(id: 'withdrawn', status: '重傷', sos: false),
+          _report(id: 'legacy', status: '輕傷'),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(
+        {for (final t in tasks) t.userId: (t.injury, t.sos)},
+        {'undeclared': ('未宣告', true), 'withdrawn': ('重傷', false), 'legacy': ('輕傷', false)},
+      );
+    });
+
+    test('Firestore：沒有 SOS 的「未宣告」與安全一樣不是任務', () {
+      final tasks = buildMutualAidTasks(
+        reports: [_report(id: 'odd', status: '未宣告', sos: false)],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(tasks, isEmpty);
+    });
+
+    test('Firestore 與 BLE 的 SOS 一起排在最前面', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(id: 'near', lat: _about1km.lat, lng: _about1km.lng),
+          _report(id: 'sos-far', status: '未宣告', sos: true, lat: _about5km.lat, lng: _about5km.lng),
+        ],
+        bleTasks: [_bleTask(handle: 'aaaaaaaaaaaa', sos: true, distanceKm: 3)],
+        currentUserId: 'me',
+        myLat: _taipeiMainStation.lat,
+        myLng: _taipeiMainStation.lng,
+      );
+
+      expect(tasks.map((t) => t.userId), ['aaaaaaaaaaaa', 'sos-far', 'near']);
     });
 
     test('交接期間同一個人有舊（隨機 ID）與新（uid）兩份文件時，只出現最新那筆', () {

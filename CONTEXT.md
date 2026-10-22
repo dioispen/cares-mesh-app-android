@@ -35,7 +35,7 @@ A Rescuer whom the project has verified out of band and listed on the backend. T
 _Avoid_: rescue team, admin, 救援人員
 
 **Mutual-aid Task**:
-A Health Report whose Status calls for help (輕傷 or 重傷), offered to Rescuers to take on. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it.
+A Health Report whose Status calls for help (輕傷 or 重傷) or that carries an SOS, offered to Rescuers to take on; those carrying an SOS come first. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it.
 _Avoid_: rescue request, ticket, job
 
 **Helper**:

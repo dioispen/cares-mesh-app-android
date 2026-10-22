@@ -6,11 +6,15 @@ package com.bitchat.android.protocol
  * 這個 enum 是 Status ↔ 線路位元組對應的**單一真相來源**（見 ADR-0002、ADR-0003）。
  * 中文字串（安全／輕傷／重傷）只存在於 UI 與 Firestore 查詢鍵，永遠不上 BLE 線路；
  * 線路上一律是 [wire] 這個單一位元組，不受在地化字串影響。
+ *
+ * [UNDECLARED]（未宣告）只會和 SOS 一起出現：Reporter 舉起 SOS 時沒有說明自己的狀況
+ * （ADR-0004）。它不是身體狀況的一種，單獨出現的「未宣告」一律不合法。
  */
 enum class HealthStatus(val wire: Byte, val label: String) {
     SAFE(0, "安全"),
     MINOR(1, "輕傷"),
-    SEVERE(2, "重傷");
+    SEVERE(2, "重傷"),
+    UNDECLARED(3, "未宣告");
 
     companion object {
         fun fromWire(b: Byte): HealthStatus? = values().find { it.wire == b }
