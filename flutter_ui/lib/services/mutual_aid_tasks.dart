@@ -1,11 +1,17 @@
 import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:geolocator/geolocator.dart';
 
+import '../models/health_report.dart' show statusUndeclared;
+
 /// 互救任務的進度。Firestore 上以 [TaskStatus.name] 存放（waiting / accepted / done）。
 enum TaskStatus { waiting, accepted, done }
 
 /// 需要協助的傷勢等級。安全不構成任務。
 const mutualAidInjuries = {'輕傷', '重傷'};
+
+/// 可能成為任務的 Status：[mutualAidInjuries] 加上「未宣告」。帶 SOS 的回報其 Status 必定是
+/// 其中之一（ADR-0004），所以 Firestore 用這幾個值查詢就涵蓋所有 SOS，不必另外查 `sos`。
+const mutualAidQueryStatuses = {...mutualAidInjuries, statusUndeclared};
 
 /// 互救任務清單上的一筆。
 ///
@@ -35,6 +41,9 @@ class MutualAidTask {
   final String? helperId;
   final bool isBle;
 
+  /// Reporter 正舉著 SOS。[injury] 此時可能是「未宣告」。
+  final bool sos;
+
   const MutualAidTask({
     required this.id,
     required this.name,
@@ -49,6 +58,7 @@ class MutualAidTask {
     this.status = TaskStatus.waiting,
     this.helperId,
     this.isBle = false,
+    this.sos = false,
   });
 
   MutualAidTask copyWith({TaskStatus? status, double? distanceKm}) =>
@@ -66,6 +76,7 @@ class MutualAidTask {
         status: status ?? this.status,
         helperId: helperId,
         isBle: isBle,
+        sos: sos,
       );
 
   /// 距離未知時不編故事：顯示「距離未知」而不是 0 公里。
@@ -125,11 +136,13 @@ typedef ReportEntry = ({String id, Map<String, dynamic> data});
 ///
 /// 規則：
 /// * 同一位回報者只留最新的一筆（[latestReportPerReporter]）。
-/// * 只留需要協助的傷勢（[mutualAidInjuries]），安全的回報不是任務。
+/// * 只留需要協助的傷勢（[mutualAidInjuries]），安全的回報不是任務；帶 SOS 的不論 Status
+///   都列出（[isMutualAidTask]）。
 /// * 排除自己的回報——自己的狀態在「我的狀態」頁，不該出現在待救援清單。
 ///   [currentUserId] 還沒讀到時一律不顯示任何 Firestore 任務，否則會閃出自己那筆。
 /// * BLE 任務的 handle 依設計無法與帳號 ID 連結（ADR-0003），只能在 handle 相同時去重。
-/// * 近的排前面，距離未知的排最後——未知不等於 0 公里，不該插隊到最前面。
+/// * SOS 排最前面；同一組內近的排前面，距離未知的排最後——未知不等於 0 公里，
+///   不該插隊到最前面。
 List<MutualAidTask> buildMutualAidTasks({
   required List<ReportEntry> reports,
   required List<MutualAidTask> bleTasks,
@@ -147,7 +160,8 @@ List<MutualAidTask> buildMutualAidTasks({
       if (reporterId == null || reporterId == currentUserId) continue;
 
       final injury = data['status'] as String?;
-      if (injury == null || !mutualAidInjuries.contains(injury)) continue;
+      final sos = data['sos'] == true;
+      if (injury == null || !isMutualAidTask(injury, sos: sos)) continue;
 
       final lat = (data['lat'] as num?)?.toDouble();
       final lng = (data['lng'] as num?)?.toDouble();
@@ -174,12 +188,13 @@ List<MutualAidTask> buildMutualAidTasks({
             : '無補充說明',
         status: taskStatusFromRaw(data['taskStatus']),
         helperId: data['helperId'] as String?,
+        sos: sos,
       ));
     }
   }
 
   for (final bleTask in bleTasks) {
-    if (!mutualAidInjuries.contains(bleTask.injury)) continue;
+    if (!isMutualAidTask(bleTask.injury, sos: bleTask.sos)) continue;
     if (tasks.any((t) => t.userId == bleTask.userId)) continue;
     tasks.add(bleTask.copyWith(
       status: bleStatusOverrides[bleTask.id] ?? bleTask.status,
@@ -187,6 +202,7 @@ List<MutualAidTask> buildMutualAidTasks({
   }
 
   tasks.sort((a, b) {
+    if (a.sos != b.sos) return a.sos ? -1 : 1;
     final ad = a.distanceKm;
     final bd = b.distanceKm;
     if (ad == null && bd == null) return 0;
@@ -196,6 +212,10 @@ List<MutualAidTask> buildMutualAidTasks({
   });
   return tasks;
 }
+
+/// 這份回報是不是互救任務：帶 SOS 的不論 Status 都是，否則只有 [mutualAidInjuries]。
+bool isMutualAidTask(String status, {required bool sos}) =>
+    sos || mutualAidInjuries.contains(status);
 
 /// 每位回報者只留最新的一筆，維持原本的先後順序。
 ///

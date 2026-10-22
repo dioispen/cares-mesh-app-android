@@ -2,6 +2,9 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
+/// Status「未宣告」：Reporter 舉起 SOS 時沒有說明自己的狀況。只會和 SOS 一起出現（ADR-0004）。
+const statusUndeclared = '未宣告';
+
 /// 本機自填的完整 Health Report。上傳到後端時拆成兩份文件（ADR-0005）：
 ///
 /// * [toDetailJson] → `health_reports/{uid}`：Detail Tier（姓名、居住區域、Status 與傷勢
@@ -18,11 +21,12 @@ class HealthReport {
   // ── Detail Tier ──
   final String name;        // 回報者姓名
   final String? area;       // 居住區域
-  final String status;      // 健康狀態：'安全' / '輕傷' / '重傷'
+  final String status;      // 健康狀態：'安全' / '輕傷' / '重傷' / '未宣告'（只和 SOS 一起出現）
   final String? description; // 傷勢細項（選項，不是自由輸入；可選）
   final double? lat;         // 緯度（可選）
   final double? lng;         // 經度（可選）
   final DateTime reportTime; // 回報時間
+  final bool sos;            // Reporter 正舉著 SOS（ADR-0004）
 
   // ── Sensitive Tier ──
   final String? phone;                    // 聯絡電話
@@ -42,6 +46,7 @@ class HealthReport {
     this.lat,
     this.lng,
     required this.reportTime,
+    this.sos = false,
     this.phone,
     this.bloodType,
     this.medicalInfo,
@@ -64,6 +69,7 @@ class HealthReport {
         // 一律存 UTC（結尾帶 Z）。存本地時間的字串沒有時區資訊，不同時區的裝置
         // 混在同一個 collection 裡就無法比較先後，字典序也不再等於時間序。
         'reportTime': reportTime.toUtc().toIso8601String(),
+        'sos': sos,
       };
 
   /// `health_report_sensitive/{uid}` 的內容。
@@ -95,6 +101,8 @@ class HealthReport {
         // 舊文件是沒有時區的本地時間字串，parse 後當成本地時間；帶 Z 的新文件
         // 會解析成 UTC，這裡統一轉回本地時間再交給 UI。
         reportTime: DateTime.parse(detail['reportTime'] as String).toLocal(),
+        // #83 之前的文件沒有 sos 欄位。
+        sos: detail['sos'] == true,
         phone: sensitive?['phone'] as String?,
         bloodType: sensitive?['bloodType'] as String?,
         medicalInfo: sensitive?['medicalInfo'] as String?,
@@ -112,8 +120,11 @@ class BroadcastHealthReport {
   /// 不具識別性的固定長度識別碼，不可反推回帳號或 Firestore 文件。
   final String reporterHandle;
 
-  /// '安全' / '輕傷' / '重傷'。
+  /// '安全' / '輕傷' / '重傷' / '未宣告'。
   final String status;
+
+  /// Reporter 是否正舉著 SOS。
+  final bool sos;
 
   /// 降精度 geohash；無位置時為 null。
   final String? geohash;
@@ -127,6 +138,7 @@ class BroadcastHealthReport {
   const BroadcastHealthReport({
     required this.reporterHandle,
     required this.status,
+    this.sos = false,
     this.geohash,
     this.approxLat,
     this.approxLng,

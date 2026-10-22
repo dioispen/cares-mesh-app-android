@@ -198,13 +198,9 @@ class BitchatFlutterChannels(
                         }
                         is Map<*, *> -> {
                             // 如果仍然是 Map（JSON），則轉換為 HealthReportPayload 進行二進制編碼
-                            val reportMap = call.arguments as Map<*, *>
-                            val report = convertMapToHealthReportPayload(reportMap)
-                            if (report != null) {
-                                report.encode()
-                            } else {
-                                null
-                            }
+                            HealthReportBridgeMap
+                                .toPayload(call.arguments as Map<*, *>, System.currentTimeMillis())
+                                ?.encode()
                         }
                         else -> null
                     }
@@ -274,31 +270,6 @@ class BitchatFlutterChannels(
             Log.e("BitchatBridge", "❌ Mesh 服務未啟動，無法發送 HEALTH_REPORT")
         }
         return sent
-    }
-
-    /**
-     * 從 Flutter 傳來的 Broadcast Tier map 建構 payload。
-     * 只接受不具識別性的欄位——reporterHandle、status（中文 label）、以及原始經緯度
-     * （經緯度在此就地降精度為 geohash，精確值不會進入廣播封包）。
-     * 任何 PII（姓名、電話、血型、自由文字）即使出現在 map 中也一律忽略。
-     */
-    private fun convertMapToHealthReportPayload(map: Map<*, *>): com.bitchat.android.protocol.HealthReportPayload? {
-        return try {
-            val handle = map["reporterHandle"] as? String ?: return null
-            if (!com.bitchat.android.protocol.HealthReportPayload.HANDLE_REGEX.matches(handle)) return null
-            val status = com.bitchat.android.protocol.HealthStatus.fromLabel(
-                map["status"] as? String ?: return null
-            ) ?: return null
-            com.bitchat.android.protocol.HealthReportPayload.fromLocation(
-                reporterHandle = handle,
-                status = status,
-                lat = (map["lat"] as? Number)?.toDouble(),
-                lng = (map["lng"] as? Number)?.toDouble(),
-                reportTimeMillis = System.currentTimeMillis()
-            )
-        } catch (e: Exception) {
-            null
-        }
     }
 
     /**

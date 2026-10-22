@@ -154,6 +154,8 @@ class ExperimentBridgeTest {
             validStart + ("startAt" to "25:00:00"),
             validStart + ("startAt" to "10:00"),
             validStart + ("status" to "unknown"),
+            // 實驗送出的 Health Report 不帶 SOS，而「未宣告」只能和 SOS 一起出現（ADR-0004）
+            validStart + ("status" to "未宣告"),
             validStart + ("keepAwake" to "no"),
             validStart - "count"
         )

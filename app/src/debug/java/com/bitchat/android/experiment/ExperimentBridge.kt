@@ -82,7 +82,9 @@ class ExperimentBridge(
             val count = arguments.integer("count")?.takeIf { it in 1..Int.MAX_VALUE } ?: return null
             val intervalMs = arguments.integer("intervalMs")?.takeIf { it >= 0 } ?: return null
             val ttl = arguments.integer("ttl")?.takeIf { it in ExperimentPlan.TTL_RANGE } ?: return null
-            val status = (arguments["status"] as? String)?.let(HealthStatus::fromLabel) ?: return null
+            // 實驗送出的 Health Report 不帶 SOS，而「未宣告」只能和 SOS 一起出現（ADR-0004）。
+            val status = (arguments["status"] as? String)?.let(HealthStatus::fromLabel)
+                ?.takeIf { it != HealthStatus.UNDECLARED } ?: return null
             val startAt = when (val raw = arguments["startAt"]) {
                 null -> null
                 is String -> try {

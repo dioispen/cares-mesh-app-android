@@ -1,26 +1,27 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'package:audioplayers/audioplayers.dart';
+import 'package:audioplayers/audioplayers.dart' hide Source;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../bridge/bitchat_bridge.dart';
+import '../models/health_report.dart';
+import '../models/health_report_delivery.dart';
 import '../models/user.dart';
-import '../services/sos_service.dart';
+import '../services/own_report_cache.dart';
+import '../services/sos.dart';
 import '../widgets/fill_or_scroll.dart';
 
-/// 一次送出 SOS 的結果。
-enum _SendOutcome {
-  /// 伺服器已確認收到。
-  sent,
-
-  /// 離線，已進本機佇列，恢復連線才會送出。
-  queued,
-
-  /// 沒送出（沒有個人資料、寫入被拒）。
-  failed,
-}
+/// 一份帶（或撤回）SOS 的 Health Report 經兩條路送出的結果，還沒換成給使用者看的說法。
+typedef _Sent = ({
+  String? broadcastFailure,
+  String? uploadFailure,
+  bool uploadQueued,
+  Future<void> upload,
+});
 
 class SOSScreen extends StatefulWidget {
   const SOSScreen({super.key});
@@ -29,9 +30,10 @@ class SOSScreen extends StatefulWidget {
   State<SOSScreen> createState() => _SOSScreenState();
 }
 
+/// SOS 是 Health Report 上的標記（ADR-0004）：長按 3 秒舉起 SOS，經 BLE mesh 廣播給附近裝置，
+/// 同時寫進雲端自己的 `health_reports/{uid}`。舉起之後一直舉著，直到在這裡撤回、或到 Health 畫面
+/// 回報安全（#82）。
 class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
-  final SOSService _sosService = SOSService();
-
   /// 要持續按住多久才算送出。一碰就送很容易在口袋裡或慌亂中誤觸。
   static const _holdDuration = Duration(seconds: 3);
 
@@ -63,23 +65,23 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
   static const _sosRed = Color(0xFFC4553A);
+  static const _caveat = Color(0xFFBF7A5A);
+  static const _green = Color(0xFF7AA67A);
 
   AppUser? _currentUser;
   Position? _position;
-  bool _sosSent = false;
+  bool _isLoadingLocation = true;
+
+  /// 本機存的 SOS 狀態（[SosStore]），隨 [_currentUser] 一起讀進來。
+  SosState _sos = const SosState.lowered();
   bool _isSending = false;
 
-  /// 送出時連不上 Firestore：資料在本機佇列裡，還沒真的到後端。
-  bool _queuedOffline = false;
-  bool _isLoadingLocation = true;
-  DateTime? _sentAt;
+  /// 這次進到畫面後最近一次舉起 SOS 的結果；從之前就舉著、這次還沒送過時為 null。
+  SosDelivery? _delivery;
 
-  /// 送出的那一刻有沒有位置。橫幅要看這個，不能看即時的 [_position]：
-  /// 定位晚到時 [_position] 會有值，但已經送出的 SOS 裡其實沒有座標。
-  bool _sentWithoutLocation = false;
-
-  /// 已送出 SOS 的文件 ID，定位晚到時用來補寫座標。
-  String? _sosDocId;
+  /// 上面那次送出用的 Status 與位置，定位晚到時據此補送。沒有位置時 [_sentPosition] 為 null。
+  String? _sentStatus;
+  Position? _sentPosition;
 
   @override
   void initState() {
@@ -123,7 +125,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  bool get _canHold => !_sosSent && !_isSending;
+  bool get _raised => _sos.raised;
+
+  bool get _canHold => !_raised && !_isSending;
 
   bool get _isHolding => _holdController.status == AnimationStatus.forward;
 
@@ -185,19 +189,13 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     _chargePlayer.stop();
     _pressController.reverse();
     _holdController.value = 0;
-    unawaited(_sendAndAnnounce());
+    unawaited(_raiseSos());
   }
 
-  /// 送出 SOS，確定伺服器收到了才播「成功」音效。
+  /// 確定有人收到了才播「成功」音效。
   ///
-  /// 求救的人很可能沒在看螢幕，聽到「成功」就會以為救援要來了。所以送出失敗
-  /// 不播；離線暫存也還沒到後端，先不播，等之後真的送到再播
-  /// （[_followQueuedSend]）。
-  Future<void> _sendAndAnnounce() async {
-    final outcome = await _sendSOS();
-    if (outcome == _SendOutcome.sent) _playSuccessSound();
-  }
-
+  /// 求救的人很可能沒在看螢幕，聽到「成功」就會以為救援要來了。所以 mesh 沒送出、雲端又只是
+  /// 離線暫存時先不播，等之後真的上傳了再播（[_followQueuedUpload]）。
   void _playSuccessSound() {
     if (!mounted) return;
     _alertPlayer
@@ -208,9 +206,15 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   Future<void> _loadUser() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('app_user');
-    if (raw != null && mounted) {
-      setState(() => _currentUser = AppUser.fromJson(jsonDecode(raw)));
-    }
+    if (raw == null) return;
+    final user = AppUser.fromJson(jsonDecode(raw));
+    // 進到畫面時反映目前是否舉著 SOS、何時舉起的（#82）。
+    final sos = await SosStore.load(user.id);
+    if (!mounted) return;
+    setState(() {
+      _currentUser = user;
+      _sos = sos;
+    });
   }
 
   Future<void> _fetchLocation() async {
@@ -236,120 +240,337 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         ),
       );
       if (mounted) setState(() => _position = pos);
-      _attachLateLocation(pos);
+      unawaited(_sendLateLocation());
     } catch (_) {
     } finally {
       if (mounted) setState(() => _isLoadingLocation = false);
     }
   }
 
-  Future<_SendOutcome> _sendSOS() async {
-    if (_isSending) return _SendOutcome.failed;
+  /// 長按完成時還沒有定位就用系統記得的最後位置，不等定位：求救要立刻送出（#81）。
+  /// 兩者都沒有就不附位置，絕不送假座標。
+  Future<Position?> _positionNow() async {
+    final current = _position;
+    if (current != null) return current;
+    try {
+      return await Geolocator.getLastKnownPosition();
+    } catch (e) {
+      debugPrint('last known position unavailable: $e');
+      return null;
+    }
+  }
 
-    // 先前這裡是 `if (_currentUser == null) return;`：本機沒有個人資料時，
-    // 按下 SOS 完全沒有反應 —— 不送出、不報錯、也沒有任何提示。求救的人
-    // 會以為已經送出去了。
+  /// 舉起 SOS：不等定位、不等網路，立刻經 mesh 與雲端送出。
+  Future<void> _raiseSos() async {
+    if (_isSending) return;
+
+    // 先前這裡是 `if (_currentUser == null) return;`：本機沒有個人資料時，按下 SOS 完全沒有
+    // 反應 —— 不送出、不報錯、也沒有任何提示。求救的人會以為已經送出去了。
     final user = _currentUser;
     if (user == null) {
       _showMessage('找不到你的個人資料，無法送出求救。請重新登入後再試。', _sosRed);
-      return _SendOutcome.failed;
+      return;
     }
 
     setState(() => _isSending = true);
     try {
-      // 拿不到定位就送 null。座標是救援端唯一能用來找人的欄位，寧可明確地
-      // 「沒有位置」，也不要送一個看起來合理、實際上錯得離譜的 0, 0。
-      final position = _position;
-      final submission = _sosService.sendSOS(
-        userId: user.id,
-        userName: user.name,
-        phone: user.phone,
-        lat: position?.latitude,
-        lng: position?.longitude,
-        bloodType: user.bloodType,
-        medicalInfo: user.medicalInfo,
+      final last = await OwnStatusCache.load(user.id);
+      final raise = raiseSos(_sos, lastStatus: last.status, now: DateTime.now());
+      final position = await _positionNow();
+      final sent = await _send(
+        user,
+        raise.report,
+        position: position,
+        previousStatus: last.status,
       );
-      // 文件 ID 一拿到就記下來：等待伺服器確認的這段時間裡定位也可能回來。
-      _sosDocId = submission.id;
-      _sentWithoutLocation = position == null;
-      final send = submission.write;
-
-      // Firestore 的寫入要等伺服器確認才完成，離線時永遠不會完成（資料已進
-      // 本機佇列，恢復連線會自動送出）。求救的人不能對著一顆轉不停的按鈕等，
-      // 所以逾時就照實說明狀況。
-      var queuedOffline = false;
-      try {
-        await send.timeout(const Duration(seconds: 8));
-      } on TimeoutException {
-        queuedOffline = true;
-        unawaited(_followQueuedSend(send));
+      final delivery = SosDelivery(
+        withLocation: position != null,
+        broadcastFailure: sent.broadcastFailure,
+        uploadFailure: sent.uploadFailure,
+        uploadQueued: sent.uploadQueued,
+      );
+      if (delivery.failed) {
+        // 誰都沒收到：不算舉起，按鈕維持可以再按。
+        _showMessage(delivery.message, _sosRed);
+        return;
       }
 
-      final outcome = queuedOffline ? _SendOutcome.queued : _SendOutcome.sent;
-      if (!mounted) return outcome;
+      await _remember(user.id, raise.state, raise.report.status, last);
+      if (!mounted) return;
       setState(() {
-        _sosSent = true;
-        _sentAt = DateTime.now();
-        _queuedOffline = queuedOffline;
+        _sos = raise.state;
+        _delivery = delivery;
+        _sentStatus = raise.report.status;
+        _sentPosition = position;
       });
-
-      if (queuedOffline) {
-        _showMessage('目前離線，求救已暫存，恢復連線後會自動送出。', const Color(0xFFBF7A5A));
-      } else if (_sentWithoutLocation) {
-        _showMessage('求救已送出，但沒有附上位置。請盡量用其他方式告知所在地。', const Color(0xFFBF7A5A));
+      if (!delivery.complete) _showMessage(delivery.message, _caveat);
+      if (delivery.reachedSomeone) _playSuccessSound();
+      if (sent.uploadQueued) {
+        unawaited(_followQueuedUpload(sent.upload, announce: !delivery.reachedSomeone));
       }
-
-      // 等待確認的期間定位已經回來的話，現在補寫。
-      final arrived = _position;
-      if (arrived != null) _attachLateLocation(arrived);
-      return outcome;
     } catch (e) {
-      debugPrint('sendSOS failed: $e');
-      _sosDocId = null;
-      if (mounted) _showMessage('發送失敗，請再試一次。', _sosRed);
-      return _SendOutcome.failed;
+      debugPrint('raise SOS failed: $e');
+      _showMessage('發送失敗，請再試一次。', _sosRed);
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+
+    // 送出的這段時間裡定位已經回來的話，現在補送。
+    unawaited(_sendLateLocation());
+  }
+
+  /// 剛舉起的 SOS 送出時沒有位置、或用的是系統記得的舊位置，定位現在回來了：再送一份帶 SOS 的
+  /// 回報補上位置（#81）。Status 不變，雲端只改位置，協助者的認領不受影響。
+  Future<void> _sendLateLocation() async {
+    final user = _currentUser;
+    final status = _sentStatus;
+    final fix = _position;
+    if (user == null || status == null || fix == null || !_raised || _isSending) return;
+    final sentAt = _sentPosition;
+    if (sentAt != null && sentAt.latitude == fix.latitude && sentAt.longitude == fix.longitude) {
+      return;
+    }
+
+    _sentPosition = fix; // 只補這一次；之後的定位更新不再重送
+    setState(() => _isSending = true);
+    try {
+      final sent = await _send(user, (status: status, sos: true), position: fix, previousStatus: status);
+      final followUp = SosDelivery(
+        withLocation: true,
+        broadcastFailure: sent.broadcastFailure,
+        uploadFailure: sent.uploadFailure,
+        uploadQueued: sent.uploadQueued,
+      );
+      if (!mounted || !followUp.reachedSomeone) return;
+      // 位置補上了；兩條路的但書以這次為準。
+      setState(() => _delivery = followUp);
+      _showMessage('已補上位置。', _green);
+      if (sent.uploadQueued) unawaited(_followQueuedUpload(sent.upload, announce: false));
+    } catch (e) {
+      debugPrint('send late SOS location failed: $e');
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
   }
 
-  /// 離線排隊的 SOS 之後送到或失敗，畫面都要跟著更新。
-  ///
-  /// 送到了：橫幅不能一直停在「已暫存」。失敗了（例如權限被擋）：只記 log 的話，
-  /// 求救的人會一直以為恢復連線就會送出，所以要說出來並讓按鈕可以再按。
-  Future<void> _followQueuedSend(Future<void> send) async {
+  /// 撤回 SOS（#82）。目前 Status 是「未宣告」時，先請 Reporter 選一個 Status。
+  Future<void> _withdrawSos() async {
+    final user = _currentUser;
+    if (user == null || _isSending) return;
+
+    final last = await OwnStatusCache.load(user.id);
+    var withdraw = withdrawSos(currentStatus: last.status);
+    if (withdraw == null) {
+      final chosen = await _askStatusForWithdraw();
+      if (chosen == null) return;
+      withdraw = withdrawSos(currentStatus: last.status, chosenStatus: chosen)!;
+    }
+
+    setState(() => _isSending = true);
     try {
-      await send;
-      if (!mounted) return;
-      setState(() => _queuedOffline = false);
-      _playSuccessSound();
-    } catch (e) {
-      debugPrint('queued SOS failed: $e');
-      _sosDocId = null;
+      final sent = await _send(
+        user,
+        withdraw.report,
+        position: await _positionNow(),
+        previousStatus: last.status,
+      );
+      final delivery = HealthReportDelivery(
+        broadcastFailure: sent.broadcastFailure,
+        uploadFailure: sent.uploadFailure,
+        uploadQueued: sent.uploadQueued,
+      );
+      if (delivery.failed) {
+        // 誰都沒收到撤回：附近的人與雲端都還看到 SOS，畫面不能說已撤回。
+        _showMessage('撤回失敗，SOS 仍在。${delivery.message(withdraw.report.status)}', _sosRed);
+        return;
+      }
+      if (sent.uploadQueued) {
+        unawaited(sent.upload.catchError((Object e) => debugPrint('queued SOS withdrawal failed: $e')));
+      }
+
+      await _remember(user.id, withdraw.state, withdraw.report.status, last);
       if (!mounted) return;
       setState(() {
-        _sosSent = false;
-        _queuedOffline = false;
-        _sentAt = null;
+        _sos = withdraw!.state;
+        _delivery = null;
+        _sentStatus = null;
+        _sentPosition = null;
       });
-      _showMessage('暫存的求救沒有送出，請再按一次 SOS。', _sosRed);
+      _showMessage(
+        '已撤回 SOS。${delivery.message(withdraw.report.status)}',
+        delivery.complete ? _green : _caveat,
+      );
+    } catch (e) {
+      debugPrint('withdraw SOS failed: $e');
+      _showMessage('撤回失敗，請再試一次。', _sosRed);
+    } finally {
+      if (mounted) setState(() => _isSending = false);
     }
   }
 
-  /// 送出時還沒有位置、之後定位才回來：把座標補寫進同一筆 SOS。
+  /// 「未宣告」只能和 SOS 同時存在（ADR-0004）：撤回時要給一個 Status。
+  Future<String?> _askStatusForWithdraw() => showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('撤回 SOS 前，請告訴大家你現在的狀況'),
+          children: [
+            for (final (status, desc) in const [
+              ('安全', '本人平安，無需協助'),
+              ('輕傷', '有輕微傷口，能自行行動'),
+              ('重傷', '受傷嚴重，需要醫療協助'),
+            ])
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, status),
+                child: ListTile(title: Text(status), subtitle: Text(desc)),
+              ),
+          ],
+        ),
+      );
+
+  /// 經 mesh 廣播 [report] 的 Broadcast Tier，同時寫進雲端；兩條路互不影響。
   ///
-  /// 補寫確認之後橫幅才拿掉「沒有附上位置」；失敗就維持原樣，不假裝已補上。
-  void _attachLateLocation(Position pos) {
-    final id = _sosDocId;
-    if (id == null || !_sentWithoutLocation) return;
-    _sosDocId = null; // 只補一次
-    _sosService
-        .attachLocation(id, lat: pos.latitude, lng: pos.longitude)
-        .then((_) {
-      if (mounted) setState(() => _sentWithoutLocation = false);
-    }, onError: (Object e) {
-      debugPrint('attach late SOS location failed: $e');
-    });
+  /// 與 Health 畫面用同一個 Reporter Handle，救援者才能把同一位 Reporter 的 SOS 與後續
+  /// Health Report 串在一起。
+  Future<_Sent> _send(
+    AppUser user,
+    SosReport report, {
+    required Position? position,
+    required String? previousStatus,
+  }) async {
+    String? broadcastFailure;
+    try {
+      await BitchatBridge.sendHealthReport(
+        reporterHandle: await loadOrCreateReporterHandle(await SharedPreferences.getInstance()),
+        status: report.status,
+        lat: position?.latitude,
+        lng: position?.longitude,
+        sos: report.sos,
+      );
+    } catch (e) {
+      debugPrint('SOS broadcast failed: $e');
+      broadcastFailure = HealthReportDelivery.broadcastFailureReason(e);
+    }
+
+    // Firestore 的寫入要等伺服器確認才完成，離線時永遠不會完成（資料已進本機佇列，恢復連線
+    // 會自動送出）。求救的人不能對著一顆轉不停的按鈕等，所以逾時就照實說明狀況。
+    final upload = _upload(user, report, position, fallbackStatus: previousStatus);
+    var uploadQueued = false;
+    String? uploadFailure;
+    try {
+      await upload.timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      uploadQueued = true;
+    } catch (e) {
+      debugPrint('SOS upload failed: $e');
+      uploadFailure = '$e';
+    }
+    return (
+      broadcastFailure: broadcastFailure,
+      uploadFailure: uploadFailure,
+      uploadQueued: uploadQueued,
+      upload: upload,
+    );
+  }
+
+  /// 寫進自己的 `health_reports/{uid}`（#83），不再寫 `sos_requests`；Sensitive Tier 一併寫進
+  /// `health_report_sensitive/{uid}`（ADR-0005），協助你的 Verified Rescuer 才有電話與病史。
+  ///
+  /// 任務要不要退回等待中，看文件上現在的 Status 與任務狀態（[cloudSosWriteFor]）；讀不到文件
+  /// （離線又沒有快取）才退而用本機記得的 [fallbackStatus]。
+  Future<void> _upload(
+    AppUser user,
+    SosReport report,
+    Position? position, {
+    required String? fallbackStatus,
+  }) async {
+    final db = FirebaseFirestore.instance;
+    final detail = db.collection('health_reports').doc(user.id);
+    final current = await _readOwnReport(detail);
+    final mode = cloudSosWriteFor(
+      previousStatus: current == null ? fallbackStatus : current['status'] as String?,
+      status: report.status,
+      sos: report.sos,
+      taskStatus: current?['taskStatus'] as String?,
+    );
+    final sensitive = HealthReport(
+      reporterId: user.id,
+      name: user.name,
+      status: report.status,
+      reportTime: DateTime.now(),
+      phone: user.phone,
+      bloodType: user.bloodType,
+      medicalInfo: user.medicalInfo,
+      emergencyContactName: user.emergencyContactName,
+      emergencyContactPhone: user.emergencyContactPhone,
+      emergencyContactRelation: user.emergencyContactRelation,
+    ).toSensitiveJson();
+    await (db.batch()
+          ..set(
+            detail,
+            cloudSosFields(
+              mode,
+              reporter: (id: user.id, name: user.name, area: user.area),
+              report: report,
+              lat: position?.latitude,
+              lng: position?.longitude,
+              now: DateTime.now(),
+            ),
+            SetOptions(merge: true),
+          )
+          ..set(db.collection('health_report_sensitive').doc(user.id), sensitive))
+        .commit();
+  }
+
+  /// 自己那份 `health_reports` 文件現在的內容：先問伺服器，離線時改讀本機快取。文件不存在時
+  /// 回傳空的 map；兩邊都讀不到才回傳 null。
+  Future<Map<String, dynamic>?> _readOwnReport(DocumentReference<Map<String, dynamic>> ref) async {
+    for (final read in [
+      () => ref.get().timeout(const Duration(seconds: 3)),
+      () => ref.get(const GetOptions(source: Source.cache)),
+    ]) {
+      try {
+        final snap = await read();
+        return snap.data() ?? <String, dynamic>{};
+      } catch (e) {
+        debugPrint('read own health report failed: $e');
+      }
+    }
+    return null;
+  }
+
+  /// 記下新的 SOS 狀態與 Status。Status 沒變時傷勢細項照舊，變了（例如改成未宣告）就清掉。
+  Future<void> _remember(
+    String uid,
+    SosState state,
+    String status,
+    ({String? status, String? subInjury}) last,
+  ) async {
+    await SosStore.save(uid, state);
+    await OwnStatusCache.save(uid, status, status == last.status ? last.subInjury : null);
+  }
+
+  /// 離線暫存的上傳之後送到或失敗，畫面都要跟著更新。
+  ///
+  /// 送到了：橫幅不能一直停在「雲端尚未上傳」；[announce] 時（之前沒有任何人收到）現在才播
+  /// 成功音效。失敗了（例如權限被擋）：只記 log 的話，求救的人會一直以為恢復連線就會送出。
+  Future<void> _followQueuedUpload(Future<void> upload, {required bool announce}) async {
+    try {
+      await upload;
+      if (!mounted) return;
+      final current = _delivery;
+      if (current != null && current.uploadQueued) {
+        setState(() => _delivery = current.withUpload());
+      }
+      if (announce) _playSuccessSound();
+    } catch (e) {
+      debugPrint('queued SOS upload failed: $e');
+      if (!mounted) return;
+      final current = _delivery;
+      if (current != null && current.uploadQueued) {
+        setState(() => _delivery = current.withUpload(failure: '$e'));
+      }
+      _showMessage('暫存的求救沒有上傳到雲端。', _sosRed);
+    }
   }
 
   void _showMessage(String message, Color color) {
@@ -369,21 +590,20 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       );
   }
 
-  /// 上方橫幅的顏色。送出但「有但書」（離線暫存、沒有位置）時不給全綠 ——
+  /// 上方橫幅的顏色。送出但「有但書」（離線暫存、廣播失敗、沒有位置）時不給全綠 ——
   /// 綠色會讓人以為救援端已經完整收到，包含位置。
   Color get _statusColor {
-    if (!_sosSent) return _sosRed;
-    if (_queuedOffline || _sentWithoutLocation) return const Color(0xFFBF7A5A);
-    return const Color(0xFF7AA67A);
+    if (!_raised) return _sosRed;
+    final delivery = _delivery;
+    if (delivery == null) return _sosRed;
+    return delivery.complete ? _green : _caveat;
   }
 
-  /// 上方橫幅的文字。送出之後要照實說明狀況：離線暫存、以及有沒有附上位置，
-  /// 都直接影響求救的人接下來該怎麼做。
+  /// 上方橫幅的文字。送出之後要照實說明兩條路各自的狀況，以及有沒有附上位置。
   String get _statusMessage {
-    if (!_sosSent) return '長按下方按鈕 3 秒發出求救訊號';
-    if (_queuedOffline) return '目前離線，求救已暫存，恢復連線後會自動送出。';
-    if (_sentWithoutLocation) return 'SOS 已發送，但沒有附上位置，請設法告知所在地。';
-    return 'SOS 已發送，請保持冷靜等待救援。';
+    if (!_raised) return '長按下方按鈕 3 秒發出求救訊號';
+    // 之前就舉著、這次進來還沒送過：不知道當時送到哪裡，只說 SOS 還在。
+    return _delivery?.message ?? 'SOS 舉起中：之後的每份健康回報都會帶著 SOS，直到撤回或回報「安全」。';
   }
 
   String get _locationText {
@@ -392,9 +612,15 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     return '${_position!.latitude.toStringAsFixed(4)}, ${_position!.longitude.toStringAsFixed(4)}';
   }
 
+  /// SOS 舉起的時間。不是今天舉起的要連日期一起說，免得以為是剛剛。
   String get _sentTimeText {
-    if (!_sosSent || _sentAt == null) return '尚未發送';
-    return '${_sentAt!.hour.toString().padLeft(2, '0')}:${_sentAt!.minute.toString().padLeft(2, '0')}';
+    final raisedAt = _sos.raisedAt?.toLocal();
+    if (raisedAt == null) return '尚未發送';
+    String two(int n) => n.toString().padLeft(2, '0');
+    final time = '${two(raisedAt.hour)}:${two(raisedAt.minute)}';
+    final now = DateTime.now();
+    final today = raisedAt.year == now.year && raisedAt.month == now.month && raisedAt.day == now.day;
+    return today ? time : '${raisedAt.month}/${raisedAt.day} $time';
   }
 
   @override
@@ -430,11 +656,11 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 child: Row(
                   children: [
                     Icon(
-                      !_sosSent
+                      !_raised
                           ? Icons.info_outline_rounded
-                          : (_queuedOffline || _sentWithoutLocation
-                              ? Icons.warning_amber_rounded
-                              : Icons.check_circle_rounded),
+                          : (_delivery?.complete ?? false)
+                              ? Icons.check_circle_rounded
+                              : Icons.warning_amber_rounded,
                       color: _statusColor,
                       size: 20,
                     ),
@@ -458,9 +684,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
               // SOS 大圓按鈕：長按 3 秒才送出，避免誤觸
               Semantics(
                 button: true,
-                label: _sosSent ? 'SOS 已發送' : 'SOS 緊急求救，長按 3 秒送出',
+                label: _raised ? 'SOS 已發送' : 'SOS 緊急求救，長按 3 秒送出',
                 // 讀螢幕軟體沒有「按住 3 秒」的手勢，改用長按動作直接送出。
-                onLongPress: _canHold ? _sendAndAnnounce : null,
+                onLongPress: _canHold ? _raiseSos : null,
                 excludeSemantics: true,
                 child: Listener(
                   onPointerDown: _onPointerDown,
@@ -531,16 +757,14 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  if (_sosSent)
+                  // 撤回會送出一份不帶 SOS 的回報，附近的人與雲端都會看到（#82）。
+                  if (_raised)
                     SizedBox(
                       width: double.infinity,
                       child: TextButton(
-                        onPressed: () => setState(() {
-                          _sosSent = false;
-                          _sentAt = null;
-                        }),
-                        child: Text(
-                          '重置',
+                        onPressed: _isSending ? null : _withdrawSos,
+                        child: const Text(
+                          '撤回 SOS',
                           style: TextStyle(color: _textSecondary),
                         ),
                       ),
@@ -575,7 +799,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     final scale = (1 + 0.06 * beat) * (1 - 0.12 * press) * (1 + 0.3 * holdEased);
     final sink = 6 * press;
 
-    final baseColor = _sosSent ? const Color(0xFF9E9690) : _sosRed;
+    final baseColor = _raised ? const Color(0xFF9E9690) : _sosRed;
     final color = Color.lerp(baseColor, const Color(0xFFA2361F), holdEased)!;
     final remaining =
         (_holdDuration.inSeconds - (hold * _holdDuration.inSeconds).floor())
@@ -684,13 +908,13 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          _sosSent ? Icons.check_rounded : Icons.sos_rounded,
+                          _raised ? Icons.check_rounded : Icons.sos_rounded,
                           color: Colors.white,
                           size: 52,
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          _sosSent ? '已發送' : '長按 3 秒',
+                          _raised ? '已發送' : '長按 3 秒',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 18,
