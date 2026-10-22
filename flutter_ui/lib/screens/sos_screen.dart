@@ -60,6 +60,13 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   /// 按鈕，不該讓計時重來，也不該因為那根手指放開就取消。
   int? _activePointer;
 
+  /// 沒按滿 3 秒就放開時，等一下才跳「請持續按住」：慌張時連續短點，只在最後一下之後跳一次。
+  static const _holdHintDelay = Duration(milliseconds: 600);
+  Timer? _holdHintTimer;
+
+  /// 「請持續按住」的提示正在畫面上：再短點也不收掉重跳。
+  bool _holdHintVisible = false;
+
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -117,6 +124,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _holdHintTimer?.cancel();
     _pulseController.dispose();
     _holdController.dispose();
     _pressController.dispose();
@@ -145,6 +153,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   }
 
   void _onHoldStart() {
+    // 又按下去了：上一下短點的提示先不跳，等這一下的結果。
+    _holdHintTimer?.cancel();
     if (!_canHold) return;
     _lastHapticSecond = 0;
     HapticFeedback.mediumImpact();
@@ -170,7 +180,17 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     if (!_isHolding) return;
     _holdController.reverse();
     _chargePlayer.stop();
-    _showMessage('請持續按住 3 秒才會送出求救', _sosRed);
+    _holdHintTimer?.cancel();
+    _holdHintTimer = Timer(_holdHintDelay, _showHoldHint);
+  }
+
+  void _showHoldHint() {
+    if (!mounted || _holdHintVisible || _isHolding) return;
+    final shown = _showMessage('請持續按住 3 秒才會送出求救', _sosRed);
+    if (shown == null) return;
+    _holdHintVisible = true;
+    // 時間到、或被送出結果之類的訊息換掉，都會走到這裡。
+    shown.closed.whenComplete(() => _holdHintVisible = false);
   }
 
   /// 每滿一秒震一下，讓人不看螢幕也知道還要按多久。
@@ -358,13 +378,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     final user = _currentUser;
     if (user == null || _isSending) return;
 
+    if (await _confirmWithdraw() != true) return;
     final last = await OwnStatusCache.load(user.id);
-    var withdraw = withdrawSos(currentStatus: last.status);
-    if (withdraw == null) {
-      final chosen = await _askStatusForWithdraw();
-      if (chosen == null) return;
-      withdraw = withdrawSos(currentStatus: last.status, chosenStatus: chosen)!;
-    }
+    final withdraw = withdrawSos();
 
     setState(() => _isSending = true);
     try {
@@ -391,7 +407,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       await _remember(user.id, withdraw.state, withdraw.report.status, last);
       if (!mounted) return;
       setState(() {
-        _sos = withdraw!.state;
+        _sos = withdraw.state;
         _delivery = null;
         _sentStatus = null;
         _sentPosition = null;
@@ -408,21 +424,18 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
   }
 
-  /// 「未宣告」只能和 SOS 同時存在（ADR-0004）：撤回時要給一個 Status。
-  Future<String?> _askStatusForWithdraw() => showDialog<String>(
+  /// 撤回 SOS 就是回報安全（[withdrawSos]），附近的人與雲端都會看到：先確認一次，免得誤按。
+  Future<bool?> _confirmWithdraw() => showDialog<bool>(
         context: context,
-        builder: (context) => SimpleDialog(
-          title: const Text('撤回 SOS 前，請告訴大家你現在的狀況'),
-          children: [
-            for (final (status, desc) in const [
-              ('安全', '本人平安，無需協助'),
-              ('輕傷', '有輕微傷口，能自行行動'),
-              ('重傷', '受傷嚴重，需要醫療協助'),
-            ])
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, status),
-                child: ListTile(title: Text(status), subtitle: Text(desc)),
-              ),
+        builder: (context) => AlertDialog(
+          title: const Text('撤回 SOS？'),
+          content: const Text('撤回 SOS 會同時回報你目前「安全」，附近的人與救援者都會看到。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('我已安全，撤回'),
+            ),
           ],
         ),
       );
@@ -573,21 +586,19 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
   }
 
-  void _showMessage(String message, Color color) {
-    if (!mounted) return;
-    // SnackBar 是排隊一個一個顯示的。慌張連點時每次都會跳「請持續按住」，
-    // 不先收掉舊的，送出結果要等前面那串播完才看得到。
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: color,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 5),
-        ),
-      );
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _showMessage(String message, Color color) {
+    if (!mounted) return null;
+    // SnackBar 是排隊一個一個顯示的。不先收掉舊的，送出結果要等前面的提示播完才看得到。
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    return messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: color,
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   /// 上方橫幅的顏色。送出但「有但書」（離線暫存、廣播失敗、沒有位置）時不給全綠 ——

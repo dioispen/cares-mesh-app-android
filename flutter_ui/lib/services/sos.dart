@@ -38,18 +38,13 @@ SosTransition reportStatus(SosState current, String status) => status == '安全
     ? (state: const SosState.lowered(), report: (status: status, sos: false))
     : (state: current, report: (status: status, sos: current.raised));
 
-/// SOS 畫面的「撤回 SOS」。
+/// SOS 畫面的「撤回 SOS」＝回報安全。
 ///
-/// 目前 Status 是輕傷／重傷就照送、不帶 SOS。「未宣告」只能和 SOS 同時存在（ADR-0004），撤回時
-/// 必須給一個 Status：這時（或從沒有紀錄時）回傳 null，請 Reporter 選好 [chosenStatus] 再呼叫一次。
-SosTransition? withdrawSos({required String? currentStatus, String? chosenStatus}) {
-  if (chosenStatus != null && chosenStatus != '安全' && !mutualAidInjuries.contains(chosenStatus)) {
-    throw ArgumentError.value(chosenStatus, 'chosenStatus', '撤回 SOS 時只能選安全、輕傷或重傷');
-  }
-  final status = chosenStatus ?? (mutualAidInjuries.contains(currentStatus) ? currentStatus : null);
-  if (status == null) return null;
-  return (state: const SosState.lowered(), report: (status: status, sos: false));
-}
+/// 實機測試時發現，會按撤回的人通常就是已經安全了；再請 Reporter 選一次 Status 只是多一道關卡。
+/// 「未宣告」本來就只能和 SOS 同時存在（ADR-0004），撤回時一律送安全也省掉這個問題。
+/// 放下 SOS 但仍需協助的人，撤回之後再到 Health 畫面回報傷勢。
+SosTransition withdrawSos() =>
+    (state: const SosState.lowered(), report: (status: '安全', sos: false));
 
 /// SOS 狀態存在本機，App 重啟後仍保留。
 ///

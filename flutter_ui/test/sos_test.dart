@@ -50,27 +50,11 @@ void main() {
       expect(t.report, (status: '重傷', sos: false));
     });
 
-    test('撤回時 Status 是重傷／輕傷：送出同 Status、不帶 SOS', () {
-      expect(withdrawSos(currentStatus: '重傷')?.report, (status: '重傷', sos: false));
-      expect(withdrawSos(currentStatus: '輕傷')?.report, (status: '輕傷', sos: false));
-      expect(withdrawSos(currentStatus: '重傷')?.state.raised, isFalse);
-    });
+    test('撤回 SOS＝回報安全：送出安全、不帶 SOS，SOS 放下', () {
+      final t = withdrawSos();
 
-    test('撤回時 Status 是未宣告（或沒有紀錄）：要先選 Status', () {
-      expect(withdrawSos(currentStatus: '未宣告'), isNull);
-      expect(withdrawSos(currentStatus: null), isNull);
-    });
-
-    test('撤回時選了 Status 就送那個 Status', () {
-      for (final chosen in ['安全', '輕傷', '重傷']) {
-        final t = withdrawSos(currentStatus: '未宣告', chosenStatus: chosen)!;
-        expect(t.report, (status: chosen, sos: false));
-        expect(t.state.raised, isFalse);
-      }
-    });
-
-    test('撤回時不能選未宣告：它只能和 SOS 一起出現', () {
-      expect(() => withdrawSos(currentStatus: '未宣告', chosenStatus: '未宣告'), throwsArgumentError);
+      expect(t.report, (status: '安全', sos: false));
+      expect(t.state.raised, isFalse);
     });
   });
 
