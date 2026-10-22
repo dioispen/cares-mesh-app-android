@@ -373,7 +373,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
   }
 
-  /// 撤回 SOS（#82）。目前 Status 是「未宣告」時，先請 Reporter 選一個 Status。
+  /// 撤回 SOS（#82）：確認之後回報安全、不帶 SOS（[withdrawSos]）。
   Future<void> _withdrawSos() async {
     final user = _currentUser;
     if (user == null || _isSending) return;
