@@ -8,9 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/bitchat_bridge.dart';
-import '../models/health_report.dart';
 import '../models/health_report_delivery.dart';
 import '../models/user.dart';
+import '../services/mascot_service.dart';
 import '../services/own_report_cache.dart';
 import '../services/sos.dart';
 import '../widgets/fill_or_scroll.dart';
@@ -93,6 +93,12 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    // SOS 畫面不顯示小秘書，不論是從首頁大卡還是健康回報的「前往 SOS」進來。
+    // 返回時，上一頁（首頁、健康回報）會在 didPopNext 把自己的小秘書叫回來。
+    // postFrame 避免在 build 期間觸發 setState。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      mascotOptionsNotifier.value = const [];
+    });
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
@@ -487,6 +493,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   /// 寫進自己的 `health_reports/{uid}`（#83），不再寫 `sos_requests`；Sensitive Tier 一併寫進
   /// `health_report_sensitive/{uid}`（ADR-0005），協助你的 Verified Rescuer 才有電話與病史。
+  /// 兩份都以 merge 寫入，健康回報填過的狀況調查（`survey`／`surveySensitive`，ADR-0007）不受影響。
   ///
   /// 任務要不要退回等待中，看文件上現在的 Status 與任務狀態（[cloudSosWriteFor]）；讀不到文件
   /// （離線又沒有快取）才退而用本機記得的 [fallbackStatus]。
@@ -505,18 +512,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       sos: report.sos,
       taskStatus: current?['taskStatus'] as String?,
     );
-    final sensitive = HealthReport(
-      reporterId: user.id,
-      name: user.name,
-      status: report.status,
-      reportTime: DateTime.now(),
-      phone: user.phone,
-      bloodType: user.bloodType,
-      medicalInfo: user.medicalInfo,
-      emergencyContactName: user.emergencyContactName,
-      emergencyContactPhone: user.emergencyContactPhone,
-      emergencyContactRelation: user.emergencyContactRelation,
-    ).toSensitiveJson();
+    final sensitive = cloudSosSensitiveFields(user);
     await (db.batch()
           ..set(
             detail,
@@ -530,7 +526,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
             ),
             SetOptions(merge: true),
           )
-          ..set(db.collection('health_report_sensitive').doc(user.id), sensitive))
+          ..set(db.collection('health_report_sensitive').doc(user.id), sensitive, SetOptions(merge: true)))
         .commit();
   }
 

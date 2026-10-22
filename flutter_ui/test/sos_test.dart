@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/user.dart';
 import 'package:flutter_ui/services/sos.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -175,6 +176,37 @@ void main() {
         }),
         isEmpty,
       );
+    });
+  });
+
+  group('cloudSosSensitiveFields：寫進 health_report_sensitive 的欄位', () {
+    final user = AppUser(
+      id: 'alice',
+      name: 'Alice',
+      phone: '0912345678',
+      area: '台北市中正區',
+      emergencyContactName: '王大明',
+      emergencyContactPhone: '0987654321',
+      emergencyContactRelation: '父親',
+      bloodType: 'O',
+      medicalInfo: '盤尼西林過敏',
+      registeredAt: DateTime(2024),
+    );
+
+    test('只帶個人檔案的聯絡與醫療資訊', () {
+      expect(cloudSosSensitiveFields(user), {
+        'reporterId': 'alice',
+        'phone': '0912345678',
+        'bloodType': 'O',
+        'medicalInfo': '盤尼西林過敏',
+        'emergencyContactName': '王大明',
+        'emergencyContactPhone': '0987654321',
+        'emergencyContactRelation': '父親',
+      });
+    });
+
+    test('不帶 surveySensitive：merge 寫入時才不會清掉健康回報填過的調查（ADR-0007）', () {
+      expect(cloudSosSensitiveFields(user).keys, isNot(contains('surveySensitive')));
     });
   });
 

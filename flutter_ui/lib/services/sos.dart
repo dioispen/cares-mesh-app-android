@@ -1,7 +1,8 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/health_report.dart' show statusUndeclared;
+import '../models/health_report.dart';
+import '../models/user.dart';
 import 'mutual_aid_tasks.dart' show mutualAidInjuries;
 
 /// 舉起 SOS 時送出的 Status（ADR-0004）：最近一次是輕傷／重傷就沿用；從未回報過、或最近一次是
@@ -118,6 +119,25 @@ Map<String, Object?> cloudSosFields(
         'helperId': null,
       },
     };
+
+/// 寫進 `health_report_sensitive/{uid}` 的欄位（Sensitive Tier，ADR-0005）：個人檔案裡的電話、血型、
+/// 病史與緊急聯絡人，協助你的 Verified Rescuer 才有這些資料。
+///
+/// 刻意不帶 `surveySensitive`：SOS 沒有狀況調查，以 merge 寫入時少了這個鍵，健康回報填過的
+/// 「需要特別照顧的人」與補充說明才會留著（ADR-0007）。
+Map<String, Object?> cloudSosSensitiveFields(AppUser user) => HealthReport(
+      reporterId: user.id,
+      name: user.name,
+      status: statusUndeclared,
+      reportTime: DateTime.now(),
+      phone: user.phone,
+      bloodType: user.bloodType,
+      medicalInfo: user.medicalInfo,
+      emergencyContactName: user.emergencyContactName,
+      emergencyContactPhone: user.emergencyContactPhone,
+      emergencyContactRelation: user.emergencyContactRelation,
+    ).toSensitiveJson()
+      ..remove('surveySensitive');
 
 /// 一次 SOS 送出的兩條路各自的結果：經 BLE mesh 廣播給附近裝置，以及寫入雲端（Firestore）。
 ///

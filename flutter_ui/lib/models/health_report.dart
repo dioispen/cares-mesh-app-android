@@ -1,5 +1,7 @@
 import 'package:uuid/uuid.dart';
 
+import 'health_survey.dart';
+
 const _uuid = Uuid();
 
 /// Status「未宣告」：Reporter 舉起 SOS 時沒有說明自己的狀況。只會和 SOS 一起出現（ADR-0004）。
@@ -36,6 +38,9 @@ class HealthReport {
   final String? emergencyContactPhone;    // 緊急聯絡人電話
   final String? emergencyContactRelation; // 與緊急聯絡人關係
 
+  // ── 狀況調查：依分級拆進兩份文件（ADR-0007）──
+  final HealthSurvey? survey;
+
   HealthReport({
     String? id,
     required this.reporterId,
@@ -53,6 +58,7 @@ class HealthReport {
     this.emergencyContactName,
     this.emergencyContactPhone,
     this.emergencyContactRelation,
+    this.survey,
   }) : id = id ?? _uuid.v4();
 
   /// `health_reports/{uid}` 的內容。欄位必須與 firestore.rules 的 detailTierKeys() 一致，
@@ -70,6 +76,8 @@ class HealthReport {
         // 混在同一個 collection 裡就無法比較先後，字典序也不再等於時間序。
         'reportTime': reportTime.toUtc().toIso8601String(),
         'sos': sos,
+        // 一律寫入（沒有調查時為 null）：merge 寫入時才會清掉上一次的調查內容。
+        'survey': survey?.toDetailMap(),
       };
 
   /// `health_report_sensitive/{uid}` 的內容。
@@ -81,6 +89,8 @@ class HealthReport {
         'emergencyContactName': emergencyContactName,
         'emergencyContactPhone': emergencyContactPhone,
         'emergencyContactRelation': emergencyContactRelation,
+        // 與 Detail Tier 的 survey 刻意不同名：兩份文件不共用任何個人資料欄位。
+        'surveySensitive': survey?.toSensitiveMap(),
       };
 
   /// 從 `health_reports/{uid}`（[detail]）組回一份回報；讀得到 Sensitive Tier 時一併傳入
@@ -109,6 +119,17 @@ class HealthReport {
         emergencyContactName: sensitive?['emergencyContactName'] as String?,
         emergencyContactPhone: sensitive?['emergencyContactPhone'] as String?,
         emergencyContactRelation: sensitive?['emergencyContactRelation'] as String?,
+        survey: detail['survey'] is Map || sensitive?['surveySensitive'] is Map
+            ? HealthSurvey.fromMaps(
+                description: detail['description'] as String?,
+                detail: detail['survey'] is Map
+                    ? Map<String, dynamic>.from(detail['survey'] as Map)
+                    : null,
+                sensitive: sensitive?['surveySensitive'] is Map
+                    ? Map<String, dynamic>.from(sensitive!['surveySensitive'] as Map)
+                    : null,
+              )
+            : null,
       );
 }
 

@@ -11,12 +11,15 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
 import '../models/health_report_delivery.dart';
+import '../models/health_survey.dart';
 import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
 import '../services/mascot_service.dart';
 import '../services/mutual_aid_tasks.dart';
 import '../services/own_report_cache.dart';
 import '../services/sos.dart';
+import '../widgets/health_survey_form.dart';
+import 'sos_screen.dart';
 
 // Top-level function required by compute() — must live outside any class.
 HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
@@ -45,14 +48,12 @@ class _HealthScreenState extends State<HealthScreen>
   /// 自己是否正舉著 SOS。只用來顯示；送出時以 [SosStore] 為準，SOS 畫面可能在這之間改過它。
   SosState _sosState = const SosState.lowered();
 
-  static const _minorSubOptions = [
-    '擦傷', '割傷', '瘀傷 / 撞傷', '扭傷',
-    '燙傷（輕度）', '頭暈 / 頭痛', '手指或腳趾骨折', '輕度呼吸不適',
-  ];
-  static const _severeSubOptions = [
-    '四肢骨折', '大量出血', '嚴重燙傷', '頭部外傷',
-    '胸腹部外傷', '脊椎傷害', '意識不清', '失去意識',
-  ];
+  /// 自己上一次回報的狀況調查，用來帶入表單；還沒回報過時是空白表單。
+  HealthSurvey _mySurvey = const HealthSurvey();
+
+  /// 自己 Sensitive Tier 裡的那一半調查（需要特別照顧的人、補充說明）。只有本人讀得到，
+  /// 開頁時讀一次；Detail Tier 的監聽每次更新都要把它併回去，表單才完整。
+  Map<String, dynamic>? _ownSensitiveSurvey;
 
   Position? _currentPosition;
   String? _currentUserId;
@@ -316,6 +317,7 @@ class _HealthScreenState extends State<HealthScreen>
   /// 看到別人的狀態，換裝置或從別的裝置改狀態也會同步過來。
   /// 本機快取只是監聽還沒回來前的離線初值。
   void _subscribeToOwnReport(String uid) {
+    unawaited(_loadOwnSensitiveSurvey(uid));
     _ownReportSubscription?.cancel();
     _ownReportSubscription = FirebaseFirestore.instance
         .collection('health_reports')
@@ -338,15 +340,40 @@ class _HealthScreenState extends State<HealthScreen>
         return;
       }
       final subInjury = data?['description'] as String?;
+      final survey = data?['survey'];
       _healthService.updateStatus(status);
       if (mounted) {
         setState(() {
           _selectedStatus = status;
           _selectedSubInjury = subInjury;
+          _mySurvey = HealthSurvey.fromMaps(
+            description: subInjury,
+            detail: survey is Map ? Map<String, dynamic>.from(survey) : null,
+            sensitive: _ownSensitiveSurvey,
+          );
         });
       }
       await OwnStatusCache.save(uid, status, subInjury);
     }, onError: (Object e) => debugPrint('own report stream failed: $e'));
+  }
+
+  /// 讀回自己 Sensitive Tier 那一半調查。讀不到（離線、還沒回報過）就留空，不擋畫面。
+  Future<void> _loadOwnSensitiveSurvey(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('health_report_sensitive')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final survey = doc.data()?['surveySensitive'];
+      if (survey is! Map || !mounted) return;
+      setState(() {
+        _ownSensitiveSurvey = Map<String, dynamic>.from(survey);
+        _mySurvey = _mySurvey.withSensitive(_ownSensitiveSurvey);
+      });
+    } catch (e) {
+      debugPrint('own sensitive survey unavailable: $e');
+    }
   }
 
   /// 補查舊版 add() 流程留下的自己的回報（文件 ID 不是 uid 的那些）。
@@ -524,35 +551,13 @@ class _HealthScreenState extends State<HealthScreen>
     return match.isEmpty ? _textSecondary : match.first['color'] as Color;
   }
 
-  void _onStatusTap(String status) {
-    if (_isSubmitting) return;
-    if (status == '安全') {
-      _select('安全', null);
-      return;
-    }
-    final subOptions = status == '輕傷' ? _minorSubOptions : _severeSubOptions;
-    final color = status == '輕傷' ? _orange : _red;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _SubInjurySheet(
-        title: status,
-        subOptions: subOptions,
-        color: color,
-        onSelect: (sub) {
-          Navigator.pop(context);
-          _select(status, sub);
-        },
-      ),
-    );
-  }
-
   /// 送出一筆健康回報：BLE 廣播、Firestore、本機快取三條路各自獨立。
   ///
   /// 災難現場可能只有 BLE 沒有網路，也可能有網路但裝置不支援 BLE，
   /// 所以任一條失敗都不能拖垮其他兩條。
-  Future<void> _select(String status, String? subInjury) async {
+  Future<void> _select(String status, HealthSurvey survey) async {
+    // 傷勢摘要沿用 Detail Tier 的 description：互救任務拿它當協助者看到的傷勢細項。
+    final subInjury = survey.injurySummary;
     // 連點防護：重複送出會重複廣播，兩次寫入也會互相覆蓋。
     if (_isSubmitting) return;
 
@@ -604,6 +609,7 @@ class _HealthScreenState extends State<HealthScreen>
         emergencyContactName: user.emergencyContactName,
         emergencyContactPhone: user.emergencyContactPhone,
         emergencyContactRelation: user.emergencyContactRelation,
+        survey: survey,
       );
 
       // BLE 廣播只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標
@@ -686,7 +692,13 @@ class _HealthScreenState extends State<HealthScreen>
 
       await OwnStatusCache.save(user.id, status, subInjury);
       await SosStore.save(user.id, sos.state);
-      if (mounted) setState(() => _sosState = sos.state);
+      if (mounted) {
+        setState(() {
+          _sosState = sos.state;
+          _mySurvey = survey;
+          _ownSensitiveSurvey = survey.toSensitiveMap();
+        });
+      }
 
       if (!uploadQueued && uploadFailure == null) {
         // 清掉舊版 add() 在後端留下的多餘文件。純後端整理，不讓它擋住回饋。
@@ -874,173 +886,85 @@ class _HealthScreenState extends State<HealthScreen>
   }
 
   Widget _buildMyStatusTab() {
+    final reported = _selectedStatus != '尚未回報';
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 目前狀態卡
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: _card,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
-                    blurRadius: 12,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: _statusColor().withValues(alpha: 0.12),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _selectedStatus == statusUndeclared
-                          ? Icons.sos_rounded
-                          : _statusOptions.where((o) => o['label'] == _selectedStatus).isEmpty
-                              ? Icons.help_outline_rounded
-                              : _statusOptions.firstWhere((o) => o['label'] == _selectedStatus)['icon'] as IconData,
-                      color: _statusColor(),
-                      size: 28,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('目前回報狀態', style: TextStyle(fontSize: 12, color: _textSecondary)),
-                        const SizedBox(height: 3),
-                        Text(
-                          _selectedStatus,
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: _statusColor(),
-                          ),
-                        ),
-                        if (_selectedSubInjury != null) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            _selectedSubInjury!,
-                            style: TextStyle(fontSize: 13, color: _statusColor().withValues(alpha: 0.8)),
-                          ),
-                        ],
-                        if (_sosState.raised) ...[
-                          const SizedBox(height: 6),
-                          const Text(
-                            'SOS 舉起中：之後的回報都會帶著 SOS，回報「安全」即撤回',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _red),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+      child: Column(
+        children: [
+          // 上一次回報的摘要
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
-
-            const SizedBox(height: 24),
-
-            const Padding(
-              padding: EdgeInsets.only(left: 4, bottom: 12),
-              child: Text(
-                '選擇狀態',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _textSecondary, letterSpacing: 1.2),
-              ),
-            ),
-
-            Expanded(
-              child: ListView.separated(
-                itemCount: _statusOptions.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final option = _statusOptions[index];
-                  final color = option['color'] as Color;
-                  final isSelected = _selectedStatus == option['label'];
-                  return GestureDetector(
-                    onTap: _isSubmitting
-                        ? null
-                        : () => _onStatusTap(option['label'] as String),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      decoration: BoxDecoration(
-                        color: isSelected ? color.withValues(alpha: 0.08) : _card,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: isSelected ? color.withValues(alpha: 0.6) : const Color(0xFFE8E0D5),
-                          width: 1.5,
-                        ),
-                        boxShadow: isSelected
-                            ? [
-                                BoxShadow(
-                                  color: color.withValues(alpha: 0.12),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 3),
-                                ),
-                              ]
-                            : [
-                                BoxShadow(
-                                  color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: _statusColor().withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _selectedStatus == statusUndeclared
+                        ? Icons.sos_rounded
+                        : _statusOptions.where((o) => o['label'] == _selectedStatus).isEmpty
+                            ? Icons.help_outline_rounded
+                            : _statusOptions.firstWhere((o) => o['label'] == _selectedStatus)['icon'] as IconData,
+                    color: _statusColor(),
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(reported ? '上次回報' : '目前回報狀態',
+                          style: const TextStyle(fontSize: 11, color: _textSecondary)),
+                      Text(
+                        _selectedSubInjury == null
+                            ? _selectedStatus
+                            : '$_selectedStatus・$_selectedSubInjury',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _statusColor()),
                       ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: color.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(option['icon'] as IconData, color: color, size: 22),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  option['label'] as String,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: isSelected ? color : _textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  option['desc'] as String,
-                                  style: const TextStyle(fontSize: 12, color: _textSecondary),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (isSelected)
-                            Icon(Icons.check_circle_rounded, color: color, size: 22)
-                          else
-                            Icon(Icons.circle_outlined, color: const Color(0xFFE8E0D5), size: 22),
-                        ],
-                      ),
-                    ),
-                  );
-                },
+                      if (_sosState.raised)
+                        const Text(
+                          'SOS 舉起中：之後的回報都會帶著 SOS，回報「安全」即撤回',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _red),
+                        ),
+                    ],
+                  ),
+                ),
+                if (reported)
+                  const Text('可隨時更新', style: TextStyle(fontSize: 11, color: _textSecondary)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: HealthSurveyForm(
+              // 「未宣告」只會和 SOS 一起出現（ADR-0004），不是表單的選項：帶入的話，不選就送出會送出
+              // 不合法的「未宣告」。這時讓 Reporter 自己選。
+              initialStatus: reported && _selectedStatus != statusUndeclared ? _selectedStatus : null,
+              initialSurvey: _mySurvey,
+              submitting: _isSubmitting,
+              onSubmit: _select,
+              onOpenSos: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SOSScreen()),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1908,96 +1832,4 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
 
   Widget _note(String text) =>
       Text(text, style: const TextStyle(fontSize: 12, color: _textSecondary));
-}
-
-// ── 傷況細項選單 ──────────────────────────────────────────
-class _SubInjurySheet extends StatelessWidget {
-  final String title;
-  final List<String> subOptions;
-  final Color color;
-  final ValueChanged<String> onSelect;
-
-  static const _bg = Color(0xFFF7F3EC);
-  static const _card = Color(0xFFFEFDF9);
-  static const _textPrimary = Color(0xFF3D2C1E);
-  static const _textSecondary = Color(0xFF8C7B6E);
-
-  const _SubInjurySheet({
-    required this.title,
-    required this.subOptions,
-    required this.color,
-    required this.onSelect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: _bg,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Container(
-              width: 36, height: 4,
-              decoration: BoxDecoration(color: const Color(0xFFD6CCC2), borderRadius: BorderRadius.circular(2)),
-            ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
-              ),
-              const SizedBox(width: 10),
-              const Text('請選擇傷況細項', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text('由輕到重排列，請選擇最符合的項目', style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.7))),
-          const SizedBox(height: 16),
-          ...subOptions.asMap().entries.map((entry) {
-            final i = entry.key;
-            final sub = entry.value;
-            // 嚴重程度漸層：前半段用較淡色，後半段用較深色
-            final severity = (i / (subOptions.length - 1));
-            final itemColor = Color.lerp(color.withValues(alpha: 0.6), color, severity)!;
-            return GestureDetector(
-              onTap: () => onSelect(sub),
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-                decoration: BoxDecoration(
-                  color: _card,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: itemColor.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 6, height: 6,
-                      decoration: BoxDecoration(color: itemColor, shape: BoxShape.circle),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(sub, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _textPrimary)),
-                    const Spacer(),
-                    Icon(Icons.chevron_right_rounded, color: _textSecondary.withValues(alpha: 0.4), size: 18),
-                  ],
-                ),
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
 }
