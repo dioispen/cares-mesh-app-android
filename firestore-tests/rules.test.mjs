@@ -544,6 +544,69 @@ describe('health_reports／health_report_sensitive 分層揭露（ADR-0005）', 
     });
   });
 
+  // 健康回報的狀況調查（ADR-0007）：survey／surveySensitive 是巢狀 map，最外層的 hasOnly()
+  // 擋不到裡面的鍵，所以兩份文件各自鎖住能有哪些鍵。
+  describe('狀況調查 survey 的分層（ADR-0007）', () => {
+    const detailSurvey = {
+      mobility: '需要協助才能移動',
+      location: '家中',
+      companions: 2,
+      housing: '輕微損壞，仍可居住',
+      needs: ['飲用水', '藥品'],
+    };
+    const sensitiveSurvey = { vulnerable: ['長者'], notes: '降血壓藥快用完了' };
+
+    it('Detail Tier 可以帶公開的調查項目', async () => {
+      await assertSucceeds(setDoc(
+        doc(dbFor(BOB), `health_reports/${BOB}`),
+        detailTier(BOB, { survey: detailSurvey }),
+      ));
+    });
+
+    it('沒有填調查（survey 為 null）也可以回報', async () => {
+      await assertSucceeds(setDoc(
+        doc(dbFor(BOB), `health_reports/${BOB}`),
+        detailTier(BOB, { survey: null }),
+      ));
+    });
+
+    it('★ Detail Tier 的 survey 不能夾帶「需要特別照顧的人」', async () => {
+      await assertFails(setDoc(
+        doc(dbFor(BOB), `health_reports/${BOB}`),
+        detailTier(BOB, { survey: { ...detailSurvey, vulnerable: ['身心障礙者'] } }),
+      ));
+    });
+
+    it('★ Detail Tier 的 survey 不能夾帶補充說明（自由文字）', async () => {
+      await seed(ALICE);
+      await assertFails(updateDoc(
+        doc(dbFor(ALICE), `health_reports/${ALICE}`),
+        { survey: { ...detailSurvey, notes: '有心臟病' } },
+      ));
+    });
+
+    it('Detail Tier 的 survey 必須是 map', async () => {
+      await assertFails(setDoc(
+        doc(dbFor(BOB), `health_reports/${BOB}`),
+        detailTier(BOB, { survey: '有心臟病' }),
+      ));
+    });
+
+    it('Sensitive Tier 可以帶敏感的調查項目', async () => {
+      await assertSucceeds(setDoc(
+        doc(dbFor(BOB), `health_report_sensitive/${BOB}`),
+        { ...sensitiveTier(BOB), surveySensitive: sensitiveSurvey },
+      ));
+    });
+
+    it('Sensitive Tier 的 surveySensitive 不能帶其他鍵', async () => {
+      await assertFails(setDoc(
+        doc(dbFor(BOB), `health_report_sensitive/${BOB}`),
+        { ...sensitiveTier(BOB), surveySensitive: { ...sensitiveSurvey, password: 'x' } },
+      ));
+    });
+  });
+
   describe('Sensitive Tier', () => {
     it('Reporter 可讀寫自己的 Sensitive Tier', async () => {
       await seed(ALICE);

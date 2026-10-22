@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../services/mascot_service.dart';
 import '../services/sos_service.dart';
 import '../widgets/fill_or_scroll.dart';
 
@@ -84,6 +85,12 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    // SOS 畫面不顯示小秘書，不論是從首頁大卡還是健康回報的「前往 SOS」進來。
+    // 返回時，上一頁（首頁、健康回報）會在 didPopNext 把自己的小秘書叫回來。
+    // postFrame 避免在 build 期間觸發 setState。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      mascotOptionsNotifier.value = const [];
+    });
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),

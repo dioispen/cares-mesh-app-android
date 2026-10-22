@@ -77,6 +77,7 @@ void main() {
           'lat',
           'lng',
           'reportTime',
+          'survey', // 狀況調查的公開那一半（ADR-0007），鍵由 detailSurveyKeys() 另外鎖住
         },
       );
     });
@@ -92,6 +93,7 @@ void main() {
           'emergencyContactName': '王大明',
           'emergencyContactPhone': '0987654321',
           'emergencyContactRelation': '父親',
+          'surveySensitive': null, // 這筆回報沒有填狀況調查
         },
       );
     });
