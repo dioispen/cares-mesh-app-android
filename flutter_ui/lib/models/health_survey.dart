@@ -53,13 +53,19 @@ class HealthSurvey {
     '擦傷', '割傷', '瘀傷 / 撞傷', '扭傷',
     '燙傷（輕度）', '頭暈 / 頭痛', '手指或腳趾骨折', '輕度呼吸不適',
   ];
+  /// 傷勢都是本人自己填的，所以不放「失去意識」「意識不清」——那樣的人填不了這份表。
+  /// 「曾短暫失去意識」是現在清醒的人填得出來、救援者又需要知道的（頭部外傷的警訊）。
   static const severeInjuryOptions = [
     '四肢骨折', '大量出血', '嚴重燙傷', '頭部外傷',
-    '胸腹部外傷', '脊椎傷害', '意識不清', '失去意識',
+    '胸腹部外傷', '脊椎傷害', '曾短暫失去意識',
   ];
   static const mobilityOptions = ['可自行行動', '需要協助才能移動', '無法移動'];
   static const locationOptions = ['家中', '避難所 / 收容處', '親友住處', '戶外或車上', '其他'];
-  static const vulnerableOptions = ['長者', '幼童', '孕婦', '身心障礙者', '慢性病患', '寵物'];
+  static const vulnerableOptions = ['長者', '幼童', '孕婦', '身心障礙者', '慢性病患', _pet];
+  static const _pet = '寵物';
+
+  /// [vulnerableOptions] 裡除了寵物都是「同住或同行的人」之一：[companions] 為 0 時沒有對象。
+  static bool needsCompanion(String option) => option != _pet;
   static const housingOptions = ['沒有損壞', '輕微損壞，仍可居住', '嚴重損壞，暫時無法居住', '不清楚'];
   static const needOptions = [
     '飲用水', '食物', '藥品', '醫療協助', '電力 / 充電',
@@ -133,6 +139,12 @@ class HealthSurvey {
     final s = HealthSurvey.fromMaps(sensitive: sensitive);
     return copyWith(vulnerable: s.vulnerable, notes: s.notes);
   }
+
+  /// 改同住或同行的人數。改成 0 時，需要特別照顧的「人」已經沒有對象，一併清掉；寵物不算在人數裡，保留。
+  HealthSurvey withCompanions(int companions) => copyWith(
+        companions: companions,
+        vulnerable: companions == 0 ? vulnerable.where((v) => !needsCompanion(v)).toList() : vulnerable,
+      );
 
   /// 換成「安全」時傷勢不再適用，其餘調查內容（人數、需求等）保留。
   HealthSurvey forStatus(String status) =>

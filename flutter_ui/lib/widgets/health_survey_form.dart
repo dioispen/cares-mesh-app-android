@@ -143,7 +143,9 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
                     style: TextStyle(fontSize: 12, color: _textSecondary)),
                 const SizedBox(height: 8),
                 _chips(HealthSurvey.vulnerableOptions, _survey.vulnerable,
-                    (v) => _update(() => _survey = _survey.copyWith(vulnerable: _toggled(_survey.vulnerable, v)))),
+                    (v) => _update(() => _survey = _survey.copyWith(vulnerable: _toggled(_survey.vulnerable, v))),
+                    // 「只有我」時沒有同行的人可選；寵物不算在人數裡。
+                    enabled: (v) => _survey.companions > 0 || !HealthSurvey.needsCompanion(v)),
               ],
             )),
 
@@ -320,7 +322,13 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
         ],
       );
 
-  Widget _chips(List<String> options, List<String> selected, ValueChanged<String> onTap) => Wrap(
+  Widget _chips(
+    List<String> options,
+    List<String> selected,
+    ValueChanged<String> onTap, {
+    bool Function(String option)? enabled,
+  }) =>
+      Wrap(
         spacing: 8,
         runSpacing: 8,
         children: [
@@ -328,7 +336,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
             FilterChip(
               label: Text(o),
               selected: selected.contains(o),
-              onSelected: (_) => onTap(o),
+              onSelected: enabled == null || enabled(o) ? (_) => onTap(o) : null,
               showCheckmark: true,
               checkmarkColor: Colors.white,
               selectedColor: _brown,
@@ -382,7 +390,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
     return Row(
       children: [
         button(Icons.remove_rounded,
-            c > 0 ? () => _update(() => _survey = _survey.copyWith(companions: c - 1)) : null),
+            c > 0 ? () => _update(() => _survey = _survey.withCompanions(c - 1)) : null),
         SizedBox(
           width: 64,
           child: Text(c == 0 ? '只有我' : '$c 人',
@@ -390,7 +398,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _textPrimary)),
         ),
         button(Icons.add_rounded,
-            c < 30 ? () => _update(() => _survey = _survey.copyWith(companions: c + 1)) : null),
+            c < 30 ? () => _update(() => _survey = _survey.withCompanions(c + 1)) : null),
         const SizedBox(width: 8),
         const Text('（不含自己）', style: TextStyle(fontSize: 12, color: _textSecondary)),
       ],
