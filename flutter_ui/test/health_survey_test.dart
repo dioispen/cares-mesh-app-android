@@ -37,9 +37,44 @@ void main() {
     }
   });
 
+  test('需要立即救援的傷勢都是重傷的選項，選到其中之一就是有危險傷勢', () {
+    expect(HealthSurvey.severeInjuryOptions, containsAll(HealthSurvey.urgentInjuryOptions));
+    expect(const HealthSurvey(injuries: ['四肢骨折', '大量出血']).hasUrgentInjury, isTrue);
+    expect(const HealthSurvey(injuries: ['四肢骨折', '嚴重燙傷']).hasUrgentInjury, isFalse);
+    expect(const HealthSurvey().hasUrgentInjury, isFalse);
+  });
+
+  test('「我本人」需要特別照顧的選項：本人不會是幼童或寵物', () {
+    expect(HealthSurvey.selfVulnerableOptions, isNot(contains('幼童')));
+    expect(HealthSurvey.selfVulnerableOptions, isNot(contains('寵物')));
+    expect(HealthSurvey.selfVulnerableOptions, containsAll(['長者', '孕婦', '身心障礙者', '慢性病患']));
+  });
+
+  test('★「我本人」需要特別照顧的項目只放 Sensitive Tier，讀回來不變（ADR-0007）', () {
+    const s = HealthSurvey(selfVulnerable: ['孕婦'], vulnerable: ['幼童']);
+
+    expect(s.toDetailMap().keys, isNot(contains('selfVulnerable')));
+    expect(s.toSensitiveMap()['selfVulnerable'], ['孕婦']);
+    final restored = HealthSurvey.fromMaps(sensitive: s.toSensitiveMap());
+    expect(restored.selfVulnerable, ['孕婦']);
+    expect(restored.vulnerable, ['幼童']);
+    expect(const HealthSurvey().withSensitive({'selfVulnerable': ['長者']}).selfVulnerable, ['長者']);
+  });
+
+  test('「我本人」與同行人數無關：只有我時也照常保留', () {
+    expect(const HealthSurvey(companions: 1, selfVulnerable: ['長者']).withCompanions(0).selfVulnerable, ['長者']);
+  });
+
   test('injurySummary 沿用 description 的寫法；沒有傷勢時為 null', () {
     expect(survey.injurySummary, '割傷、扭傷');
     expect(const HealthSurvey().injurySummary, isNull);
+  });
+
+  test('從重傷改成輕傷時，只有重傷才有的傷勢一併取消：輕傷的選項裡看不到它們', () {
+    const s = HealthSurvey(injuries: ['大量出血', '割傷']);
+
+    expect(s.forStatus('輕傷').injuries, ['割傷']);
+    expect(s.forStatus('重傷').injuries, ['大量出血', '割傷']);
   });
 
   test('改成「安全」時清掉傷勢，其餘調查內容保留', () {
@@ -52,7 +87,7 @@ void main() {
   test('★ 敏感項目只出現在 Sensitive Tier（ADR-0007）', () {
     expect(survey.toDetailMap().keys,
         unorderedEquals(['mobility', 'location', 'companions', 'housing', 'needs']));
-    expect(survey.toSensitiveMap().keys, unorderedEquals(['vulnerable', 'notes']));
+    expect(survey.toSensitiveMap().keys, unorderedEquals(['vulnerable', 'selfVulnerable', 'notes']));
     expect(survey.toDetailMap().values.toString(), isNot(contains('長者')));
     expect(survey.toDetailMap().values.toString(), isNot(contains('降血壓藥')));
   });

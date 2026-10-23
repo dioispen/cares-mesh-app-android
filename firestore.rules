@@ -35,7 +35,7 @@ service cloud.firestore {
       return ['mobility', 'location', 'companions', 'housing', 'needs'];
     }
     function sensitiveSurveyKeys() {
-      return ['vulnerable', 'notes'];
+      return ['vulnerable', 'selfVulnerable', 'notes'];
     }
 
     match /rescuers/{uid} {
