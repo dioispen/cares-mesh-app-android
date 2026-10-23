@@ -34,6 +34,10 @@ _Avoid_: responder, rescue team, 救援人員
 A Rescuer whom the project has verified out of band and listed on the backend. The only identity the system verifies, and only ever granted by an administrator, never by the app. Being one unlocks nothing on its own — only the Sensitive Tier of the Reporters they are currently the Helper for.
 _Avoid_: rescue team, admin, 救援人員
 
+**Administrator**:
+An account the project has listed on the backend to run the management dashboard, granted only out of band, never by the app. The only role that can read Gateway uploads and which account a Reporter Handle belongs to. Independent of Verified Rescuer: holding one grants nothing of the other.
+_Avoid_: admin user, 管理中心 (the organisation, not the account), Verified Rescuer
+
 **Mutual-aid Task**:
 A Health Report whose Status calls for help (輕傷 or 重傷), offered to Rescuers to take on. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it.
 _Avoid_: rescue request, ticket, job
@@ -73,3 +77,7 @@ _Avoid_: routing, forwarding policy
 **Severity-aware Relay**:
 Any way of making Relay Decisions that reads Severity — weighting the chance of forwarding, ordering what is sent first, or both.
 _Avoid_: severity routing, priority relay, 嚴重度傳播策略
+
+**Gateway**:
+A signed-in device with internet access that writes the Broadcast Tier of other Reporters' Health Reports, received over the mesh, to the backend. A relay passes a packet on to the mesh; a Gateway passes it out of the mesh. It never carries the Detail or Sensitive Tier, and the backend does not verify what it writes.
+_Avoid_: uplink, bridge, 代理上網, relay (when the packet leaves the mesh)
