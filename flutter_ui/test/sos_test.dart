@@ -59,6 +59,30 @@ void main() {
     });
   });
 
+  group('healthReportTransition：Health 畫面送出時一併舉起 SOS', () {
+    test('選了舉起：記下舉起時間，回報照原本的 Status 帶 SOS', () {
+      final t = healthReportTransition(const SosState.lowered(), '重傷', raise: true, now: t1);
+
+      expect(t.state.raisedAt, t1);
+      expect(t.report, (status: '重傷', sos: true));
+    });
+
+    test('沒選舉起：與一般回報相同', () {
+      expect(
+        healthReportTransition(const SosState.lowered(), '重傷', raise: false, now: t1).report,
+        (status: '重傷', sos: false),
+      );
+      expect(
+        healthReportTransition(SosState.raisedAt(t1), '重傷', raise: false, now: t2).report,
+        (status: '重傷', sos: true),
+      );
+    });
+
+    test('只有受傷時才能一併舉起：安全不能帶 SOS', () {
+      expect(() => healthReportTransition(const SosState.lowered(), '安全', raise: true, now: t1), throwsArgumentError);
+    });
+  });
+
   group('SosStore：重啟後狀態保留，各帳號分開', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 

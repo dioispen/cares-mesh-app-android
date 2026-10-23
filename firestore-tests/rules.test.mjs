@@ -599,6 +599,20 @@ describe('health_reports／health_report_sensitive 分層揭露（ADR-0005）', 
       ));
     });
 
+    it('Sensitive Tier 可以帶「我本人」需要特別照顧的項目', async () => {
+      await assertSucceeds(setDoc(
+        doc(dbFor(BOB), `health_report_sensitive/${BOB}`),
+        { ...sensitiveTier(BOB), surveySensitive: { ...sensitiveSurvey, selfVulnerable: ['孕婦'] } },
+      ));
+    });
+
+    it('★ Detail Tier 的 survey 不能夾帶「我本人」需要特別照顧的項目', async () => {
+      await assertFails(setDoc(
+        doc(dbFor(BOB), `health_reports/${BOB}`),
+        detailTier(BOB, { survey: { ...detailSurvey, selfVulnerable: ['孕婦'] } }),
+      ));
+    });
+
     it('Sensitive Tier 的 surveySensitive 不能帶其他鍵', async () => {
       await assertFails(setDoc(
         doc(dbFor(BOB), `health_report_sensitive/${BOB}`),

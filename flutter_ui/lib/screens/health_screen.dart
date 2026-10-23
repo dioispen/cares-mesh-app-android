@@ -555,7 +555,9 @@ class _HealthScreenState extends State<HealthScreen>
   ///
   /// 災難現場可能只有 BLE 沒有網路，也可能有網路但裝置不支援 BLE，
   /// 所以任一條失敗都不能拖垮其他兩條。
-  Future<void> _select(String status, HealthSurvey survey) async {
+  ///
+  /// [raiseSos]：調查表選到需要立即救援的傷勢，Reporter 選擇一併舉起 SOS。
+  Future<void> _select(String status, HealthSurvey survey, bool raiseSos) async {
     // 傷勢摘要沿用 Detail Tier 的 description：互救任務拿它當協助者看到的傷勢細項。
     final subInjury = survey.injurySummary;
     // 連點防護：重複送出會重複廣播，兩次寫入也會互相覆蓋。
@@ -591,7 +593,9 @@ class _HealthScreenState extends State<HealthScreen>
       }
 
       // 舉著 SOS 時，每一份回報都帶著它；回報安全就是撤回（#82）。
-      final sos = reportStatus(await SosStore.load(user.id), status);
+      final sosBefore = await SosStore.load(user.id);
+      final sos = healthReportTransition(sosBefore, status, raise: raiseSos, now: DateTime.now());
+      final raisedNow = !sosBefore.raised && sos.state.raised;
 
       final report = HealthReport(
         reporterId: user.id,
@@ -707,7 +711,7 @@ class _HealthScreenState extends State<HealthScreen>
 
       if (!mounted) return;
       _showTaskSnackBar(
-        delivery.message(status),
+        raisedNow ? '已舉起 SOS。${delivery.message(status)}' : delivery.message(status),
         delivery.complete ? _statusColor() : _orange,
       );
     } catch (e) {
@@ -958,6 +962,7 @@ class _HealthScreenState extends State<HealthScreen>
               initialStatus: reported && _selectedStatus != statusUndeclared ? _selectedStatus : null,
               initialSurvey: _mySurvey,
               submitting: _isSubmitting,
+              sosRaised: _sosState.raised,
               onSubmit: _select,
               onOpenSos: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const SOSScreen()),

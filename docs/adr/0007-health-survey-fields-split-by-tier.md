@@ -5,7 +5,7 @@
 調查表除了 Status 與傷勢，新增七題。依 ADR-0005 的分級，這些欄位分別放進兩份文件：
 
 - **Detail Tier**（`health_reports/{uid}.survey`，任何登入帳號可讀）：行動能力、所在地點類型、同住或同行人數、住家狀況、最需要的協助。附近想幫忙的人在接任務**之前**就需要知道要帶什麼（水、藥）、要不要協助移動、要容納幾個人——放進 Sensitive Tier 的話，只有已經接了任務的 Verified Rescuer 看得到，失去了互助的意義。
-- **Sensitive Tier**（`health_report_sensitive/{uid}.surveySensitive`）：身邊需要特別照顧的人（長者、幼童、孕婦、身心障礙者、慢性病患、寵物），以及自由文字的補充說明。前者會透露家人的身心障礙或慢性病，屬於病史同一類；後者是自由文字，無法保證使用者不寫進病史或聯絡方式。
+- **Sensitive Tier**（`health_report_sensitive/{uid}.surveySensitive`）：身邊需要特別照顧的人（長者、幼童、孕婦、身心障礙者、慢性病患、寵物）、Reporter 本人需要特別照顧的情況（長者、孕婦、身心障礙者、慢性病患，`selfVulnerable`），以及自由文字的補充說明。前兩者會透露本人或家人的身心障礙、慢性病或懷孕，屬於病史同一類；後者是自由文字，無法保證使用者不寫進病史或聯絡方式。
 
 傷勢不另開欄位，沿用 Detail Tier 的 `description`（多個以「、」連接），互助任務看到的傷勢細項維持原意。
 

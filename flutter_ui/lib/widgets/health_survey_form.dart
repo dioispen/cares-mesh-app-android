@@ -11,7 +11,12 @@ class HealthSurveyForm extends StatefulWidget {
   final String? initialStatus;
   final HealthSurvey initialSurvey;
   final bool submitting;
-  final void Function(String status, HealthSurvey survey) onSubmit;
+
+  /// Reporter 正舉著 SOS：這份回報本來就會帶著 SOS，選到危險傷勢時不必再問。
+  final bool sosRaised;
+
+  /// [raiseSos]：選到需要立即救援的傷勢時，Reporter 選擇一併舉起 SOS。
+  final void Function(String status, HealthSurvey survey, bool raiseSos) onSubmit;
   final VoidCallback onOpenSos;
 
   const HealthSurveyForm({
@@ -19,6 +24,7 @@ class HealthSurveyForm extends StatefulWidget {
     required this.initialStatus,
     required this.initialSurvey,
     required this.submitting,
+    this.sosRaised = false,
     required this.onSubmit,
     required this.onOpenSos,
   });
@@ -80,7 +86,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
   List<String> _toggled(List<String> list, String value) =>
       list.contains(value) ? (List.of(list)..remove(value)) : [...list, value];
 
-  void _submit() {
+  Future<void> _submit() async {
     final status = _status;
     if (status == null) {
       setState(() => _error = '請先選擇你目前的狀況');
@@ -91,9 +97,38 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
       return;
     }
     final survey = _survey.forStatus(status).copyWith(notes: _notesCtrl.text);
+    var raiseSos = false;
+    if (_offersSos(status, survey)) {
+      final choice = await _askRaiseSos();
+      // 關掉對話框＝還沒決定，不送出，填好的內容留著。
+      if (choice == null || !mounted) return;
+      raiseSos = choice;
+    }
     _dirty = false;
-    widget.onSubmit(status, survey);
+    widget.onSubmit(status, survey, raiseSos);
   }
+
+  /// 健康回報是非緊急的狀況調查；選到需要立即救援的傷勢時，讓 Reporter 決定要不要一併舉起 SOS。
+  /// 不自動舉起：使用者不知情的 SOS 會變成誤報，SOS 也就失去分辨力。
+  bool _offersSos(String status, HealthSurvey survey) =>
+      status == '重傷' && survey.hasUrgentInjury && !widget.sosRaised;
+
+  Future<bool?> _askRaiseSos() => showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('要同時舉起 SOS 嗎？'),
+          content: const Text('你選的傷勢可能需要立即救援。舉起 SOS 後，附近的人會優先看到這份回報，'
+              '之後的回報也會一直帶著 SOS，直到撤回或回報「安全」。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('只送回報')),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(backgroundColor: _red),
+              child: const Text('舉起 SOS 並送出'),
+            ),
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -115,18 +150,38 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
             '傷勢或身體不適',
             hint: '可複選',
             required: true,
-            child: _chips(
-              _status == '重傷'
-                  ? [...HealthSurvey.severeInjuryOptions, ...HealthSurvey.minorInjuryOptions]
-                  : HealthSurvey.minorInjuryOptions,
-              _survey.injuries,
-              (v) => _update(() => _survey = _survey.copyWith(injuries: _toggled(_survey.injuries, v))),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _chips(
+                  _status == '重傷'
+                      ? [...HealthSurvey.severeInjuryOptions, ...HealthSurvey.minorInjuryOptions]
+                      : HealthSurvey.minorInjuryOptions,
+                  _survey.injuries,
+                  (v) => _update(() => _survey = _survey.copyWith(injuries: _toggled(_survey.injuries, v))),
+                ),
+                if (_offersSos(_status!, _survey)) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    '這些傷勢可能需要立即救援。送出時可以一併舉起 SOS，附近的人會優先看到。',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _red),
+                  ),
+                ],
+              ],
             ),
           ),
 
         _section(step(), '行動能力',
             child: _single(HealthSurvey.mobilityOptions, _survey.mobility,
                 (v) => _update(() => _survey = _survey.copyWith(mobility: v)))),
+
+        _section(step(), '你本人需要特別照顧的情況',
+            hint: '可複選',
+            child: KeyedSubtree(
+              key: const ValueKey('self-vulnerable'),
+              child: _chips(HealthSurvey.selfVulnerableOptions, _survey.selfVulnerable,
+                  (v) => _update(() => _survey = _survey.copyWith(selfVulnerable: _toggled(_survey.selfVulnerable, v)))),
+            )),
 
         _section(step(), '目前所在地點',
             hint: '定位會一併附上',
@@ -142,10 +197,13 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
                 const Text('其中需要特別照顧的（可複選）',
                     style: TextStyle(fontSize: 12, color: _textSecondary)),
                 const SizedBox(height: 8),
-                _chips(HealthSurvey.vulnerableOptions, _survey.vulnerable,
-                    (v) => _update(() => _survey = _survey.copyWith(vulnerable: _toggled(_survey.vulnerable, v))),
-                    // 「只有我」時沒有同行的人可選；寵物不算在人數裡。
-                    enabled: (v) => _survey.companions > 0 || !HealthSurvey.needsCompanion(v)),
+                KeyedSubtree(
+                  key: const ValueKey('companion-vulnerable'),
+                  child: _chips(HealthSurvey.vulnerableOptions, _survey.vulnerable,
+                      (v) => _update(() => _survey = _survey.copyWith(vulnerable: _toggled(_survey.vulnerable, v))),
+                      // 「只有我」時沒有同行的人可選；寵物不算在人數裡。
+                      enabled: (v) => _survey.companions > 0 || !HealthSurvey.needsCompanion(v)),
+                ),
               ],
             )),
 
@@ -215,7 +273,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
         ),
         const SizedBox(height: 8),
         const Text(
-          '狀況會向附近的人廣播。傷勢、行動能力、所在地點、人數、住家與需要的協助，登入的使用者都看得到，方便附近的人前來幫忙；需要特別照顧的人與補充說明，只有接下任務的認證救援者看得到。',
+          '狀況會向附近的人廣播。傷勢、行動能力、所在地點、人數、住家與需要的協助，登入的使用者都看得到，方便附近的人前來幫忙；需要特別照顧的情況（本人與同行的人）與補充說明，只有接下任務的認證救援者看得到。',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 11, color: _textSecondary, height: 1.5),
         ),
