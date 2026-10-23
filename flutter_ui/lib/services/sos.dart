@@ -39,6 +39,21 @@ SosTransition reportStatus(SosState current, String status) => status == '安全
     ? (state: const SosState.lowered(), report: (status: status, sos: false))
     : (state: current, report: (status: status, sos: current.raised));
 
+/// Health 畫面送出一份回報。調查表選到需要立即救援的傷勢、Reporter 也同意時（[raise]），
+/// 這份回報同時舉起 SOS，Status 照填的（輕傷／重傷）帶著；否則同 [reportStatus]。
+SosTransition healthReportTransition(
+  SosState current,
+  String status, {
+  required bool raise,
+  required DateTime now,
+}) {
+  if (!raise) return reportStatus(current, status);
+  if (!mutualAidInjuries.contains(status)) {
+    throw ArgumentError.value(status, 'status', '只有受傷時才能一併舉起 SOS（安全不能帶 SOS）');
+  }
+  return raiseSos(current, lastStatus: status, now: now);
+}
+
 /// SOS 畫面的「撤回 SOS」＝回報安全。
 ///
 /// 實機測試時發現，會按撤回的人通常就是已經安全了；再請 Reporter 選一次 Status 只是多一道關卡。
