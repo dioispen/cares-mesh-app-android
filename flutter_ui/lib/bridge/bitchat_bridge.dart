@@ -373,6 +373,13 @@ class BitchatBridge {
         'sos': sos,
       });
 
+  /// 本機 mesh 身分的 Ed25519 簽章公鑰（32 bytes），就是 ANNOUNCE 裡的那一把。Reporter Handle
+  /// 登記（#110）把它寫進 `reporter_handles`，管理後台才能分辨冒領同一個 Handle 的帳號（ADR-0009）。
+  ///
+  /// mesh 服務還不存在時原生回 [PlatformException]（`SERVICE_NOT_READY`）；沒有原生 mesh 的平台
+  /// （iOS、測試）丟 [MissingPluginException]。兩者都往上拋。
+  static Future<Uint8List?> getSigningPublicKey() => _method.invokeMethod<Uint8List>('getSigningPublicKey');
+
   /// 實驗畫面（#70，debug 限定）讀取現場即時狀態，回傳：
   ///
   /// - `links`（int）：目前直連數。

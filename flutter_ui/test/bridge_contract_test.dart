@@ -173,6 +173,11 @@ void main() {
       expect(_dartInvokedMethods(), containsAll(experiment));
     });
 
+    test('getSigningPublicKey for the Reporter Handle registration (#110) is on both sides', () {
+      expect(_nativeMethods(), contains('getSigningPublicKey'));
+      expect(_dartInvokedMethods(), contains('getSigningPublicKey'));
+    });
+
     test('no Dart call falls through to notImplemented', () {
       final missing = _dartInvokedMethods().difference(_nativeMethods());
 
