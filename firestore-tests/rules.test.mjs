@@ -15,6 +15,10 @@
 //   - rescuers：救援者身分的唯一依據，客戶端一律不可寫（不可自我提權）
 //   - users：含電話、緊急聯絡人、病史，只能讀自己的
 //   最關鍵的一條是「在 users 自填 role 不會變成救援者」——角色機制最容易寫錯的地方。
+//
+//   issue #109
+//   - admins：Administrator 身分的唯一依據，客戶端一律不可寫，名單不外流
+//   最關鍵的一條是「Administrator 不會被當成 Verified Rescuer」——兩個角色互相獨立。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -42,6 +46,7 @@ const ALICE = 'uid-alice';
 const BOB = 'uid-bob';
 const CAROL = 'uid-carol';
 const RESCUER = 'uid-rescuer';
+const ADMIN = 'uid-admin';
 
 let testEnv;
 
@@ -85,6 +90,8 @@ beforeEach(async () => {
     });
     // 救援者身分只能由後台（Firebase console / Admin SDK）寫入
     await setDoc(doc(db, `rescuers/${RESCUER}`), { grantedAt: new Date() });
+    // Administrator 同樣只能由後台寫入；刻意不給 rescuers 文件，兩個角色互相獨立
+    await setDoc(doc(db, `admins/${ADMIN}`), { grantedAt: new Date() });
     await setDoc(doc(db, 'health_reports/report-alice'), {
       id: 'report-alice',
       reporterId: ALICE,
@@ -761,6 +768,77 @@ describe('rescuers（issue #33：救援者身分不可自我提權）', () => {
 
   it('不可讀取他人的救援者身分文件', async () => {
     await assertFails(getDoc(doc(dbFor(BOB), `rescuers/${RESCUER}`)));
+  });
+});
+
+describe('admins（#109：Administrator 身分不可自我提權）', () => {
+  it('本人可讀自己的 Administrator 身分文件（供 App 判斷顯示）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ADMIN), `admins/${ADMIN}`)));
+    // 不是 Administrator 的人查自己也要能查（文件不存在）
+    await assertSucceeds(getDoc(doc(dbFor(BOB), `admins/${BOB}`)));
+  });
+
+  it('★ 不可讀取他人的 Administrator 身分文件（名單不外流）', async () => {
+    await assertFails(getDoc(doc(dbFor(BOB), `admins/${ADMIN}`)));
+    await assertFails(getDoc(doc(dbFor(RESCUER), `admins/${ADMIN}`)));
+    await assertFails(getDocs(collection(dbFor(BOB), 'admins')));
+  });
+
+  it('未登入不可讀', async () => {
+    await assertFails(getDoc(doc(anonDb(), `admins/${ADMIN}`)));
+  });
+
+  it('★ 使用者不可把自己登記為 Administrator', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `admins/${BOB}`), { grantedAt: new Date() }));
+    await assertFails(setDoc(doc(dbFor(BOB), `admins/${BOB}`), {}));
+  });
+
+  it('★ Verified Rescuer 不可把自己登記為 Administrator', async () => {
+    await assertFails(setDoc(doc(dbFor(RESCUER), `admins/${RESCUER}`), { grantedAt: new Date() }));
+  });
+
+  it('★ Administrator 也不可替他人授權', async () => {
+    await assertFails(setDoc(doc(dbFor(ADMIN), `admins/${BOB}`), { grantedAt: new Date() }));
+  });
+
+  it('Administrator 不可改動或撤銷自己的身分文件', async () => {
+    await assertFails(updateDoc(doc(dbFor(ADMIN), `admins/${ADMIN}`), { extra: 1 }));
+    await assertFails(deleteDoc(doc(dbFor(ADMIN), `admins/${ADMIN}`)));
+  });
+
+  it('Administrator 不可刪除他人的身分文件', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `admins/${CAROL}`), { grantedAt: new Date() });
+    });
+    await assertFails(deleteDoc(doc(dbFor(ADMIN), `admins/${CAROL}`)));
+    await assertFails(deleteDoc(doc(dbFor(BOB), `admins/${CAROL}`)));
+  });
+
+  it('未登入不可寫', async () => {
+    await assertFails(setDoc(doc(anonDb(), `admins/${BOB}`), { grantedAt: new Date() }));
+  });
+
+  it('★ Administrator 不會被當成 Verified Rescuer：接下任務也讀不到 Sensitive Tier', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), {
+        reporterId: ALICE,
+        status: '重傷',
+        taskStatus: 'accepted',
+        helperId: ADMIN,
+      });
+      await setDoc(doc(ctx.firestore(), `health_report_sensitive/${ALICE}`), {
+        reporterId: ALICE,
+        phone: '0912345678',
+      });
+    });
+    await assertFails(getDoc(doc(dbFor(ADMIN), `health_report_sensitive/${ALICE}`)));
+
+    // 對照組：同一個帳號另外被列為 Verified Rescuer 後就讀得到，
+    // 所以上面讀不到只能是因為 Administrator 身分不算 Verified Rescuer。
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `rescuers/${ADMIN}`), { grantedAt: new Date() });
+    });
+    await assertSucceeds(getDoc(doc(dbFor(ADMIN), `health_report_sensitive/${ALICE}`)));
   });
 });
 

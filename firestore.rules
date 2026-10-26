@@ -14,6 +14,22 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/rescuers/$(request.auth.uid));
     }
 
+    // Administrator（管理後台的帳號，見 CONTEXT.md 與 docs/MESH_GATEWAY.md）的唯一依據：
+    // admins/{uid} 文件存在與否。只有 Administrator 讀得到 Gateway 代傳的 mesh_reports，
+    // 以及 Reporter Handle 屬於哪個帳號（reporter_handles，ADR-0009）。
+    //
+    // 授予方式：由專案管理者在 Firebase console（或用 Admin SDK）建立 admins/{該帳號的 uid}，
+    // 內容不限，空文件也可以；刪掉那份文件就是撤銷。
+    //
+    // 與 Verified Rescuer 互相獨立：rescuers 與 admins 是兩份名單，持有其中一個不會得到
+    // 另一個的任何權限——Administrator 讀不到 Sensitive Tier，Verified Rescuer 也讀不到
+    // Gateway 的資料。和 isRescuer() 一樣不放在 users/{uid} 的欄位，因為使用者能寫自己的
+    // users 文件，放在那裡等於讓人自我提權。
+    function isAdmin() {
+      return request.auth != null
+          && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
     function isNonNegativeInt(value) {
       return value is int && value >= 0;
     }
@@ -40,6 +56,13 @@ service cloud.firestore {
 
     match /rescuers/{uid} {
       // 只能查自己是不是 Verified Rescuer；名單本身不外流。
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /admins/{uid} {
+      // 比照 rescuers：只能查自己是不是 Administrator，名單不外流。客戶端一律不可寫，
+      // 連 Administrator 自己也不能替別人授權或撤銷自己，只能由後台處理。
       allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
