@@ -1,6 +1,6 @@
 # Mesh Gateway 規格
 
-> 狀態：草案，尚未實作。
+> 狀態：已實作（#108–#113），待實機驗收（第 10 節）。實作與草案不同之處已併入本文。
 > 決策紀錄：[ADR-0008](adr/0008-broadcast-tier-geohash-precision-6.md)（geohash 精度 6）、[ADR-0009](adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)（Gateway 只代傳 Broadcast Tier、由 Kotlin 寫 Firestore）。
 > 前提：ADR-0003（分層揭露）、ADR-0004（SOS 是 Health Report 上的標記，實作見 #105，須先合併）、ADR-0005（Detail／Sensitive Tier）、ADR-0006（驗簽 key 快取）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Gateway** 與 **Administrator**。
@@ -86,7 +86,8 @@ Reporter（曾經有網路、已登入）
 | `announcement` | bytes 或 null | 發送者經過驗證的已簽章 ANNOUNCE；取不到時為 null |
 
 - `rawPacket` 與 `announcement` 是日後驗簽的材料（ADR-0009），現在沒有人驗。`rawPacket` 必須是**收到時的編碼**，而不是 `MessageHandler` 剝掉 content tag 之後的版本。重新編碼時要保留收到時的壓縮狀態（見 `BinaryProtocol` 對 preimage 的說明）。
-- `announcement` 取自 `HealthReportSigningKeyCache.announcementFor`：每份通過驗證的 ANNOUNCE 都會記進這份快取，保留 2 小時（ADR-0006），與 gateway 的暫存期限相同。
+- `announcement` 取自 `HealthReportSigningKeyCache.announcementFor`：每份通過驗證的 ANNOUNCE 都會記進這份快取，保留 2 小時（ADR-0006），與 gateway 的暫存期限相同。Gateway 在**收到回報的當下**取這份 ANNOUNCE，連同回報一起暫存。
+- 11 個欄位每次都要寫：`geohash` 與 `announcement` 沒有值時寫 null，不能省略（規則以 `hasAll` 檢查）。
 - 一份文件約 500 bytes 以內。
 
 ### 5.3 `reporter_handles/{uid}/installations/{reporterHandle}`
@@ -128,19 +129,27 @@ match /reporter_handles/{uid}/installations/{handle} {
   allow create, update: if isOwner(uid) && validInstallation(handle);
   allow delete: if isAdmin() || isOwner(uid);
 }
+
+// 第 8 節的去重要用 collection group 查詢 installations；collection group 查詢只認
+// 遞迴萬用字元的規則，所以另開這一條。規則之間是 OR，非 Administrator 不會因此多讀到
+// 任何東西。其他地方不要再用 installations 當集合名稱。
+match /{path=**}/installations/{handle} {
+  allow read: if isAdmin();
+}
 ```
 
 `validMeshReport(handle)` 必須全部成立：
 
 - `request.auth != null`，且 `gatewayUid == request.auth.uid`。
-- 鍵只能是 5.2 列出的那些，型別正確，`schemaVersion == 1`。
+- 鍵**恰好**是 5.2 列出的 11 個（`hasAll` 與 `hasOnly`），`geohash` 與 `announcement` 即使為 null 也要在；`schemaVersion == 1`。
 - `handle` 符合 `^[0-9a-f]{12}$`，且等於 `reporterHandle`。
-- `status` 屬於四個值之一；合法組合依 ADR-0004：`安全` 不可帶 SOS，`未宣告` 必須帶 SOS。
-- `geohash` 為 null 或長度 6。
+- `status` 屬於四個值之一；`sos` 是 bool；合法組合依 ADR-0004：`安全` 不可帶 SOS，`未宣告` 必須帶 SOS。
+- `geohash` 為 null，或長度 6 的 string。
+- `senderPeerId` 符合 `^[0-9a-f]{16}$`。
 - `uploadedAt == request.time`。
-- `reportTime <= request.time + 10 分鐘`（容忍時鐘誤差，並防止用未來時間鎖住文件）。
+- `reportTime` 是 timestamp，且 `<= request.time + 10 分鐘`（容忍時鐘誤差，並防止用未來時間鎖住文件）。
 - `reportTime >= request.time - 2 小時 10 分鐘`（不接受超過保留期限的舊回報）。
-- `rawPacket` 不超過 1 KB；`announcement` 為 null 或不超過 1 KB。
+- `rawPacket` 是 bytes 且不超過 1 KB；`announcement` 為 null 或不超過 1 KB 的 bytes。
 
 `validInstallation(handle)`：鍵只能是 5.3 列出的那些；`handle` 符合 `^[0-9a-f]{12}$` 且等於 `reporterHandle`；`signingPublicKey` 為 32 bytes；`registeredAt == request.time`。
 
@@ -150,10 +159,14 @@ match /reporter_handles/{uid}/installations/{handle} {
 
 ### 7.1 程式位置與生命週期
 
-- 新的 Kotlin 元件（暫名 `MeshGateway`，放在 `service/` 或新的 `gateway/` 套件）由 `MeshForegroundService` 建立與停止，生命週期與 mesh 相同。
-- Firebase 程式碼不進 `mesh/`：`MessageHandler` 透過一個類似 `InboundPacketBridge` 的 hook 把回報交出去，`mesh/` 不依賴 Firebase。
+- `gateway/` 套件：
+  - `MeshGateway`：決定上傳什麼。輸入是收到的回報、網路、登入狀態與設定開關，輸出只有注入的上傳 port（`MeshReportUploader`），時鐘也是注入的。輸入依到達順序在單一 coroutine 上處理，上傳一筆一筆來。
+  - `FirestoreMeshReportUploader`：上傳 port 的 Firestore 實作，只負責組文件與分類錯誤。
+  - `MeshGatewayRuntime`：由 `MeshForegroundService` 在 `onCreate` 建立、`onDestroy` 停止，生命週期與 mesh 相同。它接上協定層 hook、FirebaseAuth 的登入狀態、預設網路與設定；停止時把這些註冊全部解除。行程裡沒有初始化 Firebase 時不建立 Gateway，mesh 照常運作。
+- 因為跟著前景服務，使用者關閉「背景執行」、前景服務沒有啟動時，也沒有 Gateway。
+- Firebase 程式碼不進 `mesh/`：`MessageHandler` 透過 `VerifiedHealthReportBridge`（類似 `InboundPacketBridge` 的 hook）把回報交出去，`mesh/` 不依賴 Firebase。
 - `app/build.gradle.kts` 新增 `firebase-firestore`、`firebase-auth`（版本由現有 BoM 決定）。
-- CLAUDE.md 架構限制第 5 條同步改寫（ADR-0009）。
+- CLAUDE.md 架構限制第 5 條同步改寫（ADR-0009）；CLAUDE.md 不進版控，`AGENTS.md` 也寫了同一條。
 
 ### 7.2 掛載點
 
@@ -176,12 +189,15 @@ match /reporter_handles/{uid}/installations/{handle} {
 
 條件 1、2 不成立時直接丟棄，不暫存。條件 3、4 不成立時丟棄。
 
+登出只是暫停：已暫存的回報不清除（本來就只放記憶體、兩小時內過期），再登入時補傳。關閉設定則會清除暫存（7.6）。
+
 ### 7.4 有網路／沒網路
 
 - 「有網路」的定義：`ConnectivityManager` 的預設網路具備 `NET_CAPABILITY_INTERNET` 與 `NET_CAPABILITY_VALIDATED`。以 `registerDefaultNetworkCallback` 監聽。
 - **有網路**：立即寫入。
-- **沒網路**：放進記憶體暫存。每個 Handle 只留 `reportTime` 最新的一份；超過 2 小時的在補傳前剔除；上限比照 `HealthReportSigningKeyCache` 的 1000 筆，滿了剔除最舊的。**不寫磁碟**。
-- **網路恢復、或使用者登入、或重新開啟 gateway 時**：依 7.3 的條件重新檢查暫存，逐筆寫入。
+- **沒網路**：放進記憶體暫存。每個 Handle 只留 `reportTime` 最新的一份；超過 2 小時的在補傳前剔除；上限比照 `HealthReportSigningKeyCache` 的 1000 筆，滿了剔除 `reportTime` 最舊的。**不寫磁碟**。
+- **網路恢復、或使用者登入、或重新開啟 gateway 時**：依 7.3 的條件重新檢查暫存，依 `reportTime` 由舊到新逐筆寫入；遇到暫時性錯誤就停，其餘留到下一次網路事件。
+- 「網路恢復」指從沒網路變成有網路。預設網路的能力每有變動（例如訊號強度）就會再通知一次，那些不算網路事件，不會觸發補傳。
 - 暫存的語意與 `GossipSyncManager` 保留的 Health Report 相同（每個發送者最新一份、2 小時）。但暫存由 gateway 自己持有、只收經過 7.2 掛載點的回報，以確保補傳的都通過驗證與實驗 Handle 過濾，也不讓 Firebase 程式碼耦合到 `sync/`。
 
 ### 7.5 寫入與去重
@@ -189,7 +205,7 @@ match /reporter_handles/{uid}/installations/{handle} {
 - 用 `set`（整份覆寫，不 merge）寫 `mesh_reports/{reporterHandle}`，`uploadedAt` 用 `FieldValue.serverTimestamp()`。
 - **成功**：記下該 Handle 的 `reportTime`，從暫存移除。
 - **`PERMISSION_DENIED`**：最可能是其他 gateway 已寫入同一份或更新的回報（規則要求嚴格遞增），**視同成功**處理：記下 `reportTime`、從暫存移除。同時記一筆 log，方便排查是否為欄位或規則錯誤。
-- **`UNAVAILABLE` 等暫時性錯誤**：留在暫存，等下一次網路事件再試。
+- **`UNAVAILABLE` 等暫時性錯誤**：留在暫存，等下一次網路事件再試。`PERMISSION_DENIED` 以外的錯誤都算暫時性；寫入 30 秒沒有得到伺服器確認也算（Firestore 的寫入要等伺服器確認才完成，斷線時會一直等下去）。即時上傳失敗的回報同樣進暫存。
 - 不先讀再寫，以節省 Spark 方案每天 50,000 次讀取的額度。寫入額度為每天 20,000 次；Health Report 只在使用者送出時發送、不會定期重送，加上本機去重，量級在額度之內。
 - 「已上傳過的最新 `reportTime`」只放記憶體；service 重啟後重傳一次會被規則拒絕並視同成功，不影響正確性。
 - 寫到一半斷線的那一筆可能留在 Firestore SDK 的磁碟佇列裡（ADR-0009 已接受）。
@@ -197,10 +213,11 @@ match /reporter_handles/{uid}/installations/{handle} {
 ### 7.6 設定與同意
 
 - 新設定「代傳附近的求救與回報」，**預設開啟**。
-- 值存在 Kotlin 端的 SharedPreferences，讓 service 在 Flutter 不存在時也讀得到；透過 `SettingsBridge`（`settings_` 前綴）讓 Flutter 設定畫面讀寫。
-- 設定畫面的說明要寫明：開啟時，你的帳號會被記錄為代傳者，管理員因此能推得你當時大致在哪一區。
-- `PRIVACY_POLICY.md` 新增 gateway 一節：上傳了什麼（他人的 Broadcast Tier、原始封包、代傳者 uid）、誰讀得到（只有 Administrator）、如何關閉。
-- 未登入的手機不是 gateway，也不提示。
+- 值存在 Kotlin 端的 `MeshServicePreferences`，讓 service 在 Flutter 不存在時也讀得到；透過 `SettingsBridge` 的 `settings_setGatewayEnabled` 與 `settings_getState` 的 `gatewayEnabled` 讓 Flutter 設定畫面讀寫。執行中的 Gateway 以 `observeGatewayEnabled` 跟著變，不必重啟服務。
+- **關閉時**不上傳也不暫存，已暫存的回報一併清除；**重新開啟後**，之後收到的回報才代傳。
+- 設定畫面的說明要寫明：開啟時，你的帳號會被記錄為代傳者，管理員因此能推得你當時大致在哪一區；代傳只用到極少的數據與電量。
+- `PRIVACY_POLICY.md` 新增 gateway 一節：上傳了什麼（他人的 Broadcast Tier、原始封包、ANNOUNCE、代傳者 uid）、誰讀得到（只有 Administrator）、如何關閉。
+- 未登入的手機不是 gateway。開關照樣顯示，說明裡寫明代傳需要登入。
 
 ### 7.7 `reporter_handles` 登記（Flutter）
 
@@ -275,7 +292,7 @@ match /reporter_handles/{uid}/installations/{handle} {
   - 登入者可建立格式正確的文件；`gatewayUid` 不是自己時被擋。
   - 多餘欄位、`status` 非法、`安全` 帶 SOS、`未宣告` 不帶 SOS、geohash 長度不是 6、`reportTime` 太新或太舊，都被擋。
   - update 時 `reportTime` 沒有嚴格遞增被擋。
-- `reporter_handles`：只有本人能寫自己 uid 底下的文件；Administrator 與本人可讀，其他人不可讀；`signingPublicKey` 長度不對被擋。
+- `reporter_handles`：只有本人能寫自己 uid 底下的文件；Administrator 與本人可讀，其他人不可讀；`signingPublicKey` 長度不對被擋；Administrator 能以 collection group 查詢 `installations`，其他人不能。
 
 **實機驗收**（三支手機：A 無網路的 Reporter、B 無網路的 relay、C 有網路的 gateway）
 
