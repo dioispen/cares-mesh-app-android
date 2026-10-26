@@ -57,4 +57,17 @@ object MeshServicePreferences {
     fun setGatewayEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_GATEWAY_ENABLED, enabled).apply()
     }
+
+    /**
+     * Calls [onChange] with the new value each time the Gateway switch changes, on the main thread,
+     * until the returned function is called. SharedPreferences holds its listeners only weakly;
+     * keeping the returned function keeps this one alive.
+     */
+    fun observeGatewayEnabled(onChange: (Boolean) -> Unit): () -> Unit {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_GATEWAY_ENABLED) onChange(isGatewayEnabled())
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 }

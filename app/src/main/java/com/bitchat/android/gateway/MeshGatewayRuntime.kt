@@ -8,6 +8,7 @@ import android.util.Log
 import com.bitchat.android.mesh.VerifiedHealthReport
 import com.bitchat.android.mesh.VerifiedHealthReportBridge
 import com.bitchat.android.service.MeshServiceHolder
+import com.bitchat.android.service.MeshServicePreferences
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,15 +18,22 @@ import kotlinx.coroutines.cancel
 /**
  * The Gateway as it runs inside MeshForegroundService (#111): wires [MeshGateway] to the protocol
  * hook ([VerifiedHealthReportBridge]), the sign-in state FirebaseAuth shares with Flutter, the
- * default network, and Firestore. The service starts it in onCreate and stops it in onDestroy, so
- * the Gateway lives exactly as long as the mesh service, App screens closed or not.
+ * default network, the user's Gateway switch (#113), and Firestore. The service starts it in
+ * onCreate and stops it in onDestroy, so the Gateway lives exactly as long as the mesh service, App
+ * screens closed or not.
  */
 class MeshGatewayRuntime internal constructor(
     private val auth: FirebaseAuth,
     private val connectivity: ConnectivityManager?,
     private val gateway: MeshGateway,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    /** The stored Gateway switch; the Flutter settings screen writes it through SettingsBridge. */
+    private val isEnabled: () -> Boolean = { MeshServicePreferences.isGatewayEnabled() },
+    /** Follows the switch until the returned function is called. */
+    private val observeEnabled: ((Boolean) -> Unit) -> () -> Unit = MeshServicePreferences::observeGatewayEnabled
 ) {
+    private var stopObservingSwitch: (() -> Unit)? = null
+
     /** Runs on MessageHandler's coroutine: only encode what was received and hand it over. */
     private val reportListener: (VerifiedHealthReport) -> Unit = { verified ->
         val rawPacket = verified.packet.toBinaryData(padding = false)
@@ -59,6 +67,9 @@ class MeshGatewayRuntime internal constructor(
     }
 
     internal fun start() {
+        // The switch first: no report may be relayed before a switched-off Gateway knows it.
+        gateway.onEnabledChanged(isEnabled())
+        stopObservingSwitch = observeEnabled(gateway::onEnabledChanged)
         auth.addAuthStateListener(authListener)
         try {
             connectivity?.registerDefaultNetworkCallback(networkCallback)
@@ -77,6 +88,8 @@ class MeshGatewayRuntime internal constructor(
             // Registration had failed; nothing to unregister.
         }
         auth.removeAuthStateListener(authListener)
+        stopObservingSwitch?.invoke()
+        stopObservingSwitch = null
         gateway.stop()
         scope.cancel()
     }

@@ -360,6 +360,71 @@ class MeshGatewayTest {
         assertEquals(1, uploader.uploads.size)
     }
 
+    // ── 設定開關（#113）──────────────────────────────────────────────────────
+
+    @Test
+    fun `nothing is uploaded while the gateway is switched off`() = runTest {
+        val gateway = gateway()
+        gateway.onEnabledChanged(false)
+
+        gateway.onReport(heard())
+        runCurrent()
+
+        assertTrue(uploader.uploads.isEmpty())
+    }
+
+    @Test
+    fun `nothing is held while the gateway is switched off`() = runTest {
+        val gateway = gateway(online = false)
+        gateway.onEnabledChanged(false)
+
+        gateway.onReport(heard())
+        gateway.onEnabledChanged(true)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertTrue(uploader.uploads.isEmpty())
+    }
+
+    @Test
+    fun `switching the gateway off discards the held reports`() = runTest {
+        val gateway = gateway(online = false)
+        gateway.onReport(heard())
+
+        gateway.onEnabledChanged(false)
+        gateway.onEnabledChanged(true)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertTrue(uploader.uploads.isEmpty())
+    }
+
+    @Test
+    fun `switched back on, the gateway relays the reports heard from then on`() = runTest {
+        val gateway = gateway()
+        gateway.onEnabledChanged(false)
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa"))
+
+        gateway.onEnabledChanged(true)
+        gateway.onReport(heard(handle = "bbbbbbbbbbbb"))
+        runCurrent()
+
+        assertEquals(listOf("bbbbbbbbbbbb"), uploader.uploads.map { it.first.reporterHandle })
+    }
+
+    @Test
+    fun `switched back on while offline, the gateway holds again and catches up`() = runTest {
+        val gateway = gateway(online = false)
+        gateway.onEnabledChanged(false)
+        gateway.onEnabledChanged(true)
+
+        gateway.onReport(heard())
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(1, uploader.uploads.size)
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private fun TestScope.gateway(uid: String? = GATEWAY_UID, online: Boolean = true): MeshGateway =

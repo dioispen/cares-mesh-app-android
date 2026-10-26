@@ -3,6 +3,7 @@ package com.bitchat.android.gateway
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Build
+import android.os.Looper
 import com.bitchat.android.mesh.VerifiedHealthReport
 import com.bitchat.android.mesh.VerifiedHealthReportBridge
 import com.bitchat.android.protocol.BitchatPacket
@@ -10,12 +11,16 @@ import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.service.MeshServicePreferences
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.argumentCaptor
@@ -45,6 +50,51 @@ class MeshGatewayRuntimeTest {
             uploads += report
             return UploadResult.UPLOADED
         }
+    }
+
+    @Before
+    fun setUp() {
+        RuntimeEnvironment.getApplication()
+            .getSharedPreferences("bitchat_mesh_service_prefs", Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        MeshServicePreferences.init(RuntimeEnvironment.getApplication())
+    }
+
+    @Test
+    fun `the Gateway switch is on by default and survives a restart`() {
+        assertTrue(MeshServicePreferences.isGatewayEnabled())
+
+        MeshServicePreferences.setGatewayEnabled(false)
+        MeshServicePreferences.init(RuntimeEnvironment.getApplication())
+
+        assertFalse(MeshServicePreferences.isGatewayEnabled())
+    }
+
+    @Test
+    fun `the gateway follows the stored switch, also while it runs`() = runTest {
+        MeshServicePreferences.setGatewayEnabled(false)
+        val gateway = MeshGateway(uploader, { 1_700_000_100_000L }, backgroundScope)
+        val runtime = MeshGatewayRuntime(auth, connectivity, gateway, backgroundScope)
+        runtime.start()
+        gateway.onSignedIn("uid-gateway")
+        gateway.onNetworkChanged(true)
+
+        VerifiedHealthReportBridge.publish(verified(healthReportPacket(reportTimeMs = 1_700_000_000_000L)))
+        runCurrent()
+        assertTrue("switched off when the service started", uploads.isEmpty())
+
+        MeshServicePreferences.setGatewayEnabled(true) // 使用者在設定頁打開
+        shadowOf(Looper.getMainLooper()).idle()
+        VerifiedHealthReportBridge.publish(verified(healthReportPacket(reportTimeMs = 1_700_000_050_000L)))
+        runCurrent()
+        assertEquals(1, uploads.size)
+
+        MeshServicePreferences.setGatewayEnabled(false)
+        shadowOf(Looper.getMainLooper()).idle()
+        VerifiedHealthReportBridge.publish(verified(healthReportPacket(reportTimeMs = 1_700_000_090_000L)))
+        runCurrent()
+        assertEquals("switched off again", 1, uploads.size)
+        runtime.stop()
     }
 
     @Test

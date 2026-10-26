@@ -11,14 +11,15 @@ import kotlinx.coroutines.launch
  * 原樣的 Broadcast Tier 寫進 Firestore 的 `mesh_reports/{reporterHandle}`。每個 Reporter Handle
  * 一份，只保留最新的。
  *
- * 輸入只有 [onReport]、[onNetworkChanged]、[onSignedIn]；輸出只有注入的 [uploader]，時鐘也是注入的。
- * 輸入依到達順序在 [scope] 上的單一 coroutine 處理，狀態因此不必上鎖；上傳一筆一筆來。
- * 接 mesh、FirebaseAuth、ConnectivityManager 與 Firestore 的是 [MeshGatewayRuntime]。
+ * 輸入只有 [onReport]、[onNetworkChanged]、[onSignedIn]、[onEnabledChanged]；輸出只有注入的
+ * [uploader]，時鐘也是注入的。輸入依到達順序在 [scope] 上的單一 coroutine 處理，狀態因此不必上鎖；
+ * 上傳一筆一筆來。接 mesh、FirebaseAuth、ConnectivityManager、設定與 Firestore 的是 [MeshGatewayRuntime]。
  *
  * 上傳條件，全部成立才上傳：
- * 1. 已登入。未登入時收到的回報直接丟棄，不暫存。
- * 2. 回報年齡不超過 [retentionMs]（2 小時，與 Health Report 的保留期限相同）。
- * 3. `reportTime` 比這個 Handle 已上傳過的最新 `reportTime` 更新。
+ * 1. 使用者沒有關閉代傳（#113，預設開啟）。關閉時不上傳也不暫存，已暫存的一併清除。
+ * 2. 已登入。未登入時收到的回報直接丟棄，不暫存。
+ * 3. 回報年齡不超過 [retentionMs]（2 小時，與 Health Report 的保留期限相同）。
+ * 4. `reportTime` 比這個 Handle 已上傳過的最新 `reportTime` 更新。
  *
  * 有網路就立即上傳；沒網路、或上傳遇到暫時性錯誤時，先放進暫存（#112），等網路恢復或使用者
  * 登入時補傳，讓手機能扮演「從災區帶著回報走出來」的角色。暫存只收經過協定層 hook 的回報，
@@ -36,10 +37,12 @@ class MeshGateway(
         class Report(val report: GatewayReport) : Input
         class Network(val available: Boolean) : Input
         class Account(val uid: String?) : Input
+        class Enabled(val enabled: Boolean) : Input
     }
 
     private val inputs = Channel<Input>(Channel.UNLIMITED)
 
+    private var enabled = true
     private var online = false
     private var gatewayUid: String? = null
 
@@ -76,6 +79,11 @@ class MeshGateway(
         inputs.trySend(Input.Account(uid))
     }
 
+    /** 設定裡的「代傳附近的求救與回報」（#113）。 */
+    fun onEnabledChanged(enabled: Boolean) {
+        inputs.trySend(Input.Enabled(enabled))
+    }
+
     /** 不再接受輸入；正在處理的一筆仍會跑完，除非 [scope] 也取消了。 */
     fun stop() {
         inputs.close()
@@ -94,10 +102,16 @@ class MeshGateway(
                 gatewayUid = input.uid
                 if (input.uid != null) catchUp()
             }
+            is Input.Enabled -> {
+                enabled = input.enabled
+                // 關閉就是不再替別人保管：已暫存的回報一併清除。重新開啟後，之後收到的才代傳。
+                if (enabled) catchUp() else held.clear()
+            }
         }
     }
 
     private suspend fun relay(report: GatewayReport) {
+        if (!enabled) return
         val uid = gatewayUid ?: return
         forgetExpired()
         if (!isFresh(report) || isUploaded(report)) return
@@ -107,7 +121,7 @@ class MeshGateway(
     /** 依 `reportTime` 由舊到新逐筆補傳；遇到暫時性錯誤就停，其餘留到下一次網路事件。 */
     private suspend fun catchUp() {
         val uid = gatewayUid ?: return
-        if (!online) return
+        if (!enabled || !online) return
         forgetExpired()
         for (report in held.values.sortedBy { it.reportTimeMs }) {
             if (!upload(report, uid)) break
