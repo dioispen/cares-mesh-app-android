@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:geolocator/geolocator.dart';
 
 import '../models/health_report.dart' show statusUndeclared;
+import '../models/health_survey.dart';
 
 /// 互救任務的進度。Firestore 上以 [TaskStatus.name] 存放（waiting / accepted / done）。
 enum TaskStatus { waiting, accepted, done }
@@ -44,6 +45,10 @@ class MutualAidTask {
   /// Reporter 正舉著 SOS。[injury] 此時可能是「未宣告」。
   final bool sos;
 
+  /// Detail Tier 的狀況調查（行動能力、所在地點、同行人數、住家狀況、需要的協助）。
+  /// BLE 任務與沒填調查的舊回報為 null。
+  final HealthSurvey? survey;
+
   const MutualAidTask({
     required this.id,
     required this.name,
@@ -59,6 +64,7 @@ class MutualAidTask {
     this.helperId,
     this.isBle = false,
     this.sos = false,
+    this.survey,
   });
 
   MutualAidTask copyWith({TaskStatus? status, double? distanceKm}) =>
@@ -77,6 +83,7 @@ class MutualAidTask {
         helperId: helperId,
         isBle: isBle,
         sos: sos,
+        survey: survey,
       );
 
   /// 距離未知時不編故事：顯示「距離未知」而不是 0 公里。
@@ -166,6 +173,7 @@ List<MutualAidTask> buildMutualAidTasks({
       final lat = (data['lat'] as num?)?.toDouble();
       final lng = (data['lng'] as num?)?.toDouble();
       final hasLocation = lat != null && lng != null;
+      final rawSurvey = data['survey'];
 
       tasks.add(MutualAidTask(
         id: report.id,
@@ -189,6 +197,12 @@ List<MutualAidTask> buildMutualAidTasks({
         status: taskStatusFromRaw(data['taskStatus']),
         helperId: data['helperId'] as String?,
         sos: sos,
+        survey: rawSurvey is Map
+            ? HealthSurvey.fromMaps(
+                description: data['description'] as String?,
+                detail: Map<String, dynamic>.from(rawSurvey),
+              )
+            : null,
       ));
     }
   }

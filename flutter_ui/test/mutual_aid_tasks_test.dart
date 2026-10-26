@@ -1,5 +1,7 @@
-import 'package:flutter/foundation.dart' show TargetPlatform;
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/health_survey.dart';
+import 'package:flutter_ui/screens/health_screen.dart';
 import 'package:flutter_ui/services/mutual_aid_tasks.dart';
 
 /// 台北車站附近的三個點，用來驗證「近的排前面」。
@@ -20,6 +22,7 @@ ReportEntry _report({
   String? reportTime,
   String? area,
   bool? sos,
+  Map<String, dynamic>? survey,
 }) =>
     (
       id: id,
@@ -35,6 +38,7 @@ ReportEntry _report({
         'taskStatus': ?taskStatus,
         'helperId': ?helperId,
         'reportTime': ?reportTime,
+        'survey': ?survey,
       },
     );
 
@@ -384,6 +388,44 @@ void main() {
 
       expect({for (final t in tasks) t.id: t.area}, {'a': '台北市中正區', 'b': null});
     });
+
+    test('Detail Tier 的 survey 會解析進任務，且 copyWith 保留 survey；沒填則是 null', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(
+            id: 'with-survey',
+            description: '割傷、扭傷',
+            survey: {
+              'mobility': '需要協助才能移動',
+              'location': '家中',
+              'companions': 2,
+              'housing': '輕微損壞，仍可居住',
+              'needs': ['飲用水', '藥品'],
+            },
+          ),
+          _report(id: 'no-survey'),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      final withSurvey = tasks.firstWhere((t) => t.id == 'with-survey');
+      expect(withSurvey.survey, isNotNull);
+      expect(withSurvey.survey!.injuries, ['割傷', '扭傷']);
+      expect(withSurvey.survey!.mobility, '需要協助才能移動');
+      expect(withSurvey.survey!.location, '家中');
+      expect(withSurvey.survey!.companions, 2);
+      expect(withSurvey.survey!.housing, '輕微損壞，仍可居住');
+      expect(withSurvey.survey!.needs, ['飲用水', '藥品']);
+
+      final copied = withSurvey.copyWith(status: TaskStatus.accepted);
+      expect(copied.survey, same(withSurvey.survey));
+
+      final noSurvey = tasks.firstWhere((t) => t.id == 'no-survey');
+      expect(noSurvey.survey, isNull);
+    });
   });
 
   group('latestReportPerReporter', () {
@@ -639,6 +681,143 @@ void main() {
         _about5km.lng,
       );
       expect(km, closeTo(5.0, 0.3));
+    });
+  });
+
+  group('TaskDetailSheet', () {
+    Widget wrap(Widget child) => MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(child: child),
+          ),
+        );
+
+    testWidgets('顯示有填寫的 Detail Tier 調查欄位，未填的省略', (tester) async {
+      const fullTask = MutualAidTask(
+        id: 'alice',
+        name: '小美',
+        userId: 'alice',
+        injury: '輕傷',
+        location: '緯度 25.0478, 經度 121.5170',
+        area: '台北市中正區',
+        distanceKm: 1.2,
+        note: '割傷',
+        survey: HealthSurvey(
+          mobility: '需要協助才能移動',
+          location: '避難所 / 收容處',
+          companions: 3,
+          housing: '嚴重損壞，暫時無法居住',
+          needs: ['飲用水', '醫療協助'],
+        ),
+      );
+
+      await tester.pumpWidget(
+        wrap(
+          TaskDetailSheet(
+            task: fullTask,
+            injuryColor: Colors.orange,
+            canComplete: false,
+            onAccept: () {},
+            onDone: () {},
+            onRelease: () {},
+            onNavigate: null,
+            sensitiveAccess: SensitiveAccess.acceptFirst,
+          ),
+        ),
+      );
+
+      expect(find.text('行動能力：'), findsOneWidget);
+      expect(find.text('需要協助才能移動'), findsOneWidget);
+      expect(find.text('所在地點：'), findsOneWidget);
+      expect(find.text('避難所 / 收容處'), findsOneWidget);
+      expect(find.text('同行人數：'), findsOneWidget);
+      expect(find.text('3 人（不含本人）'), findsOneWidget);
+      expect(find.text('住家狀況：'), findsOneWidget);
+      expect(find.text('嚴重損壞，暫時無法居住'), findsOneWidget);
+      expect(find.text('需要協助：'), findsOneWidget);
+      expect(find.text('飲用水、醫療協助'), findsOneWidget);
+
+      const emptySurveyTask = MutualAidTask(
+        id: 'bob',
+        name: '小華',
+        userId: 'bob',
+        injury: '輕傷',
+        location: '位置未提供',
+        distanceKm: null,
+        note: '無補充說明',
+        survey: HealthSurvey(),
+      );
+
+      await tester.pumpWidget(
+        wrap(
+          TaskDetailSheet(
+            task: emptySurveyTask,
+            injuryColor: Colors.orange,
+            canComplete: false,
+            onAccept: () {},
+            onDone: () {},
+            onRelease: () {},
+            onNavigate: null,
+            sensitiveAccess: SensitiveAccess.none,
+          ),
+        ),
+      );
+
+      expect(find.text('行動能力：'), findsNothing);
+      expect(find.text('所在地點：'), findsNothing);
+      expect(find.text('同行人數：'), findsNothing);
+      expect(find.text('住家狀況：'), findsNothing);
+      expect(find.text('需要協助：'), findsNothing);
+    });
+
+    testWidgets('SensitiveAccess.granted 時顯示 surveySensitive（本人需照顧、同行需照顧、補充說明）',
+        (tester) async {
+      const task = MutualAidTask(
+        id: 'alice',
+        name: '小美',
+        userId: 'alice',
+        injury: '重傷',
+        location: '緯度 25.0478, 經度 121.5170',
+        distanceKm: 0.5,
+        note: '四肢骨折',
+        status: TaskStatus.accepted,
+        helperId: 'rescuer-1',
+      );
+
+      await tester.pumpWidget(
+        wrap(
+          TaskDetailSheet(
+            task: task,
+            injuryColor: Colors.red,
+            canComplete: true,
+            onAccept: () {},
+            onDone: () {},
+            onRelease: () {},
+            onNavigate: null,
+            sensitiveAccess: SensitiveAccess.granted,
+            loadSensitive: (_) async => {
+              'phone': '0912345678',
+              'bloodType': 'O',
+              'medicalInfo': '高血壓',
+              'emergencyContactName': '王大明',
+              'emergencyContactRelation': '父親',
+              'emergencyContactPhone': '0987654321',
+              'surveySensitive': {
+                'selfVulnerable': ['長者', '慢性病患'],
+                'vulnerable': ['幼童', '寵物'],
+                'notes': '二樓鐵門卡住，需從後巷進入',
+              },
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('本人需照顧'), findsOneWidget);
+      expect(find.text('長者、慢性病患'), findsOneWidget);
+      expect(find.text('同行需照顧'), findsOneWidget);
+      expect(find.text('幼童、寵物'), findsOneWidget);
+      expect(find.text('補充說明'), findsOneWidget);
+      expect(find.text('二樓鐵門卡住，需從後巷進入'), findsOneWidget);
     });
   });
 }

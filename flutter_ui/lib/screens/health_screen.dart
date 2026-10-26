@@ -799,7 +799,7 @@ class _HealthScreenState extends State<HealthScreen>
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       // 加上聯絡與醫療資訊後內容變長，小螢幕或大字體時要能捲動。
-      builder: (_) => SingleChildScrollView(child: _TaskDetailSheet(
+      builder: (_) => SingleChildScrollView(child: TaskDetailSheet(
         task: task,
         injuryColor: _injuryColor(task.injury),
         // 任務同步之後，看到「進行中」不代表是自己接的。BLE 任務只存在本機，
@@ -1326,6 +1326,22 @@ class _HealthScreenState extends State<HealthScreen>
                                   ),
                                 ],
                               ),
+                              if (!isDone && task.survey != null && task.survey!.needs.isNotEmpty) ...[
+                                const SizedBox(height: 3),
+                                Row(
+                                  children: [
+                                    Icon(Icons.inventory_2_outlined, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
+                                    const SizedBox(width: 3),
+                                    Expanded(
+                                      child: Text(
+                                        '需要：${task.survey!.needs.join('、')}',
+                                        style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.85)),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -1422,7 +1438,7 @@ class _SosChip extends StatelessWidget {
   }
 }
 
-class _TaskDetailSheet extends StatelessWidget {
+class TaskDetailSheet extends StatelessWidget {
   final MutualAidTask task;
   final Color injuryColor;
   /// 這位使用者是不是當初認領的人——只有他能按「完成協助」。
@@ -1437,6 +1453,9 @@ class _TaskDetailSheet extends StatelessWidget {
   /// 電話、血型、病史、緊急聯絡人那一區怎麼呈現（ADR-0005）。
   final SensitiveAccess sensitiveAccess;
 
+  /// 讀取 `health_report_sensitive/{uid}`；測試時可替換為假資料，避免綁定 Firebase。
+  final Future<Map<String, dynamic>?> Function(String reporterUid)? loadSensitive;
+
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -1444,7 +1463,8 @@ class _TaskDetailSheet extends StatelessWidget {
   static const _purple = Color(0xFF9B88B3);
   static const _green = Color(0xFF7AA67A);
 
-  const _TaskDetailSheet({
+  const TaskDetailSheet({
+    super.key,
     required this.task,
     required this.injuryColor,
     required this.canComplete,
@@ -1453,6 +1473,7 @@ class _TaskDetailSheet extends StatelessWidget {
     required this.onRelease,
     required this.onNavigate,
     required this.sensitiveAccess,
+    this.loadSensitive,
   });
 
   @override
@@ -1549,6 +1570,28 @@ class _TaskDetailSheet extends StatelessWidget {
                   _infoRow(Icons.healing_rounded, '傷勢細項', task.note),
                   const Divider(height: 18, color: Color(0xFFE8E0D5)),
                   _infoRow(Icons.home_rounded, '居住區域', task.area ?? '未提供'),
+                  if (task.survey != null) ...[
+                    if (task.survey!.mobility != null) ...[
+                      const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                      _infoRow(Icons.directions_walk_rounded, '行動能力', task.survey!.mobility!),
+                    ],
+                    if (task.survey!.location != null) ...[
+                      const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                      _infoRow(Icons.place_outlined, '所在地點', task.survey!.location!),
+                    ],
+                    if (task.survey!.companions > 0) ...[
+                      const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                      _infoRow(Icons.group_rounded, '同行人數', '${task.survey!.companions} 人（不含本人）'),
+                    ],
+                    if (task.survey!.housing != null) ...[
+                      const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                      _infoRow(Icons.house_rounded, '住家狀況', task.survey!.housing!),
+                    ],
+                    if (task.survey!.needs.isNotEmpty) ...[
+                      const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                      _infoRow(Icons.medical_information_rounded, '需要協助', task.survey!.needs.join('、')),
+                    ],
+                  ],
                 ],
                 if (task.isBle) ...[
                   const Divider(height: 18, color: Color(0xFFE8E0D5)),
@@ -1593,7 +1636,11 @@ class _TaskDetailSheet extends StatelessWidget {
 
           if (sensitiveAccess != SensitiveAccess.none) ...[
             const SizedBox(height: 12),
-            _SensitiveTierSection(reporterUid: task.userId, access: sensitiveAccess),
+            _SensitiveTierSection(
+              reporterUid: task.userId,
+              access: sensitiveAccess,
+              loadSensitive: loadSensitive,
+            ),
           ],
 
           const SizedBox(height: 20),
@@ -1699,8 +1746,13 @@ class _TaskDetailSheet extends StatelessWidget {
 class _SensitiveTierSection extends StatefulWidget {
   final String reporterUid;
   final SensitiveAccess access;
+  final Future<Map<String, dynamic>?> Function(String reporterUid)? loadSensitive;
 
-  const _SensitiveTierSection({required this.reporterUid, required this.access});
+  const _SensitiveTierSection({
+    required this.reporterUid,
+    required this.access,
+    this.loadSensitive,
+  });
 
   @override
   State<_SensitiveTierSection> createState() => _SensitiveTierSectionState();
@@ -1711,16 +1763,20 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
   static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
 
-  Future<DocumentSnapshot<Map<String, dynamic>>>? _sensitive;
+  Future<Map<String, dynamic>?>? _sensitive;
 
   @override
   void initState() {
     super.initState();
     if (widget.access == SensitiveAccess.granted) {
-      _sensitive = FirebaseFirestore.instance
-          .collection('health_report_sensitive')
-          .doc(widget.reporterUid)
-          .get();
+      final loader = widget.loadSensitive;
+      _sensitive = loader != null
+          ? loader(widget.reporterUid)
+          : FirebaseFirestore.instance
+              .collection('health_report_sensitive')
+              .doc(widget.reporterUid)
+              .get()
+              .then((doc) => doc.data());
     }
   }
 
@@ -1761,7 +1817,7 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
     );
   }
 
-  Widget _granted() => FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+  Widget _granted() => FutureBuilder<Map<String, dynamic>?>(
         future: _sensitive,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
@@ -1780,8 +1836,13 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
               ),
             );
           }
-          final data = snapshot.data?.data();
+          final data = snapshot.data;
           if (data == null) return _note('對方沒有提供聯絡與醫療資訊。');
+
+          final rawSurvey = data['surveySensitive'];
+          final sensitiveSurvey = rawSurvey is Map
+              ? HealthSurvey.fromMaps(sensitive: Map<String, dynamic>.from(rawSurvey))
+              : null;
 
           return Column(
             children: [
@@ -1789,6 +1850,14 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
               _row('血型', _text(data['bloodType'])),
               _row('病史', _text(data['medicalInfo'])),
               _row('緊急聯絡人', _emergencyContact(data)),
+              if (sensitiveSurvey != null) ...[
+                if (sensitiveSurvey.selfVulnerable.isNotEmpty)
+                  _row('本人需照顧', sensitiveSurvey.selfVulnerable.join('、')),
+                if (sensitiveSurvey.vulnerable.isNotEmpty)
+                  _row('同行需照顧', sensitiveSurvey.vulnerable.join('、')),
+                if (sensitiveSurvey.notes.isNotEmpty)
+                  _row('補充說明', sensitiveSurvey.notes),
+              ],
             ],
           );
         },
