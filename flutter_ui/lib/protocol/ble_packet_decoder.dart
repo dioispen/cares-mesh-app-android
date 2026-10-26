@@ -60,7 +60,9 @@ class HealthReportPayload {
   static const int version = 2;
   static const int _versionWithoutFlags = 1;
   static const int handleBytes = 6;
-  static const int geohashPrecision = 5;
+  /// geohash-6（約 0.6 × 1.1 km，ADR-0008）。只接受 0 或這個長度，與 Kotlin
+  /// `HealthReportPayload.GEOHASH_PRECISION` 一致；舊版裝置的 5 碼回報一律拒收。
+  static const int geohashPrecision = 6;
   static const int _flagSos = 0x01;
 
   /// 最短的合法 payload：版本 1、沒有 geohash。

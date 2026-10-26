@@ -3,15 +3,15 @@ import 'package:flutter_ui/protocol/ble_packet_decoder.dart';
 
 void main() {
   // 跨端權威向量 —— 與 app/.../protocol/DisasterReportTest.kt 的 vectorBytes 相同。
-  // version=2, handle=abcdef012345, status=重傷(2), flags=SOS, geohash="wsqqm",
+  // version=2, handle=abcdef012345, status=重傷(2), flags=SOS, geohash="wsqqqm"（geohash-6，ADR-0008），
   // reportTime=1_700_000_000 秒。
   final vector = <int>[
     0x02,
     0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45,
     0x02,
     0x01, // flags: SOS
-    0x05,
-    0x77, 0x73, 0x71, 0x71, 0x6D, // "wsqqm"
+    0x06,
+    0x77, 0x73, 0x71, 0x71, 0x71, 0x6D, // "wsqqqm"
     0x65, 0x53, 0xF1, 0x00, // 1700000000 秒
   ];
 
@@ -28,13 +28,13 @@ void main() {
     0x65, 0x53, 0xF1, 0x00,
   ];
 
-  // 版本 1（沒有 flags byte）：status=重傷, geohash="wsqqm"（vectorV1Bytes）。
+  // 版本 1（沒有 flags byte）：status=重傷, geohash="wsqqqm"（vectorV1Bytes）。
   final vectorV1 = <int>[
     0x01,
     0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45,
     0x02,
-    0x05,
-    0x77, 0x73, 0x71, 0x71, 0x6D,
+    0x06,
+    0x77, 0x73, 0x71, 0x71, 0x71, 0x6D,
     0x65, 0x53, 0xF1, 0x00,
   ];
 
@@ -43,7 +43,7 @@ void main() {
     expect(p.reporterHandle, 'abcdef012345');
     expect(p.status, '重傷');
     expect(p.sos, isTrue);
-    expect(p.geohash, 'wsqqm');
+    expect(p.geohash, 'wsqqqm');
     expect(p.reportTime.millisecondsSinceEpoch, 1700000000000);
   });
 
@@ -64,7 +64,7 @@ void main() {
     final p = HealthReportPayload.decode(vectorV1)!;
     expect(p.status, '重傷');
     expect(p.sos, isFalse);
-    expect(p.geohash, 'wsqqm');
+    expect(p.geohash, 'wsqqqm');
     expect(p.reportTime.millisecondsSinceEpoch, 1700000000000);
   });
 
@@ -81,8 +81,8 @@ void main() {
   });
 
   test('vector is within the Broadcast Tier size bound', () {
-    // 1 + 6 + 1 + 1 + 1 + 5 + 4 = 19
-    expect(vector.length, 19);
+    // 1 + 6 + 1 + 1 + 1 + 6 + 4 = 20：geohash-6 讓上界從 19 增為 20（ADR-0008）
+    expect(vector.length, 20);
   });
 
   test('carries no readable identity — handle is opaque hex', () {
@@ -103,8 +103,18 @@ void main() {
   });
 
   test('rejects an illegal geohash length', () {
-    expect(HealthReportPayload.decode([...vector]..[9] = 0x03), isNull); // geohashLen 既非 0 也非 5
+    expect(HealthReportPayload.decode([...vector]..[9] = 0x03), isNull); // geohashLen 既非 0 也非 6
     expect(HealthReportPayload.decode([...vectorV1]..[8] = 0x03), isNull);
+  });
+
+  test('rejects a geohash-5 report from an older device, and any other length (ADR-0008)', () {
+    for (final length in const [1, 5, 7, 12]) {
+      final geohash = 'wsqqqmwsqqqm'.substring(0, length).codeUnits;
+      final v2 = [0x02, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x02, 0x01, length, ...geohash, 0x65, 0x53, 0xF1, 0x00];
+      final v1 = [0x01, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x02, length, ...geohash, 0x65, 0x53, 0xF1, 0x00];
+      expect(HealthReportPayload.decode(v2), isNull, reason: 'version 2, geohash length $length');
+      expect(HealthReportPayload.decode(v1), isNull, reason: 'version 1, geohash length $length');
+    }
   });
 
   test('no-location vector round-trips to a null geohash', () {
@@ -122,12 +132,13 @@ void main() {
     expect(p.status, '輕傷');
   });
 
-  test('approximate location is coarse, not a precise fix', () {
+  test('approximate location is the center of the geohash-6 cell', () {
     final p = HealthReportPayload.decode(vector)!;
     final approx = p.approximateLatLng()!;
-    // "wsqqm" 落在台北一帶；只斷言量級（geohash-5 ≈ 數公里），不綁死精確值
-    expect(approx.$1, inInclusiveRange(24.0, 26.0));
-    expect(approx.$2, inInclusiveRange(120.0, 123.0));
+    // "wsqqqm" 是台北 101 所在的那一格（約 0.6 × 1.1 km）；與 DisasterReportTest.kt 的
+    // approximateCenterOfTheAuthoritativeVector 同一個中心。互助任務的距離與導航用的就是它。
+    expect(approx.$1, closeTo(25.03509521484375, 1e-12));
+    expect(approx.$2, closeTo(121.5692138671875, 1e-12));
   });
 
   test('toBroadcastReport drops every Detail Tier field and keeps the SOS', () {

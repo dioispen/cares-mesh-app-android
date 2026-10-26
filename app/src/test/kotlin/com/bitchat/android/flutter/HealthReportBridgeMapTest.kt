@@ -21,7 +21,7 @@ class HealthReportBridgeMapTest {
 
         assertEquals(true, payload?.sos)
         assertEquals(HealthStatus.SEVERE, payload?.status)
-        assertEquals(5, payload?.geohash?.length)
+        assertEquals(6, payload?.geohash?.length) // 座標就地降為 geohash-6（ADR-0008）
         assertEquals(1_700_000_000_000L, payload?.reportTimeMillis)
     }
 
