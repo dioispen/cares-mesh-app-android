@@ -13,6 +13,7 @@ import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -64,11 +65,33 @@ class BitchatFlutterChannelsTest {
         assertEquals(listOf("success:false"), result.calls)
     }
 
-    private fun newChannels() = BitchatFlutterChannels(
+    @Test
+    fun `getSigningPublicKey answers the signing key the mesh service announces`() {
+        val key = ByteArray(32) { it.toByte() }
+        val channels = newChannels(signingPublicKey = { key }).also { channels = it }
+        val result = RecordingResult()
+
+        assertTrue(channels.handle(MethodCall("getSigningPublicKey", null), result))
+
+        assertSame(key, result.values.single())
+    }
+
+    @Test
+    fun `getSigningPublicKey without a mesh service is SERVICE_NOT_READY`() {
+        val channels = newChannels(signingPublicKey = { null }).also { channels = it }
+        val result = RecordingResult()
+
+        assertTrue(channels.handle(MethodCall("getSigningPublicKey", null), result))
+
+        assertEquals(listOf("error:SERVICE_NOT_READY"), result.calls)
+    }
+
+    private fun newChannels(signingPublicKey: () -> ByteArray? = { null }) = BitchatFlutterChannels(
         context = RuntimeEnvironment.getApplication(),
         messenger = mock<BinaryMessenger>(),
         scope = CoroutineScope(main + Job()),
-        ioDispatcher = io
+        ioDispatcher = io,
+        signingPublicKey = signingPublicKey
     )
 
     /** [delegate], counting the work dispatched to it. */

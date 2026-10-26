@@ -1494,7 +1494,12 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     fun getStaticNoisePublicKey(): ByteArray? {
         return encryptionService.getStaticPublicKey()
     }
-    
+
+    /** Our Ed25519 signing public key (32 bytes), the one every ANNOUNCE carries. */
+    fun getSigningPublicKey(): ByteArray? {
+        return encryptionService.getSigningPublicKey()
+    }
+
     /**
      * Check if encryption icon should be shown for a peer
      */
