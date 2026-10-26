@@ -20,7 +20,7 @@ import kotlinx.coroutines.cancel
  * default network, and Firestore. The service starts it in onCreate and stops it in onDestroy, so
  * the Gateway lives exactly as long as the mesh service, App screens closed or not.
  */
-class MeshGatewayRuntime private constructor(
+class MeshGatewayRuntime internal constructor(
     private val auth: FirebaseAuth,
     private val connectivity: ConnectivityManager?,
     private val gateway: MeshGateway,
@@ -58,7 +58,7 @@ class MeshGatewayRuntime private constructor(
         }
     }
 
-    private fun start() {
+    internal fun start() {
         auth.addAuthStateListener(authListener)
         try {
             connectivity?.registerDefaultNetworkCallback(networkCallback)

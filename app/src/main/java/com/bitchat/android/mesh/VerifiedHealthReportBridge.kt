@@ -40,6 +40,9 @@ object VerifiedHealthReportBridge {
         listeners.remove(listener)
     }
 
+    /** For tests: a listener left behind by a stopped Gateway would leak it. */
+    internal val listenerCount: Int get() = listeners.size
+
     /** Called by MessageHandler. A failing listener must not stop the mesh handling the packet. */
     internal fun publish(report: VerifiedHealthReport) {
         listeners.forEach { listener ->

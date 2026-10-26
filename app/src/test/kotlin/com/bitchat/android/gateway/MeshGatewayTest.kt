@@ -189,6 +189,177 @@ class MeshGatewayTest {
         assertEquals(2, uploader.uploads.size)
     }
 
+    // ── 離線暫存與補傳（#112）────────────────────────────────────────────────
+
+    @Test
+    fun `a report heard offline is uploaded once the network is back`() = runTest {
+        val gateway = gateway(online = false)
+        val report = heard()
+
+        gateway.onReport(report)
+        runCurrent()
+        assertTrue(uploader.uploads.isEmpty())
+
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(listOf(report to GATEWAY_UID), uploader.uploads)
+    }
+
+    @Test
+    fun `only the newest report of each Reporter is held`() = runTest {
+        val gateway = gateway(online = false)
+
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa", reportTimeMs = now - 120_000))
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa", reportTimeMs = now - 60_000))
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa", reportTimeMs = now - 90_000)) // 較慢的 relay 送來的舊回報
+        gateway.onReport(heard(handle = "bbbbbbbbbbbb", reportTimeMs = now - 100_000))
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(
+            setOf("aaaaaaaaaaaa" to now - 60_000, "bbbbbbbbbbbb" to now - 100_000),
+            uploader.uploads.map { it.first.reporterHandle to it.first.reportTimeMs }.toSet()
+        )
+        assertEquals(2, uploader.uploads.size)
+    }
+
+    @Test
+    fun `a held report that is more than two hours old by the time the network is back is not uploaded`() = runTest {
+        val gateway = gateway(online = false)
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa", reportTimeMs = now - 60_000))
+        gateway.onReport(heard(handle = "bbbbbbbbbbbb", reportTimeMs = now - 10_000))
+        runCurrent()
+
+        now += TWO_HOURS_MS - 30_000 // a 已超過兩小時，b 還沒有
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(listOf("bbbbbbbbbbbb"), uploader.uploads.map { it.first.reporterHandle })
+    }
+
+    @Test
+    fun `at 1000 held reports the oldest one makes room`() = runTest {
+        val gateway = gateway(online = false)
+        val handles = (0..1000).map { "%012x".format(it) }
+        handles.forEachIndexed { i, handle ->
+            gateway.onReport(heard(handle = handle, reportTimeMs = now - 1_000_000 + i * 100L))
+        }
+        runCurrent()
+
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        val uploaded = uploader.uploads.map { it.first.reporterHandle }
+        assertEquals(1000, uploaded.size)
+        assertEquals(handles.drop(1).toSet(), uploaded.toSet())
+    }
+
+    @Test
+    fun `held reports are uploaded when the user signs in`() = runTest {
+        val gateway = gateway(online = false)
+        val report = heard()
+        gateway.onReport(report)
+        gateway.onSignedIn(null) // 例如登入憑證失效
+        gateway.onNetworkChanged(true)
+        runCurrent()
+        assertTrue("signed out: nothing is uploaded", uploader.uploads.isEmpty())
+
+        gateway.onSignedIn("uid-again")
+        runCurrent()
+
+        assertEquals(listOf(report to "uid-again"), uploader.uploads)
+    }
+
+    @Test
+    fun `a report heard while signed out is not held`() = runTest {
+        val gateway = gateway(uid = null, online = false)
+
+        gateway.onReport(heard())
+        gateway.onSignedIn(GATEWAY_UID)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertTrue(uploader.uploads.isEmpty())
+    }
+
+    @Test
+    fun `a transient failure keeps the report held until the next network event`() = runTest {
+        uploader.results += UploadResult.TRANSIENT_FAILURE
+        val gateway = gateway()
+        val report = heard()
+
+        gateway.onReport(report)
+        runCurrent()
+        assertEquals(1, uploader.uploads.size)
+
+        gateway.onNetworkChanged(false)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(listOf(report, report), uploader.uploads.map { it.first })
+    }
+
+    @Test
+    fun `a transient failure while catching up leaves the rest held for the next network event`() = runTest {
+        val gateway = gateway(online = false)
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa"))
+        gateway.onReport(heard(handle = "bbbbbbbbbbbb"))
+        runCurrent()
+
+        uploader.results += UploadResult.TRANSIENT_FAILURE
+        gateway.onNetworkChanged(true)
+        runCurrent()
+        gateway.onNetworkChanged(false)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        val succeeded = uploader.uploads.drop(1).map { it.first.reporterHandle }
+        assertEquals(setOf("aaaaaaaaaaaa", "bbbbbbbbbbbb"), succeeded.toSet())
+        assertEquals(2, succeeded.size)
+    }
+
+    @Test
+    fun `uploaded and refused reports leave the hold for good`() = runTest {
+        uploader.results += listOf(UploadResult.UPLOADED, UploadResult.PERMISSION_DENIED)
+        val gateway = gateway(online = false)
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa"))
+        gateway.onReport(heard(handle = "bbbbbbbbbbbb"))
+        gateway.onNetworkChanged(true)
+        runCurrent()
+        assertEquals(2, uploader.uploads.size)
+
+        gateway.onNetworkChanged(false)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(2, uploader.uploads.size)
+    }
+
+    @Test
+    fun `a newer report uploaded live supersedes an older held one of the same Reporter`() = runTest {
+        uploader.results += UploadResult.TRANSIENT_FAILURE
+        val gateway = gateway()
+        gateway.onReport(heard(reportTimeMs = now - 120_000)) // 失敗，留在暫存
+        gateway.onReport(heard(reportTimeMs = now - 60_000)) // 撤回 SOS 的新回報，上傳成功
+        gateway.onNetworkChanged(false)
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(listOf(now - 120_000, now - 60_000), uploader.uploads.map { it.first.reportTimeMs })
+    }
+
+    @Test
+    fun `staying online does not upload the same held report again`() = runTest {
+        val gateway = gateway(online = false)
+        gateway.onReport(heard())
+        gateway.onNetworkChanged(true)
+        gateway.onNetworkChanged(true) // 預設網路的能力變動也會再通知一次
+        runCurrent()
+
+        assertEquals(1, uploader.uploads.size)
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private fun TestScope.gateway(uid: String? = GATEWAY_UID, online: Boolean = true): MeshGateway =
