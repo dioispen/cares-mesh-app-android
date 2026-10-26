@@ -44,7 +44,7 @@ object SpecialRecipients {
  */
 enum class BroadcastContentTag(val value: Byte) {
     HEALTH_REPORT(0x01);
-    // Future: SOS(0x02), SUPPLY_REQUEST(0x03), ...
+    // Future: SUPPLY_REQUEST(0x03), ... — not SOS: an SOS is a mark on a Health Report (ADR-0004).
 
     companion object {
         fun fromValue(b: Byte): BroadcastContentTag? = values().find { it.value == b }

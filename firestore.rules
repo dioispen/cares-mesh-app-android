@@ -45,8 +45,8 @@ service cloud.firestore {
     }
 
     // health_reports：Health Report 的 Detail Tier（ADR-0005）——姓名、居住區域、Status 與
-    // 傷勢細項、精確座標、回報時間，以及互助任務的 taskStatus／helperId。文件 ID 是
-    // Reporter 的 uid，一人一份。
+    // 傷勢細項、精確座標、回報時間、SOS（ADR-0004：SOS 是 Health Report 上的標記，不另開
+    // collection），以及互助任務的 taskStatus／helperId。文件 ID 是 Reporter 的 uid，一人一份。
     //
     // 任何登入帳號都能讀：互助任務要讓附近的人知道誰需要幫忙、在哪裡，才能趕過去。
     // 這是刻意的決定（ADR-0005），取代 issue #33 對這份文件「只給本人與救援者」的限制。
@@ -61,8 +61,9 @@ service cloud.firestore {
       function newHelper() { return request.resource.data.get('helperId', null); }
       function detailTierKeys() {
         return ['id', 'reporterId', 'name', 'area', 'status', 'description',
-                'lat', 'lng', 'reportTime', 'taskStatus', 'helperId', 'survey'];
+                'lat', 'lng', 'reportTime', 'sos', 'taskStatus', 'helperId', 'survey'];
       }
+      function sosIsBool() { return request.resource.data.get('sos', false) is bool; }
 
       allow read: if request.auth != null;
       // 一人一筆：文件 ID 必須是自己的 uid。只檢查 reporterId 的話，任何人都能先建立
@@ -72,6 +73,7 @@ service cloud.firestore {
                     && docId == request.auth.uid
                     && request.resource.data.reporterId == request.auth.uid
                     && request.resource.data.keys().hasOnly(detailTierKeys())
+                    && sosIsBool()
                     && mapFieldHasOnly(request.resource.data, 'survey', detailSurveyKeys());
       // update 不得改動 reporterId：轉手給他人等於把這份回報和它的 Sensitive Tier
       // 讀取權交給對方。
@@ -79,6 +81,7 @@ service cloud.firestore {
                     && resource.data.reporterId == request.auth.uid
                     && request.resource.data.reporterId == resource.data.reporterId
                     && request.resource.data.keys().hasOnly(detailTierKeys())
+                    && sosIsBool()
                     && mapFieldHasOnly(request.resource.data, 'survey', detailSurveyKeys());
       allow delete: if request.auth != null
                     && resource.data.reporterId == request.auth.uid;
@@ -144,11 +147,15 @@ service cloud.firestore {
       allow delete: if request.auth != null && uid == request.auth.uid;
     }
 
-    // sos_requests: 登入用戶可讀；只能建立/修改/刪除自己的 SOS
+    // sos_requests：已停用（#83）。SOS 改為 health_reports 的 sos 欄位（ADR-0004）。
+    //
+    // 舊資料含姓名、電話、血型、病史與精確座標，以前任何登入帳號都讀得到（#64）。資料還在，
+    // 所以讀取收緊為只有本人：依 ADR-0005，電話與病史只給正在協助這位 Reporter 的 Verified
+    // Rescuer，而舊資料沒有任務可以對應，連 Verified Rescuer 也不開放（#83 原本寫「本人與救援者」）。
+    // 不能再新建，本人仍可整理或刪除自己的舊資料。
     match /sos_requests/{docId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
-                    && request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if false;
       allow update, delete: if request.auth != null
                              && resource.data.userId == request.auth.uid;
     }

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/foundation.dart' show compute, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -17,6 +16,8 @@ import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
 import '../services/mascot_service.dart';
 import '../services/mutual_aid_tasks.dart';
+import '../services/own_report_cache.dart';
+import '../services/sos.dart';
 import '../widgets/health_survey_form.dart';
 import 'sos_screen.dart';
 
@@ -43,6 +44,9 @@ class _HealthScreenState extends State<HealthScreen>
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
   late TabController _tabController;
+
+  /// 自己是否正舉著 SOS。只用來顯示；送出時以 [SosStore] 為準，SOS 畫面可能在這之間改過它。
+  SosState _sosState = const SosState.lowered();
 
   /// 自己上一次回報的狀況調查，用來帶入表單；還沒回報過時是空白表單。
   HealthSurvey _mySurvey = const HealthSurvey();
@@ -143,7 +147,17 @@ class _HealthScreenState extends State<HealthScreen>
   void didPush() => _setMascotOptions();
 
   @override
-  void didPopNext() => _setMascotOptions();
+  void didPopNext() {
+    _setMascotOptions();
+    // 可能剛從 SOS 畫面回來：舉起或撤回了 SOS。
+    final uid = _currentUserId;
+    if (uid != null) unawaited(_loadSosState(uid));
+  }
+
+  Future<void> _loadSosState(String uid) async {
+    final state = await SosStore.load(uid);
+    if (mounted) setState(() => _sosState = state);
+  }
 
   void _setMascotOptions() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -198,6 +212,7 @@ class _HealthScreenState extends State<HealthScreen>
         ),
         note: '來自 BLE 廣播・聯絡資訊需另行請求',
         isBle: true,
+        sos: report.sos,
       );
 
       // 同一 Reporter Handle 只留 reportTime 最新的一份；同步補送的舊回報晚到時不會蓋掉新的。
@@ -214,40 +229,20 @@ class _HealthScreenState extends State<HealthScreen>
     });
   }
 
-  /// 取得（或首次產生）本機的廣播 handle。
-  ///
-  /// 這是刻意**不從帳號衍生**的隨機值：不用 Firebase UID、電話或姓名雜湊，
-  /// 讓長期側錄者無法把 handle 反推回本人或 Firestore 文件（ADR-0003）。
-  /// 一經產生即固定，供接收端過濾自己的回報用。
+  /// 取得（或首次產生）本機的 Reporter Handle（[loadOrCreateReporterHandle]），供接收端
+  /// 過濾自己的回報用。
   ///
   /// 用 [_broadcastHandleFuture] memoize，確保 initState 與使用者點擊兩條 async 路徑
   /// 不會各自產生並寫入不同的隨機值。
   Future<String> _getOrCreateBroadcastHandle(SharedPreferences prefs) {
-    return _broadcastHandleFuture ??= _loadOrCreateBroadcastHandle(prefs);
+    return _broadcastHandleFuture ??= loadOrCreateReporterHandle(prefs);
   }
 
-  Future<String> _loadOrCreateBroadcastHandle(SharedPreferences prefs) async {
-    var handle = prefs.getString('broadcast_handle');
-    if (handle == null || !RegExp(r'^[0-9a-f]{12}$').hasMatch(handle)) {
-      final rng = Random.secure();
-      handle = List<String>.generate(
-        6,
-        (_) => rng.nextInt(256).toRadixString(16).padLeft(2, '0'),
-      ).join();
-      await prefs.setString('broadcast_handle', handle);
-    }
-    return handle;
-  }
-
-  /// 「我的狀態」是每個帳號各自的資料，所以本機快取的鍵值必須綁 uid。
-  ///
   /// 舊版存在不分帳號的 'health_status'／'health_sub_injury' 裡：同一台裝置
   /// A 帳號回報「輕傷／割傷」後登出，B 帳號登入時會讀到同一份值，看起來像兩個
-  /// 帳號的健康狀態被同步了。
+  /// 帳號的健康狀態被同步了。現在的快取綁 uid（[OwnStatusCache]）。
   static const _legacyStatusKey = 'health_status';
   static const _legacySubInjuryKey = 'health_sub_injury';
-  static String _statusKey(String uid) => 'health_status:$uid';
-  static String _subInjuryKey(String uid) => 'health_sub_injury:$uid';
 
   /// 舊文件清理只需要成功一次，之後不再重複查詢。
   static String _prunedKey(String uid) => 'health_reports_pruned:$uid';
@@ -274,18 +269,18 @@ class _HealthScreenState extends State<HealthScreen>
     if (mounted) setState(() => _myBroadcastHandle = handle);
 
     if (uid != null) {
-      final savedStatus = prefs.getString(_statusKey(uid));
-      final savedSub = prefs.getString(_subInjuryKey(uid));
+      final saved = await OwnStatusCache.load(uid);
       if (mounted) {
         setState(() {
-          if (savedStatus != null) _selectedStatus = savedStatus;
-          _selectedSubInjury = savedSub;
+          if (saved.status != null) _selectedStatus = saved.status!;
+          _selectedSubInjury = saved.subInjury;
         });
       }
       // 監聽只是掛上去、不等網路，所以搶在定位之前接好：位置權限對話框停在
       // 那裡的時候，「我的狀態」不該跟著卡住。
       _subscribeToOwnReport(uid);
       unawaited(_loadVerifiedRescuer(uid));
+      unawaited(_loadSosState(uid));
     }
 
     try {
@@ -358,7 +353,7 @@ class _HealthScreenState extends State<HealthScreen>
           );
         });
       }
-      await _cacheOwnStatus(uid, status, subInjury);
+      await OwnStatusCache.save(uid, status, subInjury);
     }, onError: (Object e) => debugPrint('own report stream failed: $e'));
   }
 
@@ -413,7 +408,7 @@ class _HealthScreenState extends State<HealthScreen>
           _selectedSubInjury = subInjury;
         });
       }
-      await _cacheOwnStatus(uid, status, subInjury);
+      await OwnStatusCache.save(uid, status, subInjury);
     } catch (_) {}
   }
 
@@ -445,15 +440,6 @@ class _HealthScreenState extends State<HealthScreen>
     }
   }
 
-  Future<void> _cacheOwnStatus(String uid, String status, String? subInjury) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_statusKey(uid), status);
-    if (subInjury != null) {
-      await prefs.setString(_subInjuryKey(uid), subInjury);
-    } else {
-      await prefs.remove(_subInjuryKey(uid));
-    }
-  }
 
   /// 把任務狀態寫回 Firestore，讓被協助者與其他協助者看到同一份進度。
   ///
@@ -522,7 +508,7 @@ class _HealthScreenState extends State<HealthScreen>
   void _subscribeToTasks() {
     _tasksSubscription = FirebaseFirestore.instance
         .collection('health_reports')
-        .where('status', whereIn: mutualAidInjuries.toList())
+        .where('status', whereIn: mutualAidQueryStatuses.toList())
         .snapshots()
         .listen((snapshot) {
       if (!mounted) return;
@@ -560,6 +546,7 @@ class _HealthScreenState extends State<HealthScreen>
       );
 
   Color _statusColor() {
+    if (_selectedStatus == statusUndeclared) return _red;
     final match = _statusOptions.where((o) => o['label'] == _selectedStatus);
     return match.isEmpty ? _textSecondary : match.first['color'] as Color;
   }
@@ -603,6 +590,9 @@ class _HealthScreenState extends State<HealthScreen>
         setState(() => _myBroadcastHandle = handle);
       }
 
+      // 舉著 SOS 時，每一份回報都帶著它；回報安全就是撤回（#82）。
+      final sos = reportStatus(await SosStore.load(user.id), status);
+
       final report = HealthReport(
         reporterId: user.id,
         name: user.name,
@@ -612,6 +602,7 @@ class _HealthScreenState extends State<HealthScreen>
         lat: _currentPosition?.latitude,
         lng: _currentPosition?.longitude,
         reportTime: DateTime.now(),
+        sos: sos.report.sos,
         phone: user.phone,
         bloodType: user.bloodType,
         medicalInfo: user.medicalInfo,
@@ -627,12 +618,13 @@ class _HealthScreenState extends State<HealthScreen>
       // 自己包 try：沒開藍牙、裝置不支援、原生端拋錯，都不該讓雲端回報跟著失敗。
       String? broadcastFailure;
       try {
-        await BitchatBridge.sendHealthReport({
-          'reporterHandle': handle,
-          'status': status,
-          'lat': _currentPosition?.latitude,
-          'lng': _currentPosition?.longitude,
-        });
+        await BitchatBridge.sendHealthReport(
+          reporterHandle: handle,
+          status: status,
+          lat: _currentPosition?.latitude,
+          lng: _currentPosition?.longitude,
+          sos: sos.report.sos,
+        );
       } catch (e) {
         debugPrint('HealthScreen: Health Report broadcast failed: $e');
         broadcastFailure = HealthReportDelivery.broadcastFailureReason(e);
@@ -698,9 +690,11 @@ class _HealthScreenState extends State<HealthScreen>
         return;
       }
 
-      await _cacheOwnStatus(user.id, status, subInjury);
+      await OwnStatusCache.save(user.id, status, subInjury);
+      await SosStore.save(user.id, sos.state);
       if (mounted) {
         setState(() {
+          _sosState = sos.state;
           _mySurvey = survey;
           _ownSensitiveSurvey = survey.toSensitiveMap();
         });
@@ -737,8 +731,9 @@ class _HealthScreenState extends State<HealthScreen>
     });
   }
 
+  /// 「未宣告」只會和 SOS 一起出現：沒說傷勢，但在求救，比照重傷的紅色。
   Color _injuryColor(String injury) {
-    if (injury == '重傷') return _red;
+    if (injury == '重傷' || injury == statusUndeclared) return _red;
     if (injury == '輕傷') return _orange;
     return _green;
   }
@@ -746,6 +741,7 @@ class _HealthScreenState extends State<HealthScreen>
   IconData _injuryIcon(String injury) {
     if (injury == '重傷') return Icons.emergency_rounded;
     if (injury == '輕傷') return Icons.medical_services_rounded;
+    if (injury == statusUndeclared) return Icons.sos_rounded;
     return Icons.check_circle_rounded;
   }
 
@@ -918,9 +914,11 @@ class _HealthScreenState extends State<HealthScreen>
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
-                    _statusOptions.where((o) => o['label'] == _selectedStatus).isEmpty
-                        ? Icons.help_outline_rounded
-                        : _statusOptions.firstWhere((o) => o['label'] == _selectedStatus)['icon'] as IconData,
+                    _selectedStatus == statusUndeclared
+                        ? Icons.sos_rounded
+                        : _statusOptions.where((o) => o['label'] == _selectedStatus).isEmpty
+                            ? Icons.help_outline_rounded
+                            : _statusOptions.firstWhere((o) => o['label'] == _selectedStatus)['icon'] as IconData,
                     color: _statusColor(),
                     size: 22,
                   ),
@@ -940,6 +938,11 @@ class _HealthScreenState extends State<HealthScreen>
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _statusColor()),
                       ),
+                      if (_sosState.raised)
+                        const Text(
+                          'SOS 舉起中：之後的回報都會帶著 SOS，回報「安全」即撤回',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _red),
+                        ),
                     ],
                   ),
                 ),
@@ -950,7 +953,9 @@ class _HealthScreenState extends State<HealthScreen>
           ),
           Expanded(
             child: HealthSurveyForm(
-              initialStatus: reported ? _selectedStatus : null,
+              // 「未宣告」只會和 SOS 一起出現（ADR-0004），不是表單的選項：帶入的話，不選就送出會送出
+              // 不合法的「未宣告」。這時讓 Reporter 自己選。
+              initialStatus: reported && _selectedStatus != statusUndeclared ? _selectedStatus : null,
               initialSurvey: _mySurvey,
               submitting: _isSubmitting,
               onSubmit: _select,
@@ -1250,15 +1255,23 @@ class _HealthScreenState extends State<HealthScreen>
                             children: [
                               Row(
                                 children: [
-                                  Text(
-                                    task.name,
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: isDone ? _textSecondary : _textPrimary,
+                                  // 標籤變多（SOS、協助中），窄螢幕時讓名字截斷，不要整列溢出。
+                                  Flexible(
+                                    child: Text(
+                                      task.name,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: isDone ? _textSecondary : _textPrimary,
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(width: 8),
+                                  if (task.sos) ...[
+                                    _SosChip(faded: isDone),
+                                    const SizedBox(width: 6),
+                                  ],
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                                     decoration: BoxDecoration(
@@ -1381,6 +1394,29 @@ class _CopyCoordsButtonState extends State<_CopyCoordsButton> {
   }
 }
 
+/// 任務正舉著 SOS 的標籤。
+class _SosChip extends StatelessWidget {
+  const _SosChip({this.faded = false});
+
+  /// 已完成的任務整張卡片變淡，標籤跟著變淡。
+  final bool faded;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFC4553A).withValues(alpha: faded ? 0.4 : 1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: const Text(
+        'SOS',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 1),
+      ),
+    );
+  }
+}
+
 class _TaskDetailSheet extends StatelessWidget {
   final MutualAidTask task;
   final Color injuryColor;
@@ -1452,14 +1488,20 @@ class _TaskDetailSheet extends StatelessWidget {
                 child: Icon(Icons.person_rounded, color: injuryColor, size: 24),
               ),
               const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(task.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _textPrimary)),
-                  Text(task.userId, style: const TextStyle(fontSize: 11, color: _textSecondary)),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(task.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _textPrimary)),
+                    Text(task.userId, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+                  ],
+                ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
+              if (task.sos) ...[
+                const _SosChip(),
+                const SizedBox(width: 6),
+              ],
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(

@@ -943,3 +943,111 @@ describe('health_reports 一人一筆', () => {
     }));
   });
 });
+
+// SOS 是 Health Report 上的標記（ADR-0004、#83）：寫在 Reporter 自己的 health_reports/{uid}，
+// 沿用 Detail Tier 的讀取規則與一人一份；sos_requests 停用。
+describe('SOS（#83：health_reports 的 sos 欄位，停用 sos_requests）', () => {
+  const sosReport = (uid, extra = {}) => ({
+    id: 'report-uuid',
+    reporterId: uid,
+    name: 'Alice',
+    area: '台北市中正區',
+    status: '未宣告',
+    lat: 25.033,
+    lng: 121.5654,
+    reportTime: '2026-10-22T10:00:00.000Z',
+    sos: true,
+    ...extra,
+  });
+  const seed = async (extra = {}) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), sosReport(ALICE, extra));
+    });
+  };
+  const seedLegacySos = async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'sos_requests/legacy-alice'), {
+        userId: ALICE,
+        userName: 'Alice',
+        phone: '0912345678',
+        latitude: 25.033,
+        longitude: 121.5654,
+        bloodType: 'O',
+        medicalInfo: '盤尼西林過敏',
+        status: 'active',
+      });
+    });
+  };
+
+  it('★ 本人可以建立帶 sos 的回報（Status 未宣告）', async () => {
+    await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), sosReport(ALICE)));
+  });
+
+  it('sos 必須是布林值', async () => {
+    await assertFails(setDoc(
+      doc(dbFor(ALICE), `health_reports/${ALICE}`),
+      sosReport(ALICE, { sos: 'yes' }),
+    ));
+  });
+
+  it('★ 帶 sos 的回報沿用 Detail Tier 的讀取規則：登入帳號讀得到，未登入讀不到', async () => {
+    await seed();
+    await assertSucceeds(getDoc(doc(dbFor(BOB), `health_reports/${ALICE}`)));
+    await assertFails(getDoc(doc(anonDb(), `health_reports/${ALICE}`)));
+  });
+
+  it('★ 互助任務查詢涵蓋「未宣告」', async () => {
+    await seed();
+    await assertSucceeds(getDocs(query(
+      collection(dbFor(BOB), 'health_reports'),
+      where('status', 'in', ['輕傷', '重傷', '未宣告']),
+    )));
+  });
+
+  it('★ Status 不變時本人只改 sos、位置與時間，已接手的任務維持已接手', async () => {
+    await seed({ status: '重傷', sos: false, taskStatus: 'accepted', helperId: BOB });
+    // sos_screen.dart 以 merge 寫入，等同只改這幾個欄位
+    await assertSucceeds(updateDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), {
+      reporterId: ALICE,
+      status: '重傷',
+      sos: true,
+      lat: 25.04,
+      lng: 121.57,
+      reportTime: '2026-10-22T10:05:00.000Z',
+    }));
+    const snap = await getDoc(doc(dbFor(BOB), `health_reports/${ALICE}`));
+    if (snap.data().taskStatus !== 'accepted' || snap.data().helperId !== BOB) {
+      throw new Error(`任務被打回：${JSON.stringify(snap.data())}`);
+    }
+  });
+
+  it('★ 協助者不能改動 sos', async () => {
+    await seed({ status: '重傷', taskStatus: 'accepted', helperId: BOB });
+    const ref = doc(dbFor(BOB), `health_reports/${ALICE}`);
+    await assertFails(updateDoc(ref, { sos: false }));
+    await assertFails(updateDoc(ref, { taskStatus: 'done', helperId: BOB, sos: false }));
+  });
+
+  it('★ 一般登入帳號讀不到他人在 sos_requests 的舊資料（#64）', async () => {
+    await seedLegacySos();
+    await assertFails(getDoc(doc(dbFor(BOB), 'sos_requests/legacy-alice')));
+    await assertFails(getDocs(collection(dbFor(BOB), 'sos_requests')));
+  });
+
+  it('本人仍讀得到自己在 sos_requests 的舊資料', async () => {
+    await seedLegacySos();
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), 'sos_requests/legacy-alice')));
+  });
+
+  it('★ Verified Rescuer 也讀不到 sos_requests 的舊資料：沒有任務可以對應（ADR-0005）', async () => {
+    await seedLegacySos();
+    await assertFails(getDoc(doc(dbFor(RESCUER), 'sos_requests/legacy-alice')));
+  });
+
+  it('★ 不能再新建 sos_requests（連自己的也不行）', async () => {
+    await assertFails(setDoc(doc(dbFor(ALICE), 'sos_requests/new'), {
+      userId: ALICE,
+      status: 'active',
+    }));
+  });
+});

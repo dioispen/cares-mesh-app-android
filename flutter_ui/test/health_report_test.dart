@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ui/models/health_report.dart';
 
-HealthReport _report({DateTime? reportTime, String? description}) => HealthReport(
+HealthReport _report({DateTime? reportTime, String? description, bool sos = false}) => HealthReport(
       reporterId: 'uid-1',
       name: '小明',
       area: '台北市中正區',
@@ -16,6 +16,7 @@ HealthReport _report({DateTime? reportTime, String? description}) => HealthRepor
       emergencyContactName: '王大明',
       emergencyContactPhone: '0987654321',
       emergencyContactRelation: '父親',
+      sos: sos,
     );
 
 void main() {
@@ -77,9 +78,19 @@ void main() {
           'lat',
           'lng',
           'reportTime',
+          'sos',
           'survey', // 狀況調查的公開那一半（ADR-0007），鍵由 detailSurveyKeys() 另外鎖住
         },
       );
+    });
+
+    test('SOS 是 Detail Tier 上的標記（ADR-0004），round-trip 不變；舊文件沒有這個欄位時當作沒有', () {
+      final raised = _report(sos: true).toDetailJson();
+
+      expect(raised['sos'], isTrue);
+      expect(_report().toDetailJson()['sos'], isFalse);
+      expect(HealthReport.fromJson(raised).sos, isTrue);
+      expect(HealthReport.fromJson({...raised}..remove('sos')).sos, isFalse);
     });
 
     test('Sensitive Tier 帶電話、血型、病史與緊急聯絡人', () {
