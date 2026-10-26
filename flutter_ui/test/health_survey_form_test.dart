@@ -44,6 +44,8 @@ void main() {
   // 「同住或同行的人」為 0 時，「其中需要特別照顧的」人沒有對象，選項不該選得到。
   testWidgets('只有我（0 人）時選不到長者等選項，寵物仍可以選', (tester) async {
     await pumpForm(tester, const HealthSurvey());
+    await tester.tap(find.byKey(const ValueKey('expand-optional-survey')));
+    await tester.pump();
 
     expect(enabled(tester, '長者'), isFalse);
     expect(enabled(tester, '幼童'), isFalse);
@@ -68,12 +70,54 @@ void main() {
 
   testWidgets('「我本人」的選項不受同行人數影響', (tester) async {
     await pumpForm(tester, const HealthSurvey());
+    await tester.tap(find.byKey(const ValueKey('expand-optional-survey')));
+    await tester.pump();
 
     final self = find.descendant(of: find.byKey(const ValueKey('self-vulnerable')), matching: find.byType(FilterChip));
     expect(self, findsNWidgets(HealthSurvey.selfVulnerableOptions.length));
     for (final chip in tester.widgetList<FilterChip>(self)) {
       expect(chip.onSelected, isNotNull);
     }
+  });
+
+  testWidgets('選「安全」且未填選填項目時預設收起，可展開填寫或再收起', (tester) async {
+    await pumpForm(tester, const HealthSurvey(), initialStatus: '安全');
+
+    expect(find.byKey(const ValueKey('expand-optional-survey')), findsOneWidget);
+    expect(find.text('行動能力'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('expand-optional-survey')));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('expand-optional-survey')), findsNothing);
+    expect(find.text('行動能力'), findsOneWidget);
+    expect(find.byKey(const ValueKey('collapse-optional-survey')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('collapse-optional-survey')));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('expand-optional-survey')), findsOneWidget);
+    expect(find.text('行動能力'), findsNothing);
+  });
+
+  testWidgets('舉著 SOS 時選「安全」，送出鈕明確標示會一併撤回 SOS', (tester) async {
+    await pumpForm(tester, const HealthSurvey(), initialStatus: '安全', sosRaised: true);
+
+    expect(find.text('回報安全並撤回 SOS'), findsOneWidget);
+    expect(find.text('送出健康回報'), findsNothing);
+  });
+
+  testWidgets('重傷將嚴重傷勢與一般外傷分組，選「其他傷勢或不適」時提示填補充說明', (tester) async {
+    await pumpForm(tester, const HealthSurvey(), initialStatus: '重傷');
+
+    expect(find.text('嚴重傷勢'), findsOneWidget);
+    expect(find.text('一般外傷或其他不適'), findsOneWidget);
+    expect(find.text('已選「其他傷勢或不適」，可於下方「補充說明」填寫具體症狀。'), findsNothing);
+
+    await tester.tap(find.widgetWithText(FilterChip, HealthSurvey.otherInjuryOption));
+    await tester.pump();
+
+    expect(find.text('已選「其他傷勢或不適」，可於下方「補充說明」填寫具體症狀。'), findsOneWidget);
   });
 
   group('重傷選到需要立即救援的傷勢', () {

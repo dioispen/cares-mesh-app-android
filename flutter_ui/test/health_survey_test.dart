@@ -22,6 +22,38 @@ void main() {
     expect(HealthSurvey.severeInjuryOptions, contains('曾短暫失去意識'));
   });
 
+  test('「其他傷勢或不適」提供非典型外傷出口，輕傷與重傷都保留並可從 description 讀回', () {
+    expect(HealthSurvey.minorInjuryOptions, contains(HealthSurvey.otherInjuryOption));
+    const s = HealthSurvey(injuries: [HealthSurvey.otherInjuryOption]);
+    expect(s.forStatus('輕傷').injuries, [HealthSurvey.otherInjuryOption]);
+    expect(s.forStatus('重傷').injuries, [HealthSurvey.otherInjuryOption]);
+    expect(HealthSurvey.fromMaps(description: '割傷、其他傷勢或不適').injuries, ['割傷', '其他傷勢或不適']);
+  });
+
+  test('hasDetailContent / hasSensitiveContent / hasOptionalContent 判斷是否有填選填調查', () {
+    const empty = HealthSurvey();
+    expect(empty.hasDetailContent, isFalse);
+    expect(empty.hasSensitiveContent, isFalse);
+    expect(empty.hasOptionalContent, isFalse);
+
+    // 只有傷勢不算在選填調查裡（傷勢走 description）。
+    const onlyInjury = HealthSurvey(injuries: ['割傷']);
+    expect(onlyInjury.hasOptionalContent, isFalse);
+
+    expect(const HealthSurvey(mobility: '可自行行動').hasDetailContent, isTrue);
+    expect(const HealthSurvey(location: '家中').hasDetailContent, isTrue);
+    expect(const HealthSurvey(companions: 1).hasDetailContent, isTrue);
+    expect(const HealthSurvey(housing: '沒有損壞').hasDetailContent, isTrue);
+    expect(const HealthSurvey(needs: ['飲用水']).hasDetailContent, isTrue);
+    expect(const HealthSurvey(needs: ['飲用水']).hasOptionalContent, isTrue);
+
+    expect(const HealthSurvey(selfVulnerable: ['長者']).hasSensitiveContent, isTrue);
+    expect(const HealthSurvey(vulnerable: ['寵物']).hasSensitiveContent, isTrue);
+    expect(const HealthSurvey(notes: '   ').hasSensitiveContent, isFalse);
+    expect(const HealthSurvey(notes: '胸口悶痛').hasSensitiveContent, isTrue);
+    expect(const HealthSurvey(notes: '胸口悶痛').hasOptionalContent, isTrue);
+  });
+
   test('同行人數改成 0 時，清掉需要特別照顧的「人」，寵物不算人數所以保留', () {
     const s = HealthSurvey(companions: 2, vulnerable: ['長者', '寵物', '幼童']);
 

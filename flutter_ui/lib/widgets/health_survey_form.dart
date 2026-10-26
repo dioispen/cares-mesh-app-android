@@ -57,6 +57,9 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
   /// 使用者動過表單之後，從雲端讀回的上一次回報就不再覆蓋表單。
   bool _dirty = false;
 
+  /// Status 為「安全」時預設收起選填項目，讓純報平安的人可以兩步完成。
+  bool _optionalExpanded = false;
+
   @override
   void didUpdateWidget(HealthSurveyForm old) {
     super.didUpdateWidget(old);
@@ -130,156 +133,259 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
         ),
       );
 
+  void _toggleInjury(String value) =>
+      _update(() => _survey = _survey.copyWith(injuries: _toggled(_survey.injuries, value)));
+
+  String get _submitLabel {
+    if (widget.submitting) return '送出中…';
+    if (widget.sosRaised && _status == '安全') return '回報安全並撤回 SOS';
+    return '送出健康回報';
+  }
+
   @override
   Widget build(BuildContext context) {
     final injured = _status == '輕傷' || _status == '重傷';
+    final showOptional = _status != '安全' || _optionalExpanded || _survey.hasOptionalContent;
     var n = 0;
     String step() => '${++n}';
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+    return Column(
       children: [
-        _sosBanner(),
-        const SizedBox(height: 16),
+        Expanded(
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            children: [
+              _sosBanner(),
+              const SizedBox(height: 16),
 
-        _section(step(), '你目前的狀況', required: true, child: _statusTiles()),
+              _section(step(), '你目前的狀況', required: true, child: _statusTiles()),
 
-        if (injured)
-          _section(
-            step(),
-            '傷勢或身體不適',
-            hint: '可複選',
-            required: true,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _chips(
-                  _status == '重傷'
-                      ? [...HealthSurvey.severeInjuryOptions, ...HealthSurvey.minorInjuryOptions]
-                      : HealthSurvey.minorInjuryOptions,
-                  _survey.injuries,
-                  (v) => _update(() => _survey = _survey.copyWith(injuries: _toggled(_survey.injuries, v))),
-                ),
-                if (_offersSos(_status!, _survey)) ...[
-                  const SizedBox(height: 10),
-                  const Text(
-                    '這些傷勢可能需要立即救援。送出時可以一併舉起 SOS，附近的人會優先看到。',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _red),
+              if (injured)
+                _section(
+                  step(),
+                  '傷勢或身體不適',
+                  hint: '可複選',
+                  required: true,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_status == '重傷') ...[
+                        const Text(
+                          '嚴重傷勢',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _red),
+                        ),
+                        const SizedBox(height: 6),
+                        _chips(HealthSurvey.severeInjuryOptions, _survey.injuries, _toggleInjury),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '一般外傷或其他不適',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _textSecondary),
+                        ),
+                        const SizedBox(height: 6),
+                        _chips(HealthSurvey.minorInjuryOptions, _survey.injuries, _toggleInjury),
+                      ] else
+                        _chips(HealthSurvey.minorInjuryOptions, _survey.injuries, _toggleInjury),
+                      if (_survey.injuries.contains(HealthSurvey.otherInjuryOption)) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          '已選「其他傷勢或不適」，可於下方「補充說明」填寫具體症狀。',
+                          style: TextStyle(fontSize: 12, color: _textSecondary),
+                        ),
+                      ],
+                      if (_offersSos(_status!, _survey)) ...[
+                        const SizedBox(height: 10),
+                        const Text(
+                          '這些傷勢可能需要立即救援。送出時可以一併舉起 SOS，附近的人會優先看到。',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _red),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ],
-            ),
-          ),
-
-        _section(step(), '行動能力',
-            child: _single(HealthSurvey.mobilityOptions, _survey.mobility,
-                (v) => _update(() => _survey = _survey.copyWith(mobility: v)))),
-
-        _section(step(), '你本人需要特別照顧的情況',
-            hint: '可複選',
-            child: KeyedSubtree(
-              key: const ValueKey('self-vulnerable'),
-              child: _chips(HealthSurvey.selfVulnerableOptions, _survey.selfVulnerable,
-                  (v) => _update(() => _survey = _survey.copyWith(selfVulnerable: _toggled(_survey.selfVulnerable, v)))),
-            )),
-
-        _section(step(), '目前所在地點',
-            hint: '定位會一併附上',
-            child: _single(HealthSurvey.locationOptions, _survey.location,
-                (v) => _update(() => _survey = _survey.copyWith(location: v)))),
-
-        _section(step(), '同住或同行的人',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _companionStepper(),
-                const SizedBox(height: 12),
-                const Text('其中需要特別照顧的（可複選）',
-                    style: TextStyle(fontSize: 12, color: _textSecondary)),
-                const SizedBox(height: 8),
-                KeyedSubtree(
-                  key: const ValueKey('companion-vulnerable'),
-                  child: _chips(HealthSurvey.vulnerableOptions, _survey.vulnerable,
-                      (v) => _update(() => _survey = _survey.copyWith(vulnerable: _toggled(_survey.vulnerable, v))),
-                      // 「只有我」時沒有同行的人可選；寵物不算在人數裡。
-                      enabled: (v) => _survey.companions > 0 || !HealthSurvey.needsCompanion(v)),
                 ),
+
+              if (!showOptional)
+                _expandOptionalCard()
+              else ...[
+                if (_status == '安全' && _optionalExpanded && !_survey.hasOptionalContent)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      key: const ValueKey('collapse-optional-survey'),
+                      onPressed: () => setState(() => _optionalExpanded = false),
+                      icon: const Icon(Icons.expand_less_rounded, size: 18),
+                      label: const Text('收起選填項目', style: TextStyle(fontSize: 13)),
+                      style: TextButton.styleFrom(foregroundColor: _textSecondary),
+                    ),
+                  ),
+
+                _section(step(), '行動能力',
+                    hint: '選填',
+                    child: _single(HealthSurvey.mobilityOptions, _survey.mobility,
+                        (v) => _update(() => _survey = _survey.copyWith(mobility: v)))),
+
+                _section(step(), '你本人需要特別照顧的情況',
+                    hint: '選填・可複選',
+                    child: KeyedSubtree(
+                      key: const ValueKey('self-vulnerable'),
+                      child: _chips(HealthSurvey.selfVulnerableOptions, _survey.selfVulnerable,
+                          (v) => _update(() => _survey = _survey.copyWith(selfVulnerable: _toggled(_survey.selfVulnerable, v)))),
+                    )),
+
+                _section(step(), '目前所在地點',
+                    hint: '選填・定位會一併附上',
+                    child: _single(HealthSurvey.locationOptions, _survey.location,
+                        (v) => _update(() => _survey = _survey.copyWith(location: v)))),
+
+                _section(step(), '同住或同行的人',
+                    hint: '選填',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _companionStepper(),
+                        const SizedBox(height: 12),
+                        const Text('其中需要特別照顧的（可複選）',
+                            style: TextStyle(fontSize: 12, color: _textSecondary)),
+                        const SizedBox(height: 8),
+                        KeyedSubtree(
+                          key: const ValueKey('companion-vulnerable'),
+                          child: _chips(HealthSurvey.vulnerableOptions, _survey.vulnerable,
+                              (v) => _update(() => _survey = _survey.copyWith(vulnerable: _toggled(_survey.vulnerable, v))),
+                              // 「只有我」時沒有同行的人可選；寵物不算在人數裡。
+                              enabled: (v) => _survey.companions > 0 || !HealthSurvey.needsCompanion(v)),
+                        ),
+                      ],
+                    )),
+
+                _section(step(), '住家狀況',
+                    hint: '選填',
+                    child: _single(HealthSurvey.housingOptions, _survey.housing,
+                        (v) => _update(() => _survey = _survey.copyWith(housing: v)))),
+
+                _section(step(), '目前最需要的協助',
+                    hint: '選填・可複選',
+                    child: _chips(HealthSurvey.needOptions, _survey.needs,
+                        (v) => _update(() => _survey = _survey.copyWith(needs: _toggled(_survey.needs, v))))),
+
+                _section(step(), '補充說明',
+                    hint: '選填',
+                    child: TextField(
+                      controller: _notesCtrl,
+                      onChanged: (v) {
+                        _dirty = true;
+                        _survey = _survey.copyWith(notes: v);
+                      },
+                      maxLines: 4,
+                      minLines: 3,
+                      maxLength: 300,
+                      decoration: InputDecoration(
+                        hintText: '例如：家中長者需要每日服用的藥快用完了',
+                        hintStyle: const TextStyle(fontSize: 13, color: _textSecondary),
+                        filled: true,
+                        fillColor: _card,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _border)),
+                        enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _border)),
+                        focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: _brown, width: 2)),
+                      ),
+                    )),
               ],
-            )),
-
-        _section(step(), '住家狀況',
-            child: _single(HealthSurvey.housingOptions, _survey.housing,
-                (v) => _update(() => _survey = _survey.copyWith(housing: v)))),
-
-        _section(step(), '目前最需要的協助',
-            hint: '可複選',
-            child: _chips(HealthSurvey.needOptions, _survey.needs,
-                (v) => _update(() => _survey = _survey.copyWith(needs: _toggled(_survey.needs, v))))),
-
-        _section(step(), '補充說明',
-            hint: '選填',
-            child: TextField(
-              controller: _notesCtrl,
-              onChanged: (_) => _dirty = true,
-              maxLines: 4,
-              minLines: 3,
-              maxLength: 300,
-              decoration: InputDecoration(
-                hintText: '例如：家中長者需要每日服用的藥快用完了',
-                hintStyle: const TextStyle(fontSize: 13, color: _textSecondary),
-                filled: true,
-                fillColor: _card,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _border)),
-                enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _border)),
-                focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: _brown, width: 2)),
-              ),
-            )),
-
-        if (_error != null) ...[
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.red.shade50,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.red.shade200),
-            ),
-            child: Text(_error!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
-          ),
-          const SizedBox(height: 12),
-        ],
-
-        SizedBox(
-          height: 52,
-          child: ElevatedButton.icon(
-            onPressed: widget.submitting ? null : _submit,
-            icon: widget.submitting
-                ? const SizedBox(
-                    width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.send_rounded, size: 18),
-            label: Text(widget.submitting ? '送出中…' : '送出健康回報',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _brown,
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: _brown.withValues(alpha: 0.5),
-              disabledForegroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            ),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        const Text(
-          '狀況會向附近的人廣播。傷勢、行動能力、所在地點、人數、住家與需要的協助，登入的使用者都看得到，方便附近的人前來幫忙；需要特別照顧的情況（本人與同行的人）與補充說明，只有接下任務的認證救援者看得到。',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 11, color: _textSecondary, height: 1.5),
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          decoration: const BoxDecoration(
+            color: _card,
+            border: Border(top: BorderSide(color: _border)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_error != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Text(_error!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
+                ),
+                const SizedBox(height: 10),
+              ],
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: widget.submitting ? null : _submit,
+                  icon: widget.submitting
+                      ? const SizedBox(
+                          width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.send_rounded, size: 18),
+                  label: Text(_submitLabel,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _brown,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: _brown.withValues(alpha: 0.5),
+                    disabledForegroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '狀況會向附近的人廣播。傷勢、行動能力、所在地點、人數、住家與需要的協助，登入的使用者都看得到，方便附近的人前來幫忙；需要特別照顧的情況（本人與同行的人）與補充說明，只有接下任務的認證救援者看得到。',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: _textSecondary, height: 1.5),
+              ),
+            ],
+          ),
         ),
       ],
     );
   }
+
+  Widget _expandOptionalCard() => GestureDetector(
+        key: const ValueKey('expand-optional-survey'),
+        onTap: () => setState(() => _optionalExpanded = true),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            color: _card,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _border),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.add_circle_outline_rounded, color: _brown, size: 22),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '填寫更多狀況（住家、同行家人、物資需求）',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '選填・若無需協助可直接按下方送出',
+                      style: TextStyle(fontSize: 12, color: _textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.expand_more_rounded, color: _textSecondary),
+            ],
+          ),
+        ),
+      );
 
   Widget _sosBanner() => Container(
         padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
@@ -441,7 +547,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
           style: IconButton.styleFrom(
             backgroundColor: _brown.withValues(alpha: 0.08),
             foregroundColor: _brown,
-            minimumSize: const Size(36, 36),
+            minimumSize: const Size(44, 44),
           ),
         );
     final c = _survey.companions;

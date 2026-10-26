@@ -54,9 +54,13 @@ class HealthSurvey {
     this.notes = '',
   });
 
+  /// 非典型外傷（例如胸痛、氣喘、失溫、嘔吐腹瀉）的出口，避免傷勢必填時被迫亂勾。
+  static const otherInjuryOption = '其他傷勢或不適';
+
   static const minorInjuryOptions = [
     '擦傷', '割傷', '瘀傷 / 撞傷', '扭傷',
     '燙傷（輕度）', '頭暈 / 頭痛', '手指或腳趾骨折', '輕度呼吸不適',
+    otherInjuryOption,
   ];
   /// 傷勢都是本人自己填的，所以不放「失去意識」「意識不清」——那樣的人填不了這份表。
   /// 「曾短暫失去意識」是現在清醒的人填得出來、救援者又需要知道的（頭部外傷的警訊）。
@@ -90,6 +94,23 @@ class HealthSurvey {
 
   /// 選了至少一項 [urgentInjuryOptions]。
   bool get hasUrgentInjury => injuries.any(urgentInjuryOptions.contains);
+
+  /// Detail Tier 的選填調查是否有填寫任何一項（行動能力、所在地點、同行人數、住家狀況、需要的協助）。
+  bool get hasDetailContent =>
+      mobility != null ||
+      location != null ||
+      companions > 0 ||
+      housing != null ||
+      needs.isNotEmpty;
+
+  /// Sensitive Tier 的選填調查是否有填寫任何一項（本人或同行者需特別照顧、補充說明）。
+  bool get hasSensitiveContent =>
+      selfVulnerable.isNotEmpty ||
+      vulnerable.isNotEmpty ||
+      notes.trim().isNotEmpty;
+
+  /// 傷勢以外的選填調查是否有填寫任何一項。
+  bool get hasOptionalContent => hasDetailContent || hasSensitiveContent;
 
   HealthSurvey copyWith({
     List<String>? injuries,
