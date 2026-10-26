@@ -80,6 +80,28 @@ void main() {
     }
   });
 
+  testWidgets('窄螢幕上較長的段落標題不會溢出', (tester) async {
+    await pumpForm(tester, const HealthSurvey(), initialStatus: '重傷');
+    tester.view.physicalSize = const Size(320, 3000);
+    await tester.pump();
+
+    expect(find.text('你本人需要特別照顧的情況'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('鍵盤打開時收起送出列，不擋住正在輸入的補充說明', (tester) async {
+    await pumpForm(tester, const HealthSurvey(), initialStatus: '重傷');
+    expect(find.text('送出健康回報'), findsOneWidget);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 1200);
+    await tester.pump();
+    expect(find.text('送出健康回報'), findsNothing);
+
+    tester.view.resetViewInsets();
+    await tester.pump();
+    expect(find.text('送出健康回報'), findsOneWidget);
+  });
+
   testWidgets('選「安全」且未填選填項目時預設收起，可展開填寫或再收起', (tester) async {
     await pumpForm(tester, const HealthSurvey(), initialStatus: '安全');
 

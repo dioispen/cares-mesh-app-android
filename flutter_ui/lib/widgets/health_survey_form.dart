@@ -33,7 +33,7 @@ class HealthSurveyForm extends StatefulWidget {
   State<HealthSurveyForm> createState() => _HealthSurveyFormState();
 }
 
-class _HealthSurveyFormState extends State<HealthSurveyForm> {
+class _HealthSurveyFormState extends State<HealthSurveyForm> with WidgetsBindingObserver {
   static const _card = Color(0xFFFEFDF9);
   static const _brown = Color(0xFF5C3D2E);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -60,6 +60,29 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
   /// Status 為「安全」時預設收起選填項目，讓純報平安的人可以兩步完成。
   bool _optionalExpanded = false;
 
+  /// 鍵盤打開時（約佔半個螢幕）收起下方固定的送出列，否則輸入「補充說明」時剩下的空間會被它擋住；
+  /// 收起鍵盤（往下滑表單）後送出列就回來。外層 Scaffold 會把鍵盤高度從 MediaQuery 拿掉，
+  /// 所以直接看 View 的 viewInsets。
+  bool _keyboardOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _keyboardOpen = View.of(context).viewInsets.bottom > 0;
+  }
+
+  @override
+  void didChangeMetrics() {
+    final open = View.of(context).viewInsets.bottom > 0;
+    if (open != _keyboardOpen) setState(() => _keyboardOpen = open);
+  }
+
   @override
   void didUpdateWidget(HealthSurveyForm old) {
     super.didUpdateWidget(old);
@@ -74,6 +97,7 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _notesCtrl.dispose();
     super.dispose();
   }
@@ -296,7 +320,8 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
             ],
           ),
         ),
-        Container(
+        if (!_keyboardOpen)
+          Container(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
           decoration: const BoxDecoration(
             color: _card,
@@ -431,13 +456,26 @@ class _HealthSurveyFormState extends State<HealthSurveyForm> {
                       style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
                 ),
                 const SizedBox(width: 8),
-                Text(title,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _textPrimary)),
-                if (required) const Text(' *', style: TextStyle(color: _red, fontWeight: FontWeight.w800)),
-                if (hint != null) ...[
-                  const SizedBox(width: 6),
-                  Text(hint, style: const TextStyle(fontSize: 12, color: _textSecondary)),
-                ],
+                // 標題較長時（如「你本人需要特別照顧的情況」）窄螢幕放不下提示，讓提示換到下一行。
+                Expanded(
+                  child: Wrap(
+                    spacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(title,
+                              style: const TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w800, color: _textPrimary)),
+                          if (required)
+                            const Text(' *', style: TextStyle(color: _red, fontWeight: FontWeight.w800)),
+                        ],
+                      ),
+                      if (hint != null) Text(hint, style: const TextStyle(fontSize: 12, color: _textSecondary)),
+                    ],
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 10),
