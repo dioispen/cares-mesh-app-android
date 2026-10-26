@@ -21,10 +21,10 @@ import kotlinx.coroutines.launch
  * 3. 回報年齡不超過 [retentionMs]（2 小時，與 Health Report 的保留期限相同）。
  * 4. `reportTime` 比這個 Handle 已上傳過的最新 `reportTime` 更新。
  *
- * 有網路就立即上傳；沒網路、或上傳遇到暫時性錯誤時，先放進暫存（#112），等網路恢復或使用者
- * 登入時補傳，讓手機能扮演「從災區帶著回報走出來」的角色。暫存只收經過協定層 hook 的回報，
- * 不讀 gossip sync 的保留集合，所以補傳的都通過驗證與實驗 Handle 過濾。登出只是暫停補傳，
- * 不清掉暫存：暫存本來就只放記憶體，兩小時內過期。
+ * 有網路就立即上傳；沒網路、或上傳遇到暫時性錯誤時，先放進暫存（#112），等網路恢復、使用者
+ * 登入、或下一筆即時上傳成功時補傳，讓手機能扮演「從災區帶著回報走出來」的角色。暫存只收經過
+ * 協定層 hook 的回報，不讀 gossip sync 的保留集合，所以補傳的都通過驗證與實驗 Handle 過濾。
+ * 登出只是暫停補傳；換成另一個帳號登入時暫存清空，免得別人代傳的回報記到這個帳號頭上。
  */
 class MeshGateway(
     private val uploader: MeshReportUploader,
@@ -45,6 +45,9 @@ class MeshGateway(
     private var enabled = true
     private var online = false
     private var gatewayUid: String? = null
+
+    /** 最近一個登入過的帳號，暫存裡的回報都是它在場時收到的。 */
+    private var lastSignedInUid: String? = null
 
     /**
      * Reporter Handle → 已上傳（或確認已在 Firestore 上）的最新 `reportTime`。只放記憶體：
@@ -91,7 +94,7 @@ class MeshGateway(
 
     private suspend fun handle(input: Input) {
         when (input) {
-            is Input.Report -> relay(input.report)
+            is Input.Report -> consider(input.report)
             is Input.Network -> {
                 val reconnected = input.available && !online
                 online = input.available
@@ -100,7 +103,12 @@ class MeshGateway(
             }
             is Input.Account -> {
                 gatewayUid = input.uid
-                if (input.uid != null) catchUp()
+                if (input.uid != null) {
+                    // gatewayUid 代表「這個帳號當時在附近」：前一個帳號在場時收到的不能記到新帳號頭上。
+                    if (lastSignedInUid != null && input.uid != lastSignedInUid) held.clear()
+                    lastSignedInUid = input.uid
+                    catchUp()
+                }
             }
             is Input.Enabled -> {
                 enabled = input.enabled
@@ -110,12 +118,17 @@ class MeshGateway(
         }
     }
 
-    private suspend fun relay(report: GatewayReport) {
+    private suspend fun consider(report: GatewayReport) {
         if (!enabled) return
         val uid = gatewayUid ?: return
         forgetExpired()
         if (!isFresh(report) || isUploaded(report)) return
-        if (online) upload(report, uid) else hold(report)
+        if (!online) {
+            hold(report)
+        } else if (upload(report, uid)) {
+            // 寫得進去就表示連得上：暫存裡因暫時性錯誤留下的，不必等到斷線再連上才補。
+            catchUp()
+        }
     }
 
     /** 依 `reportTime` 由舊到新逐筆補傳；遇到暫時性錯誤就停，其餘留到下一次網路事件。 */
@@ -133,11 +146,11 @@ class MeshGateway(
         when (uploader.upload(report, uid)) {
             UploadResult.UPLOADED -> markUploaded(report)
             UploadResult.PERMISSION_DENIED -> {
-                Log.i(TAG, "Firestore refused a relayed report; counting it as already uploaded")
+                Log.i(TAG, "Firestore refused a mesh report; counting it as already uploaded")
                 markUploaded(report)
             }
             UploadResult.TRANSIENT_FAILURE -> {
-                Log.w(TAG, "Relayed report not uploaded; held for the next network event")
+                Log.w(TAG, "Mesh report not uploaded; held for the next network event")
                 hold(report)
                 return false
             }

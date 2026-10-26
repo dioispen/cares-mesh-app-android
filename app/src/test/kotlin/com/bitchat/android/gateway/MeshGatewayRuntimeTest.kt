@@ -19,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -120,9 +121,13 @@ class MeshGatewayRuntimeTest {
     }
 
     @Test
-    fun `a verified report reaches the gateway as received`() = runTest {
+    fun `a verified report reaches the gateway as received, with the sender's announcement`() = runTest {
+        val announce = announcePacket()
         val gateway = MeshGateway(uploader, { 1_700_000_100_000L }, backgroundScope)
-        val runtime = MeshGatewayRuntime(auth, connectivity, gateway, backgroundScope)
+        val runtime = MeshGatewayRuntime(
+            auth, connectivity, gateway, backgroundScope,
+            announcementFor = { peerID -> announce.takeIf { peerID == SENDER } }
+        )
         runtime.start()
         gateway.onSignedIn("uid-gateway")
         gateway.onNetworkChanged(true)
@@ -132,16 +137,47 @@ class MeshGatewayRuntimeTest {
         runCurrent()
 
         val uploaded = uploads.single()
-        assertArrayEquals(packet.toBinaryData(padding = false), uploaded.rawPacket)
-        assertEquals(BroadcastContentTag.HEALTH_REPORT.value, BitchatPacket.fromBinaryData(uploaded.rawPacket)!!.payload.first())
-        assertEquals("0102030405060708", uploaded.senderPeerID)
+        val received = BitchatPacket.fromBinaryData(uploaded.rawPacket)!!
+        assertArrayEquals("content tag kept", packet.payload, received.payload)
+        assertEquals(BroadcastContentTag.HEALTH_REPORT.value, received.payload.first())
+        assertArrayEquals(packet.signature, received.signature)
+        assertArrayEquals(packet.senderID, received.senderID)
+        assertEquals(SENDER, uploaded.senderPeerID)
+        val announcement = BitchatPacket.fromBinaryData(uploaded.announcement!!)!!
+        assertEquals(MessageType.ANNOUNCE.value, announcement.type)
+        assertArrayEquals(announce.signature, announcement.signature)
         runtime.stop()
     }
+
+    @Test
+    fun `a report whose sender has no cached announcement is uploaded with none`() = runTest {
+        val gateway = MeshGateway(uploader, { 1_700_000_100_000L }, backgroundScope)
+        val runtime = MeshGatewayRuntime(auth, connectivity, gateway, backgroundScope, announcementFor = { null })
+        runtime.start()
+        gateway.onSignedIn("uid-gateway")
+        gateway.onNetworkChanged(true)
+
+        VerifiedHealthReportBridge.publish(verified(healthReportPacket()))
+        runCurrent()
+
+        assertNull(uploads.single().announcement)
+        runtime.stop()
+    }
+
+    private fun announcePacket() = BitchatPacket(
+        version = 1u,
+        type = MessageType.ANNOUNCE.value,
+        senderID = ByteArray(8) { (it + 1).toByte() },
+        timestamp = 1_699_999_000_000L.toULong(),
+        payload = byteArrayOf(0x01, 0x04) + "anon".toByteArray(),
+        signature = ByteArray(64) { 9 },
+        ttl = 7u
+    )
 
     private fun verified(packet: BitchatPacket) = VerifiedHealthReport(
         packet = packet,
         report = HealthReportPayload.decode(packet.payload.copyOfRange(1, packet.payload.size))!!,
-        senderPeerID = "0102030405060708"
+        senderPeerID = SENDER
     )
 
     private fun healthReportPacket(reportTimeMs: Long = 1_700_000_000_000L) = BitchatPacket(
@@ -154,4 +190,8 @@ class MeshGatewayRuntimeTest {
         signature = ByteArray(64) { 7 },
         ttl = 3u
     )
+
+    private companion object {
+        const val SENDER = "0102030405060708"
+    }
 }

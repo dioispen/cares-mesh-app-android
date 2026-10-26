@@ -265,10 +265,40 @@ class MeshGatewayTest {
         runCurrent()
         assertTrue("signed out: nothing is uploaded", uploader.uploads.isEmpty())
 
-        gateway.onSignedIn("uid-again")
+        gateway.onSignedIn(GATEWAY_UID)
         runCurrent()
 
-        assertEquals(listOf(report to "uid-again"), uploader.uploads)
+        assertEquals(listOf(report to GATEWAY_UID), uploader.uploads)
+    }
+
+    @Test
+    fun `reports held for one account are never uploaded under another`() = runTest {
+        // 代傳者的 uid 代表「這個帳號當時在附近」，不能記到後來登入的別人頭上
+        val gateway = gateway(online = false)
+        gateway.onReport(heard())
+        gateway.onSignedIn(null)
+
+        gateway.onSignedIn("uid-someone-else")
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertTrue(uploader.uploads.isEmpty())
+    }
+
+    @Test
+    fun `a successful live upload also catches up what is held`() = runTest {
+        // 網路一直通，只是一筆上傳逾時：不必等到斷線再連上
+        uploader.results += UploadResult.TRANSIENT_FAILURE
+        val gateway = gateway()
+
+        gateway.onReport(heard(handle = "aaaaaaaaaaaa"))
+        gateway.onReport(heard(handle = "bbbbbbbbbbbb"))
+        runCurrent()
+
+        assertEquals(
+            listOf("aaaaaaaaaaaa", "bbbbbbbbbbbb", "aaaaaaaaaaaa"),
+            uploader.uploads.map { it.first.reporterHandle }
+        )
     }
 
     @Test
@@ -400,7 +430,7 @@ class MeshGatewayTest {
     }
 
     @Test
-    fun `switched back on, the gateway relays the reports heard from then on`() = runTest {
+    fun `switched back on, the gateway uploads the reports heard from then on`() = runTest {
         val gateway = gateway()
         gateway.onEnabledChanged(false)
         gateway.onReport(heard(handle = "aaaaaaaaaaaa"))

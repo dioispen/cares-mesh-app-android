@@ -3,7 +3,7 @@ package com.bitchat.android.gateway
 import com.bitchat.android.protocol.HealthReportPayload
 
 /**
- * Someone else's Health Report this phone may relay, as handed over by the protocol hook
+ * Someone else's Health Report this phone may upload as a Gateway, as handed over by the protocol hook
  * (`VerifiedHealthReportBridge`) at the moment it was received.
  */
 class GatewayReport(

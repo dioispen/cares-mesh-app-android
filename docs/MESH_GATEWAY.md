@@ -189,14 +189,14 @@ match /{path=**}/installations/{handle} {
 
 條件 1、2 不成立時直接丟棄，不暫存。條件 3、4 不成立時丟棄。
 
-登出只是暫停：已暫存的回報不清除（本來就只放記憶體、兩小時內過期），再登入時補傳。關閉設定則會清除暫存（7.6）。
+登出只是暫停：已暫存的回報不清除（本來就只放記憶體、兩小時內過期），同一個帳號再登入時補傳。換成**另一個帳號**登入時暫存清空：`gatewayUid` 代表「這個帳號當時在附近」，前一個帳號在場時收到的回報不能記到新帳號頭上。關閉設定也會清除暫存（7.6）。
 
 ### 7.4 有網路／沒網路
 
 - 「有網路」的定義：`ConnectivityManager` 的預設網路具備 `NET_CAPABILITY_INTERNET` 與 `NET_CAPABILITY_VALIDATED`。以 `registerDefaultNetworkCallback` 監聽。
 - **有網路**：立即寫入。
 - **沒網路**：放進記憶體暫存。每個 Handle 只留 `reportTime` 最新的一份；超過 2 小時的在補傳前剔除；上限比照 `HealthReportSigningKeyCache` 的 1000 筆，滿了剔除 `reportTime` 最舊的。**不寫磁碟**。
-- **網路恢復、或使用者登入、或重新開啟 gateway 時**：依 7.3 的條件重新檢查暫存，依 `reportTime` 由舊到新逐筆寫入；遇到暫時性錯誤就停，其餘留到下一次網路事件。
+- **網路恢復、或使用者登入、或重新開啟 gateway、或一筆即時上傳成功時**：依 7.3 的條件重新檢查暫存，依 `reportTime` 由舊到新逐筆寫入；遇到暫時性錯誤就停，其餘留到下一次。即時上傳成功代表連得上，所以網路一直沒斷、只是某一筆逾時時，暫存也不會卡到斷線再連上。
 - 「網路恢復」指從沒網路變成有網路。預設網路的能力每有變動（例如訊號強度）就會再通知一次，那些不算網路事件，不會觸發補傳。
 - 暫存的語意與 `GossipSyncManager` 保留的 Health Report 相同（每個發送者最新一份、2 小時）。但暫存由 gateway 自己持有、只收經過 7.2 掛載點的回報，以確保補傳的都通過驗證與實驗 Handle 過濾，也不讓 Firebase 程式碼耦合到 `sync/`。
 
@@ -261,7 +261,8 @@ match /{path=**}/installations/{handle} {
 | 伺服器端不驗簽 | 偽造回報、用「安全」蓋掉真的 SOS | 用 `rawPacket`、`announcement` 在後台或 Functions 驗簽 |
 | Handle 冒領 | 攻擊者把聽到的 Handle 登記在自己 uid 底下 | 比對 `signingPublicKey`；長期改用自我認證的 Reporter Handle（ADR-0006） |
 | 管理員可推得 gateway 的大略位置 | 即時 flood 收到的回報，`gatewayUid` 代表該帳號當時在附近 | 預設開啟、可關閉、隱私政策揭露 |
-| 寫到一半斷線的那一筆會落在磁碟佇列 | 短暫違反「只放記憶體」 | 若不可接受，改用 REST 寫入（ADR-0009 Considered Options） |
+| 寫到一半斷線的那一筆會落在磁碟佇列 | 短暫違反「只放記憶體」。逾時的那一筆之後再補傳，SDK 佇列裡就有同一份文件的兩次寫入；先到的生效，後到的被規則拒絕 | 若不可接受，改用 REST 寫入（ADR-0009 Considered Options） |
+| Gateway 跟著前景服務 | 使用者關閉「背景執行」時前景服務不會啟動，mesh 只在 App 畫面裡跑，這時沒有 Gateway；設定頁的開關仍顯示開啟 | 若要在畫面裡也代傳，改由 mesh 啟動處建立 Gateway |
 | `gatewayUid` 只記錄第一個成功寫入的 gateway | 看不出有幾支 gateway 收到同一份 | 改為每支 gateway 各寫一筆子文件，寫入量會乘上 gateway 數 |
 | 同一秒內的兩份回報，後者會被拒 | 極少見 | — |
 | 只有已登入的手機能當 gateway | 覆蓋率取決於有多少人登入 | — |

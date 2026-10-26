@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.util.Log
 import com.bitchat.android.mesh.VerifiedHealthReport
 import com.bitchat.android.mesh.VerifiedHealthReportBridge
+import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.service.MeshServicePreferences
 import com.google.firebase.auth.FirebaseAuth
@@ -30,19 +31,24 @@ class MeshGatewayRuntime internal constructor(
     /** The stored Gateway switch; the Flutter settings screen writes it through SettingsBridge. */
     private val isEnabled: () -> Boolean = { MeshServicePreferences.isGatewayEnabled() },
     /** Follows the switch until the returned function is called. */
-    private val observeEnabled: ((Boolean) -> Unit) -> () -> Unit = MeshServicePreferences::observeGatewayEnabled
+    private val observeEnabled: ((Boolean) -> Unit) -> () -> Unit = MeshServicePreferences::observeGatewayEnabled,
+    /** The sender's verified, signed ANNOUNCE from the Health Report key cache (ADR-0006). */
+    private val announcementFor: (String) -> BitchatPacket? = { peerID ->
+        MeshServiceHolder.meshService?.healthReportAnnouncementFor(peerID)
+    }
 ) {
     private var stopObservingSwitch: (() -> Unit)? = null
 
-    /** Runs on MessageHandler's coroutine: only encode what was received and hand it over. */
+    /**
+     * Runs on MessageHandler's coroutine: only encode what was received and hand it over. The
+     * ANNOUNCE is looked up now, while the key cache still holds it, and travels with the report.
+     */
     private val reportListener: (VerifiedHealthReport) -> Unit = { verified ->
         val rawPacket = verified.packet.toBinaryData(padding = false)
         if (rawPacket == null) {
-            Log.w(TAG, "Could not re-encode a received Health Report; not relayed")
+            Log.w(TAG, "Could not re-encode a received Health Report; not uploaded")
         } else {
-            val announcement = MeshServiceHolder.meshService
-                ?.healthReportAnnouncementFor(verified.senderPeerID)
-                ?.toBinaryData(padding = false)
+            val announcement = announcementFor(verified.senderPeerID)?.toBinaryData(padding = false)
             gateway.onReport(GatewayReport(verified.report, verified.senderPeerID.lowercase(), rawPacket, announcement))
         }
     }
@@ -67,7 +73,7 @@ class MeshGatewayRuntime internal constructor(
     }
 
     internal fun start() {
-        // The switch first: no report may be relayed before a switched-off Gateway knows it.
+        // The switch first: no report may be uploaded before a switched-off Gateway knows it.
         gateway.onEnabledChanged(isEnabled())
         stopObservingSwitch = observeEnabled(gateway::onEnabledChanged)
         auth.addAuthStateListener(authListener)

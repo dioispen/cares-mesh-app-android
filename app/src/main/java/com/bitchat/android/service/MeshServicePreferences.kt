@@ -46,9 +46,9 @@ object MeshServicePreferences {
     }
 
     /**
-     * Whether this phone, while signed in and online, relays the Health Reports it hears over the
-     * mesh to Firestore as a Gateway (#113, ADR-0009). On by default. Kept here rather than in
-     * Flutter so the mesh service reads it without a Flutter engine.
+     * Whether this phone, while signed in and online, acts as a Gateway: it writes the Health
+     * Reports it hears over the mesh to Firestore (#113, ADR-0009). On by default. Kept here rather
+     * than in Flutter so the mesh service reads it without a Flutter engine.
      */
     fun isGatewayEnabled(default: Boolean = true): Boolean {
         return prefs.getBoolean(KEY_GATEWAY_ENABLED, default)

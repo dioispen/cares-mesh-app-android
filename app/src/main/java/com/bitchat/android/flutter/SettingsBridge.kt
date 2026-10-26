@@ -235,7 +235,7 @@ interface MeshBackgroundSettings {
     var backgroundEnabled: Boolean
     var autoStartEnabled: Boolean
     var notificationAutoRestore: Boolean
-    /** Relay nearby Health Reports to Firestore as a Gateway (#113); the service watches it. */
+    /** Act as a Gateway: write nearby Health Reports to Firestore (#113); the service watches it. */
     var gatewayEnabled: Boolean
 
     fun startForegroundService()

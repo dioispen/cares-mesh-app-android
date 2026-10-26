@@ -593,9 +593,9 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
      *
      * [routed] carries the packet with its content tag stripped, which is what Flutter gets;
      * [received] is the packet as it arrived, tag, signature and wire encoding intact, which is
-     * what the Gateway uploads (#111).
+     * what the Gateway uploads (#111). Only [handleTaggedBroadcast] builds the pair.
      */
-    suspend fun handleHealthReport(routed: RoutedPacket, received: BitchatPacket) {
+    private suspend fun handleHealthReport(routed: RoutedPacket, received: BitchatPacket) {
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 

@@ -160,7 +160,7 @@ class MeshForegroundService : Service() {
         // sending while the app is in the background.
         ExperimentTools.onMeshServiceCreated(scope)
 
-        // The Gateway (#111) relays verified Health Reports to Firestore for as long as the mesh
+        // The Gateway (#111) writes verified Health Reports to Firestore for as long as the mesh
         // service runs, so it keeps working with the App's screens closed.
         gateway = MeshGatewayRuntime.start(applicationContext)
 
