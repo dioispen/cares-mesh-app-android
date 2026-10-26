@@ -76,6 +76,7 @@ abstract final class SettingsMethods {
   static const setBackgroundEnabled = 'settings_setBackgroundEnabled';
   static const setAutoStartEnabled = 'settings_setAutoStartEnabled';
   static const setNotificationAutoRestore = 'settings_setNotificationAutoRestore';
+  static const setGatewayEnabled = 'settings_setGatewayEnabled';
   static const panicClear = 'settings_panicClear';
 }
 
@@ -435,7 +436,8 @@ class BitchatBridge {
   // ── 設定頁（#80）：以下 bridge 錯誤（[PlatformException]、[MissingPluginException]）一律往上拋，
   // 錯誤碼見 [SettingsErrors]。
 
-  /// 一次取得權限、藍牙、電池最佳化、mesh 背景運作的三個開關與版本號（見 `models/settings_state.dart`）。
+  /// 一次取得權限、藍牙、電池最佳化、mesh 背景運作的三個開關、Gateway 開關與版本號
+  /// （見 `models/settings_state.dart`）。
   static Future<Map<String, dynamic>> getSettingsState() async {
     final Map<dynamic, dynamic>? state = await _method.invokeMethod<Map>(SettingsMethods.getState);
     if (state == null) {
@@ -471,6 +473,11 @@ class BitchatBridge {
   /// 常駐通知被滑掉時立即恢復；原生會立刻重發一次通知讓設定生效。
   static Future<void> setNotificationAutoRestore(bool enabled) =>
       _method.invokeMethod<void>(SettingsMethods.setNotificationAutoRestore, <String, dynamic>{'enabled': enabled});
+
+  /// 「代傳附近的求救與回報」（Gateway，#113）。偏好存在原生，執行中的 Gateway 自己跟著它：
+  /// 關閉時不再上傳、不再暫存，並丟掉等著代傳的回報。
+  static Future<void> setGatewayEnabled(bool enabled) =>
+      _method.invokeMethod<void>(SettingsMethods.setGatewayEnabled, <String, dynamic>{'enabled': enabled});
 
   /// 原生 `ChatViewModel.panicClearAllData()`：清除聊天紀錄、身分金鑰、媒體檔與通知，換一組新身分。
   /// 原生清除完才回來；沒有清乾淨時以 [SettingsErrors] 的錯誤碼往上拋。

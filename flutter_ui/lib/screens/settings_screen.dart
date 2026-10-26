@@ -374,6 +374,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (v) => _run(() => _settings.setNotificationAutoRestore(v)),
                   ),
               ]),
+              // Gateway（#113）：未登入的手機不會代傳，開關照樣顯示，說明裡寫明需要登入。
+              _Section(title: '代傳', children: [
+                _SwitchTile(
+                  title: '代傳附近的求救與回報',
+                  subtitle: '手機有網路時，把經 Mesh 收到的附近的人的求救與狀態回報轉交給救災管理員。'
+                      '只用到極少的數據與電量；需要登入帳號才會代傳。',
+                  value: state.gatewayEnabled,
+                  onChanged: (v) => _run(() => _settings.setGatewayEnabled(v)),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: _Notice(
+                    text: '開啟時，你的帳號會被記錄為代傳者，管理員因此能推得你當時大致在哪一區。',
+                    color: _brown,
+                    icon: Icons.info_outline_rounded,
+                  ),
+                ),
+              ]),
             ],
             _Section(title: '個人資料', children: [
               if (_editing)

@@ -8,6 +8,7 @@ object MeshServicePreferences {
     private const val KEY_AUTO_START = "auto_start_on_boot"
     private const val KEY_BACKGROUND_ENABLED = "background_enabled"
     private const val KEY_NOTIFICATION_AUTO_RESTORE = "notification_auto_restore"
+    private const val KEY_GATEWAY_ENABLED = "gateway_enabled"
 
     private lateinit var prefs: SharedPreferences
 
@@ -42,5 +43,18 @@ object MeshServicePreferences {
 
     fun setNotificationAutoRestoreEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_NOTIFICATION_AUTO_RESTORE, enabled).apply()
+    }
+
+    /**
+     * Whether this phone, while signed in and online, relays the Health Reports it hears over the
+     * mesh to Firestore as a Gateway (#113, ADR-0009). On by default. Kept here rather than in
+     * Flutter so the mesh service reads it without a Flutter engine.
+     */
+    fun isGatewayEnabled(default: Boolean = true): Boolean {
+        return prefs.getBoolean(KEY_GATEWAY_ENABLED, default)
+    }
+
+    fun setGatewayEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_GATEWAY_ENABLED, enabled).apply()
     }
 }

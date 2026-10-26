@@ -126,6 +126,10 @@ internal class UpstreamMeshBackgroundSettings(private val context: Context) : Me
         get() = MeshServicePreferences.isNotificationAutoRestoreEnabled()
         set(value) = MeshServicePreferences.setNotificationAutoRestoreEnabled(value)
 
+    override var gatewayEnabled: Boolean
+        get() = MeshServicePreferences.isGatewayEnabled()
+        set(value) = MeshServicePreferences.setGatewayEnabled(value)
+
     override fun startForegroundService() = MeshForegroundService.start(context)
     override fun stopForegroundService() = MeshForegroundService.stop(context)
     override fun repostNotification() = MeshForegroundService.repostNotification(context)

@@ -40,6 +40,7 @@ class _Native {
   bool backgroundEnabled = true;
   bool autoStartEnabled = true;
   bool notificationAutoRestore = false;
+  bool gatewayEnabled = true;
   Object? stateError;
   int stateReads = 0;
   final calls = <String>[];
@@ -55,6 +56,7 @@ class _Native {
             'backgroundEnabled': backgroundEnabled,
             'autoStartEnabled': autoStartEnabled,
             'notificationAutoRestore': notificationAutoRestore,
+            'gatewayEnabled': gatewayEnabled,
             'appVersion': '2.0.2 (39)',
           };
         },
@@ -74,6 +76,10 @@ class _Native {
         setNotificationAutoRestore: (enabled) async {
           calls.add('setNotificationAutoRestore:$enabled');
           notificationAutoRestore = enabled;
+        },
+        setGatewayEnabled: (enabled) async {
+          calls.add('setGatewayEnabled:$enabled');
+          gatewayEnabled = enabled;
         },
         events: () => events.stream,
       );
@@ -261,6 +267,47 @@ void main() {
 
       expect(native.calls, ['setAutoStartEnabled:false', 'setNotificationAutoRestore:true']);
       expect(tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, '常駐通知被滑掉時立即恢復')).value, isTrue);
+    });
+  });
+
+  group('relaying for others (Gateway, #113)', () {
+    Finder gatewaySwitch() => find.widgetWithText(SwitchListTile, '代傳附近的求救與回報');
+
+    testWidgets('the switch says what it does, that it needs an account, and what it discloses', (tester) async {
+      await pumpSettings(tester);
+      await scrollTo(tester, gatewaySwitch());
+
+      expect(find.text('代傳'), findsOneWidget, reason: 'its own section');
+      expect(find.descendant(of: gatewaySwitch(), matching: find.textContaining('經 Mesh 收到的附近的人的求救與狀態回報')),
+          findsOneWidget);
+      expect(find.descendant(of: gatewaySwitch(), matching: find.textContaining('極少的數據與電量')), findsOneWidget);
+      expect(find.descendant(of: gatewaySwitch(), matching: find.textContaining('需要登入帳號')), findsOneWidget);
+      expect(find.textContaining('你的帳號會被記錄為代傳者'), findsOneWidget);
+      expect(find.textContaining('管理員因此能推得你當時大致在哪一區'), findsOneWidget);
+    });
+
+    testWidgets('shows what native has stored', (tester) async {
+      await pumpSettings(tester);
+      await scrollTo(tester, gatewaySwitch());
+      expect(tester.widget<SwitchListTile>(gatewaySwitch()).value, isTrue);
+
+      native.gatewayEnabled = false;
+      native.events.add({'type': 'system_status'});
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<SwitchListTile>(gatewaySwitch()).value, isFalse);
+    });
+
+    testWidgets('switching it off and on again hands the new value to native', (tester) async {
+      await pumpSettings(tester);
+
+      await tapOn(tester, gatewaySwitch());
+      expect(native.calls, ['setGatewayEnabled:false']);
+      expect(tester.widget<SwitchListTile>(gatewaySwitch()).value, isFalse);
+
+      await tapOn(tester, gatewaySwitch());
+      expect(native.calls, ['setGatewayEnabled:false', 'setGatewayEnabled:true']);
+      expect(tester.widget<SwitchListTile>(gatewaySwitch()).value, isTrue);
     });
   });
 
