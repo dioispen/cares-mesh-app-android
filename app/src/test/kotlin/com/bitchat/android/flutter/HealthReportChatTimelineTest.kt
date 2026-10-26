@@ -44,7 +44,8 @@ class HealthReportChatTimelineTest {
         val handler = MessageHandler(me.peerID, RuntimeEnvironment.getApplication())
         handler.delegate = delegate
 
-        handler.handleHealthReport(RoutedPacket(healthReportPacket(), peerID, "direct-link"))
+        val packet = healthReportPacket()
+        handler.handleHealthReport(RoutedPacket(packet, peerID, "direct-link"), received = packet)
 
         val delivered = argumentCaptor<BitchatMessage>()
             .apply { verify(delegate).onMessageReceived(capture()) }

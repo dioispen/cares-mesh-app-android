@@ -471,7 +471,7 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         val dataPayload = packet.payload.copyOfRange(1, packet.payload.size)
         when (tag) {
             BroadcastContentTag.HEALTH_REPORT ->
-                handleHealthReport(routed.copy(packet = packet.copy(payload = dataPayload)))
+                handleHealthReport(routed.copy(packet = packet.copy(payload = dataPayload)), received = packet)
         }
     }
 
@@ -590,8 +590,12 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
 
     /**
      * Handle structured health report
+     *
+     * [routed] carries the packet with its content tag stripped, which is what Flutter gets;
+     * [received] is the packet as it arrived, tag, signature and wire encoding intact, which is
+     * what the Gateway uploads (#111).
      */
-    suspend fun handleHealthReport(routed: RoutedPacket) {
+    suspend fun handleHealthReport(routed: RoutedPacket, received: BitchatPacket) {
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 
@@ -635,6 +639,9 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
 
         // 2. 轉發給 Flutter EventChannel
         InboundPacketBridge.onPacketReceived?.invoke(packet)
+
+        // 3. 交給 Gateway（ADR-0009）：收到時的原始封包，含 content tag 與簽章
+        VerifiedHealthReportBridge.publish(VerifiedHealthReport(received, report, peerID))
     }
 
     /**

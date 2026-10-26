@@ -49,6 +49,7 @@ The application follows a clean architecture pattern, heavily modularized by fea
 ### Authentication & Data Management
 - **Firestore Integration**: Used for user registration/login and health information packet storage. Provides secure cloud-based authentication and data persistence.
 - **Health Data Upload**: Integrated with Firestore for secure transmission and storage of health information packets from Flutter UI.
+- **Mesh Gateway** (`gateway/`, ADR-0009): the only Kotlin code that uses Firebase. It runs inside `MeshForegroundService`, reads the FirebaseAuth sign-in state shared with Flutter, and writes other people's verified Health Reports (Broadcast Tier only) to `mesh_reports`. Keep Firebase out of `mesh/`: the protocol layer hands reports over through `VerifiedHealthReportBridge`.
 
 ## 4. Development Standards
 

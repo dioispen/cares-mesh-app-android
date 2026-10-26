@@ -1501,6 +1501,14 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     }
 
     /**
+     * The verified, signed ANNOUNCE of [peerID] held by the Health Report key cache (#95); the
+     * Gateway uploads it with that peer's report so it can be verified later (ADR-0009).
+     */
+    fun healthReportAnnouncementFor(peerID: String): BitchatPacket? {
+        return securityManager.healthReportAnnouncementFor(peerID)
+    }
+
+    /**
      * Check if encryption icon should be shown for a peer
      */
     fun shouldShowEncryptionIcon(peerID: String): Boolean {

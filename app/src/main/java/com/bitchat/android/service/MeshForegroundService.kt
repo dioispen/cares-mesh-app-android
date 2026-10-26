@@ -19,6 +19,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.flutter.FlutterChatActivity
+import com.bitchat.android.gateway.MeshGatewayRuntime
 import com.bitchat.android.R
 import com.bitchat.android.mesh.BluetoothMeshService
 import kotlinx.coroutines.CoroutineScope
@@ -113,6 +114,7 @@ class MeshForegroundService : Service() {
     private var isInForeground: Boolean = false
     private var isShuttingDown: Boolean = false
     private var lastNotifiedPeerCount: Int? = null
+    private var gateway: MeshGatewayRuntime? = null
 
     /**
      * Posts the ongoing notification again whenever the app comes to the front (#84): a notification
@@ -157,6 +159,10 @@ class MeshForegroundService : Service() {
         // The debug-only experiment sender (#70) runs in this service's scope so it keeps
         // sending while the app is in the background.
         ExperimentTools.onMeshServiceCreated(scope)
+
+        // The Gateway (#111) relays verified Health Reports to Firestore for as long as the mesh
+        // service runs, so it keeps working with the App's screens closed.
+        gateway = MeshGatewayRuntime.start(applicationContext)
 
         // Notification content is driven by peer-state changes, not a permanent timer.
         updateJob = scope.launch {
@@ -440,6 +446,8 @@ class MeshForegroundService : Service() {
         updateJob?.cancel()
         updateJob = null
         ExperimentTools.onMeshServiceDestroyed()
+        gateway?.stop()
+        gateway = null
         // Cancel the service coroutine scope to prevent leaks
         try { serviceJob.cancel() } catch (_: Exception) { }
         // Best-effort ensure we are not marked foreground
