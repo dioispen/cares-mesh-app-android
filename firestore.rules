@@ -190,6 +190,56 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // reporter_handles/{uid}/installations/{reporterHandle}：Reporter 本人登記「這次安裝的
+    // Reporter Handle 屬於我」（docs/MESH_GATEWAY.md 5.3），讓管理後台能把 Gateway 代傳的
+    // mesh_reports 對回已註冊的帳號，並與 health_reports 去重。一個帳號用幾支手機就有幾份；
+    // 一支手機先後登入不同帳號時，同一個 Handle 會出現在多個 uid 底下，所以不擋重複的 Handle。
+    //
+    // 只有 Administrator 與本人讀得到（ADR-0009）：Reporter Handle 在 mesh 上是明文，
+    // 附近任何人都聽得到；要是登入帳號就能查，等於讓人憑空中聽到的 Handle 查出是誰。
+    //
+    // 只有本人能寫，而且只能寫在自己的 uid 底下——寫在別人底下等於替別人認領 Handle。
+    // 但這擋不住把「聽到的別人的 Handle」登記在自己底下（冒領）：規則不知道 Handle 背後是
+    // 哪一把 key。後台遇到多個 uid 宣稱同一個 Handle 時，比對 signingPublicKey 與
+    // mesh_reports 原始封包的簽章 key 才分得出來（docs/MESH_GATEWAY.md 第 9 節）。
+    // Administrator 可以刪（清理冒領或災後清空），但不能替人登記。
+    match /reporter_handles/{uid}/installations/{handle} {
+      function validInstallation(handle) {
+        let data = request.resource.data;
+        let fields = ['reporterHandle', 'signingPublicKey', 'registeredAt'];
+        return data.keys().hasAll(fields)
+            && data.keys().hasOnly(fields)
+            // 文件 ID 就是 Handle；小寫 12 碼十六進位，與 mesh_reports 的文件 ID 一致，
+            // 後台才能直接拿來對照。
+            && handle.matches('^[0-9a-f]{12}$')
+            && handle == data.reporterHandle
+            // ANNOUNCE 裡的那把 Ed25519 簽章公鑰，固定 32 bytes。
+            && data.signingPublicKey is bytes
+            && data.signingPublicKey.size() == 32
+            // 用伺服器時間：後台以最新的 registeredAt 判斷 Handle 目前屬於哪個帳號，
+            // 不能讓客戶端填未來的時間搶先。
+            && data.registeredAt == request.time;
+      }
+
+      allow read: if isAdmin() || isOwner(uid);
+      // create 與 update 同一套檢查：App 每次啟動都會整份覆寫一次（idempotent 登記）。
+      allow create, update: if isOwner(uid) && validInstallation(handle);
+      allow delete: if isAdmin() || isOwner(uid);
+    }
+
+    // 管理後台用 collection group 查詢 installations（where reporterHandle == handle），從
+    // 結果的路徑取出 uid（docs/MESH_GATEWAY.md 第 8 節）。collection group 查詢只認遞迴
+    // 萬用字元的 match，上面 /reporter_handles/{uid}/installations/{handle} 的規則套用不到，
+    // 所以另外開這一條給 Administrator。
+    //
+    // 規則是「任一條 allow 成立即可」，所以這條對 reporter_handles 底下的文件只會多放行
+    // Administrator，而 Administrator 本來就讀得到；其他人沒有新增任何讀取權。
+    // NOTE: 它也涵蓋任何路徑下名為 installations 的 collection，別的資料不要取這個名字，
+    // 否則 Administrator 也讀得到。
+    match /{path=**}/installations/{handle} {
+      allow read: if isAdmin();
+    }
+
     // supply_items 是所有使用者共用的型錄；套用欄位限制而非擁有者限制，
     // 讓使用者能在任何物資上登記需求或捐贈，但不能竄改描述欄位。
     match /supply_items/{docId} {

@@ -19,6 +19,10 @@
 //   issue #109
 //   - admins：Administrator 身分的唯一依據，客戶端一律不可寫，名單不外流
 //   最關鍵的一條是「Administrator 不會被當成 Verified Rescuer」——兩個角色互相獨立。
+//
+//   issue #110
+//   - reporter_handles：Reporter Handle 屬於哪個帳號，只有 Administrator 與本人讀得到
+//   最關鍵的一條是「其他登入者（含 Verified Rescuer）查不到 Handle 是誰」（ADR-0009）。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -28,7 +32,10 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  Bytes,
+  Timestamp,
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
@@ -839,6 +846,164 @@ describe('admins（#109：Administrator 身分不可自我提權）', () => {
       await setDoc(doc(ctx.firestore(), `rescuers/${ADMIN}`), { grantedAt: new Date() });
     });
     await assertSucceeds(getDoc(doc(dbFor(ADMIN), `health_report_sensitive/${ALICE}`)));
+  });
+});
+
+// 測試用的 bytes 欄位：長度 n、內容固定。
+const bytesOf = (n, fill = 7) => Bytes.fromUint8Array(new Uint8Array(n).fill(fill));
+
+// reporter_handles/{uid}/installations/{reporterHandle}（#110、docs/MESH_GATEWAY.md 5.3）
+describe('reporter_handles（#110：Reporter Handle 與帳號的對應只給 Administrator 與本人）', () => {
+  const HANDLE = 'a1b2c3d4e5f6';
+  const pathOf = (uid, handle = HANDLE) => `reporter_handles/${uid}/installations/${handle}`;
+  const installation = (handle = HANDLE, extra = {}) => ({
+    reporterHandle: handle,
+    signingPublicKey: bytesOf(32),
+    registeredAt: serverTimestamp(),
+    ...extra,
+  });
+  const register = (uid, handle = HANDLE, data = installation(handle)) =>
+    setDoc(doc(dbFor(uid), pathOf(uid, handle)), data);
+  // 以後台身分鋪底：Alice 已在有網路時登記過這支手機
+  const seed = async (uid = ALICE, handle = HANDLE) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), pathOf(uid, handle)), {
+        reporterHandle: handle,
+        signingPublicKey: bytesOf(32),
+        registeredAt: Timestamp.now(),
+      });
+    });
+  };
+
+  describe('寫入', () => {
+    it('★ 本人可以在自己的 uid 底下登記（registeredAt 用伺服器時間）', async () => {
+      await assertSucceeds(register(ALICE));
+    });
+
+    it('★ 本人可以重複登記同一份（App 每次啟動整份覆寫）', async () => {
+      await seed();
+      await assertSucceeds(register(ALICE));
+      await assertSucceeds(register(ALICE));
+    });
+
+    it('一個帳號可以登記多支手機', async () => {
+      await seed();
+      await assertSucceeds(register(ALICE, '0123456789ab'));
+    });
+
+    it('同一個 Handle 可以出現在不同 uid 底下（一支手機先後登入不同帳號）', async () => {
+      await seed(ALICE);
+      await assertSucceeds(register(BOB));
+    });
+
+    it('★ 不能寫在別人的 uid 底下', async () => {
+      await assertFails(setDoc(doc(dbFor(BOB), pathOf(ALICE)), installation()));
+    });
+
+    it('Administrator 也不能替別人登記', async () => {
+      await assertFails(setDoc(doc(dbFor(ADMIN), pathOf(ALICE)), installation()));
+    });
+
+    it('未登入不能寫', async () => {
+      await assertFails(setDoc(doc(anonDb(), pathOf(ALICE)), installation()));
+    });
+
+    it('不能夾帶多餘欄位', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { name: 'Alice' })));
+    });
+
+    it('不能缺欄位', async () => {
+      const { signingPublicKey, ...withoutKey } = installation();
+      await assertFails(register(ALICE, HANDLE, withoutKey));
+      const { registeredAt, ...withoutTime } = installation();
+      await assertFails(register(ALICE, HANDLE, withoutTime));
+    });
+
+    it('★ signingPublicKey 必須剛好 32 bytes', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: bytesOf(31) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: bytesOf(33) })));
+    });
+
+    it('signingPublicKey 必須是 bytes', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: 'ab'.repeat(32) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: Array(32).fill(7) })));
+    });
+
+    it('Handle 必須是小寫 12 碼十六進位', async () => {
+      for (const bad of ['A1B2C3D4E5F6', 'a1b2c3d4e5f', 'a1b2c3d4e5f6a', 'g1b2c3d4e5f6']) {
+        await assertFails(register(ALICE, bad, installation(bad)));
+      }
+    });
+
+    it('★ reporterHandle 必須等於文件 ID', async () => {
+      await assertFails(register(ALICE, HANDLE, installation('0123456789ab')));
+    });
+
+    it('registeredAt 必須是伺服器時間', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { registeredAt: Timestamp.now() })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { registeredAt: new Date() })));
+    });
+  });
+
+  describe('讀取', () => {
+    it('★ Administrator 與本人讀得到', async () => {
+      await seed();
+      await assertSucceeds(getDoc(doc(dbFor(ADMIN), pathOf(ALICE))));
+      await assertSucceeds(getDoc(doc(dbFor(ALICE), pathOf(ALICE))));
+      await assertSucceeds(getDocs(collection(dbFor(ALICE), `reporter_handles/${ALICE}/installations`)));
+    });
+
+    it('★ 其他登入者讀不到，Verified Rescuer 也一樣（不是 Administrator）', async () => {
+      await seed();
+      await assertFails(getDoc(doc(dbFor(BOB), pathOf(ALICE))));
+      await assertFails(getDoc(doc(dbFor(RESCUER), pathOf(ALICE))));
+      await assertFails(getDocs(collection(dbFor(BOB), `reporter_handles/${ALICE}/installations`)));
+    });
+
+    it('未登入讀不到', async () => {
+      await seed();
+      await assertFails(getDoc(doc(anonDb(), pathOf(ALICE))));
+    });
+
+    // 管理後台的去重流程（docs/MESH_GATEWAY.md 第 8 節）：由 Handle 反查 uid。
+    it('★ Administrator 可以用 collection group 查詢由 Handle 找出 uid', async () => {
+      await seed(ALICE);
+      await seed(BOB, '0123456789ab');
+      const snap = await assertSucceeds(getDocs(query(
+        collectionGroup(dbFor(ADMIN), 'installations'),
+        where('reporterHandle', '==', HANDLE),
+      )));
+      const owners = snap.docs.map((d) => d.ref.parent.parent.id);
+      if (owners.length !== 1 || owners[0] !== ALICE) {
+        throw new Error(`查到的 uid 不對：${JSON.stringify(owners)}`);
+      }
+    });
+
+    it('★ 非 Administrator 不能用 collection group 查詢，Verified Rescuer 也一樣', async () => {
+      await seed();
+      for (const db of [dbFor(BOB), dbFor(ALICE), dbFor(RESCUER), anonDb()]) {
+        await assertFails(getDocs(query(
+          collectionGroup(db, 'installations'),
+          where('reporterHandle', '==', HANDLE),
+        )));
+      }
+    });
+  });
+
+  describe('刪除', () => {
+    it('Administrator 與本人可以刪', async () => {
+      await seed();
+      await assertSucceeds(deleteDoc(doc(dbFor(ALICE), pathOf(ALICE))));
+      await seed();
+      await assertSucceeds(deleteDoc(doc(dbFor(ADMIN), pathOf(ALICE))));
+    });
+
+    it('其他人不能刪', async () => {
+      await seed();
+      await assertFails(deleteDoc(doc(dbFor(BOB), pathOf(ALICE))));
+      await assertFails(deleteDoc(doc(dbFor(RESCUER), pathOf(ALICE))));
+      await assertFails(deleteDoc(doc(anonDb(), pathOf(ALICE))));
+    });
   });
 });
 
