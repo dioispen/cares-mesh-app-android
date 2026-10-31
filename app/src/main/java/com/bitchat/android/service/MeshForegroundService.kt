@@ -103,6 +103,7 @@ class MeshForegroundService : Service() {
     private lateinit var notificationManager: NotificationManagerCompat
     private lateinit var peerAvailabilityNotifier: PeerAvailabilityNotifier
     private var updateJob: Job? = null
+    private var meshSupplyGateway: MeshSupplyGateway? = null
     private val meshService: BluetoothMeshService?
         get() = MeshServiceHolder.meshService
     private val unifiedMeshService: com.bitchat.android.mesh.MeshService?
@@ -153,6 +154,11 @@ class MeshForegroundService : Service() {
             MeshServiceHolder.attach(created)
         }
         MeshServiceHolder.getUnifiedOrCreate(applicationContext)
+        try {
+            meshSupplyGateway = MeshSupplyGateway(applicationContext, scope)
+        } catch (e: Exception) {
+            Log.e("MeshForegroundService", "Mesh supply uploads are unavailable", e)
+        }
 
         // The debug-only experiment sender (#70) runs in this service's scope so it keeps
         // sending while the app is in the background.
@@ -437,6 +443,8 @@ class MeshForegroundService : Service() {
 
     override fun onDestroy() {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(appForegroundObserver)
+        meshSupplyGateway?.close()
+        meshSupplyGateway = null
         updateJob?.cancel()
         updateJob = null
         ExperimentTools.onMeshServiceDestroyed()

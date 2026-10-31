@@ -5,15 +5,16 @@ import 'geohash.dart';
 
 /// BLE 封包類型常數，與 Android MessageType 對應
 class BlePacketType {
-  static const int announce      = 0x01;
-  static const int message       = 0x02;
-  static const int leave         = 0x03;
+  static const int announce = 0x01;
+  static const int message = 0x02;
+  static const int leave = 0x03;
   static const int noiseHandshake = 0x10;
   static const int noiseEncrypted = 0x11;
-  static const int fragment      = 0x20;
-  static const int requestSync   = 0x21;
-  static const int fileTransfer  = 0x22;
-  static const int healthReport  = 0x30;
+  static const int fragment = 0x20;
+  static const int requestSync = 0x21;
+  static const int fileTransfer = 0x22;
+  static const int healthReport = 0x30;
+  static const int supplyExchange = 0x31;
 }
 
 /// 通用 BLE 封包包裝器（Android Bridge 傳來的統一格式）
@@ -90,7 +91,12 @@ class HealthReportPayload {
   });
 
   /// status wire byte ↔ 中文 label 的單一對應（與 Kotlin `HealthStatus` 一致）。
-  static const Map<int, String> statusByWire = {0: '安全', 1: '輕傷', 2: '重傷', 3: statusUndeclared};
+  static const Map<int, String> statusByWire = {
+    0: '安全',
+    1: '輕傷',
+    2: '重傷',
+    3: statusUndeclared,
+  };
 
   static HealthReportPayload? decode(List<int> bytes) {
     try {
@@ -115,8 +121,9 @@ class HealthReportPayload {
       final ghLen = b[o++] & 0xFF;
       if (ghLen != 0 && ghLen != geohashPrecision) return null;
       if (bytes.length - o < ghLen + 4) return null;
-      final geohash =
-          ghLen == 0 ? null : String.fromCharCodes(b.sublist(o, o + ghLen));
+      final geohash = ghLen == 0
+          ? null
+          : String.fromCharCodes(b.sublist(o, o + ghLen));
       o += ghLen;
 
       final secs = ByteData.sublistView(b, o, o + 4).getUint32(0, Endian.big);
@@ -126,8 +133,10 @@ class HealthReportPayload {
         status: status,
         sos: sos,
         geohash: geohash,
-        reportTime:
-            DateTime.fromMillisecondsSinceEpoch(secs * 1000, isUtc: true),
+        reportTime: DateTime.fromMillisecondsSinceEpoch(
+          secs * 1000,
+          isUtc: true,
+        ),
       );
     } catch (_) {
       return null;
@@ -136,10 +145,10 @@ class HealthReportPayload {
 
   /// 「未宣告」只能和 SOS 一起出現；「安全」不能帶 SOS（與 Kotlin `HealthReportPayload.isLegal` 一致）。
   static bool _isLegal(String status, {required bool sos}) => switch (status) {
-        statusUndeclared => sos,
-        '安全' => !sos,
-        _ => true,
-      };
+    statusUndeclared => sos,
+    '安全' => !sos,
+    _ => true,
+  };
 
   /// geohash 還原的近似中心座標；無位置時為 null。這是「大約在哪」而非確切位置。
   (double, double)? approximateLatLng() =>

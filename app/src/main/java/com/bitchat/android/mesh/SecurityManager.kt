@@ -289,6 +289,7 @@ class SecurityManager(
                     MessageType.FILE_TRANSFER,
                     MessageType.VOICE_FRAME,
                     MessageType.HEALTH_REPORT,
+                    MessageType.SUPPLY_EXCHANGE,
                     MessageType.LEAVE
                 )) {
                 return true

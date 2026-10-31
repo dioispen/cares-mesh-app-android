@@ -993,6 +993,96 @@ describe('SOS（#83：health_reports 的 sos 欄位，停用 sos_requests）', (
     });
   };
 
+  describe('mesh_supply_packets', () => {
+      const packetId = 'a'.repeat(32);
+      const meshPacket = (uid, extra = {}) => ({
+        schemaVersion: 1,
+        packetId,
+        packetType: 0x31,
+        payloadVersion: 1,
+        action: 'request',
+        originPeerId: '0011223344556677',
+        itemId: 'water',
+        itemName: '礦泉水',
+        quantity: 3,
+        unit: '瓶',
+        createdAt: new Date(),
+        rawPacket: 'AQID',
+        gatewayUid: uid,
+        receivedAt: serverTimestamp(),
+        ...extra,
+      });
+
+      it('登入 Gateway 可以建立格式正確的物資封包', async () => {
+        await assertSucceeds(
+          setDoc(doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`), meshPacket(ALICE)),
+        );
+      });
+
+      it('不同登入者可讀取已知 Packet ID，供上傳交易去重', async () => {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+          await setDoc(doc(ctx.firestore(), `mesh_supply_packets/${packetId}`), meshPacket(ALICE));
+        });
+        await assertSucceeds(getDoc(doc(dbFor(BOB), `mesh_supply_packets/${packetId}`)));
+      });
+
+      it('一般登入者不可列出封包，Administrator 可以列出', async () => {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+          const db = ctx.firestore();
+          await setDoc(doc(db, `mesh_supply_packets/${packetId}`), meshPacket(ALICE));
+          await setDoc(doc(db, `admins/${CAROL}`), {});
+        });
+        await assertFails(getDocs(collection(dbFor(BOB), 'mesh_supply_packets')));
+        await assertSucceeds(getDocs(collection(dbFor(CAROL), 'mesh_supply_packets')));
+      });
+
+      it('匿名使用者不可讀取或建立封包', async () => {
+        await assertFails(getDoc(doc(anonDb(), `mesh_supply_packets/${packetId}`)));
+        await assertFails(
+          setDoc(doc(anonDb(), `mesh_supply_packets/${packetId}`), meshPacket('anonymous')),
+        );
+      });
+
+      it('封包 ID 必須符合文件 ID，Gateway UID 必須是登入者', async () => {
+        await assertFails(
+          setDoc(doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`), meshPacket(ALICE, {
+            packetId: 'b'.repeat(32),
+          })),
+        );
+        await assertFails(
+          setDoc(doc(dbFor(BOB), `mesh_supply_packets/${packetId}`), meshPacket(ALICE)),
+        );
+      });
+
+      it('拒絕不合法動作、數量、原始發送端及多餘欄位', async () => {
+        await assertFails(setDoc(
+          doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`),
+          meshPacket(ALICE, { action: 'cancel' }),
+        ));
+        await assertFails(setDoc(
+          doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`),
+          meshPacket(ALICE, { quantity: 0 }),
+        ));
+        await assertFails(setDoc(
+          doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`),
+          meshPacket(ALICE, { originPeerId: 'not-a-peer' }),
+        ));
+        await assertFails(setDoc(
+          doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`),
+          meshPacket(ALICE, { injected: true }),
+        ));
+      });
+
+      it('封包紀錄建立後不可修改或刪除', async () => {
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+          await setDoc(doc(ctx.firestore(), `mesh_supply_packets/${packetId}`), meshPacket(ALICE));
+        });
+        const ref = doc(dbFor(ALICE), `mesh_supply_packets/${packetId}`);
+        await assertFails(updateDoc(ref, { quantity: 5 }));
+        await assertFails(deleteDoc(ref));
+      });
+    });
+
   it('★ 本人可以建立帶 sos 的回報（Status 未宣告）', async () => {
     await assertSucceeds(setDoc(doc(dbFor(ALICE), `health_reports/${ALICE}`), sosReport(ALICE)));
   });

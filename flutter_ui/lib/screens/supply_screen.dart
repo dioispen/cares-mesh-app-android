@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../bridge/bitchat_bridge.dart';
 import '../models/user.dart';
 // ignore: library_prefixes
 import '../models/supply items.dart';
@@ -90,11 +91,15 @@ class _SupplyScreenState extends State<SupplyScreen>
   Future<void> _watchConnectivity() async {
     final results = await Connectivity().checkConnectivity();
     if (mounted) {
-      setState(() => _isOnline = results.any((r) => r != ConnectivityResult.none));
+      setState(
+        () => _isOnline = results.any((r) => r != ConnectivityResult.none),
+      );
     }
     _connectSub = Connectivity().onConnectivityChanged.listen((results) {
       if (!mounted) return;
-      setState(() => _isOnline = results.any((r) => r != ConnectivityResult.none));
+      setState(
+        () => _isOnline = results.any((r) => r != ConnectivityResult.none),
+      );
     });
   }
 
@@ -112,6 +117,7 @@ class _SupplyScreenState extends State<SupplyScreen>
       unit: item.unit,
       qty: qty,
     );
+    final meshFailure = await _broadcastSupplyExchange('request', item, qty);
     final batch = FirebaseFirestore.instance.batch();
     batch.set(
       FirebaseFirestore.instance
@@ -124,6 +130,7 @@ class _SupplyScreenState extends State<SupplyScreen>
       {'totalRequestedQty': FieldValue.increment(qty)},
     );
     await batch.commit();
+    _showSubmissionResult(meshFailure);
   }
 
   Future<void> _submitPledge(SupplyItem item, int qty) async {
@@ -136,6 +143,7 @@ class _SupplyScreenState extends State<SupplyScreen>
       unit: item.unit,
       qty: qty,
     );
+    final meshFailure = await _broadcastSupplyExchange('offer', item, qty);
     final batch = FirebaseFirestore.instance.batch();
     batch.set(
       FirebaseFirestore.instance
@@ -148,49 +156,78 @@ class _SupplyScreenState extends State<SupplyScreen>
       {'totalPledgedQty': FieldValue.increment(qty)},
     );
     await batch.commit();
+    _showSubmissionResult(meshFailure);
+  }
+
+  Future<String?> _broadcastSupplyExchange(
+    String action,
+    SupplyItem item,
+    int quantity,
+  ) async {
+    try {
+      await BitchatBridge.sendSupplyExchange(
+        action: action,
+        itemId: item.id,
+        itemName: item.name,
+        quantity: quantity,
+        unit: item.unit,
+      );
+      return null;
+    } catch (e) {
+      debugPrint('Supply $action mesh broadcast failed: $e');
+      return '已記錄在本機／雲端佇列，但目前未能透過附近裝置傳送；請確認藍牙 Mesh 正在執行。';
+    }
+  }
+
+  void _showSubmissionResult(String? meshFailure) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(meshFailure ?? '已透過 Mesh 廣播並記錄物資資料。')),
+    );
   }
 
   Widget _categoryFilter() => SizedBox(
-        height: 52,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          itemCount: kSupplyCategories.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 8),
-          itemBuilder: (_, i) {
-            final cat = kSupplyCategories[i];
-            final selected = cat == _selectedCategory;
-            return GestureDetector(
-              onTap: () => setState(() => _selectedCategory = cat),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                decoration: BoxDecoration(
-                  color: selected ? _brown : _card,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: selected ? _brown : _brown.withValues(alpha: 0.2),
-                  ),
-                ),
-                child: Text(
-                  cat,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: selected ? Colors.white : _textSecondary,
-                  ),
-                ),
+    height: 52,
+    child: ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      itemCount: kSupplyCategories.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 8),
+      itemBuilder: (_, i) {
+        final cat = kSupplyCategories[i];
+        final selected = cat == _selectedCategory;
+        return GestureDetector(
+          onTap: () => setState(() => _selectedCategory = cat),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            decoration: BoxDecoration(
+              color: selected ? _brown : _card,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: selected ? _brown : _brown.withValues(alpha: 0.2),
               ),
-            );
-          },
-        ),
-      );
+            ),
+            child: Text(
+              cat,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : _textSecondary,
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
 
   Widget _emptyState() => Center(
-        child: Text('此分類暫無物資',
-            style: TextStyle(color: _textSecondary, fontSize: 15)),
-      );
+    child: Text(
+      '此分類暫無物資',
+      style: TextStyle(color: _textSecondary, fontSize: 15),
+    ),
+  );
 
   // ── Tab 1：申請物資 ──────────────────────────────────────────
   Widget _buildRequestTab() {
@@ -265,9 +302,10 @@ class _SupplyScreenState extends State<SupplyScreen>
         title: const Text(
           '物資管理',
           style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: _textPrimary),
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: _textPrimary,
+          ),
         ),
         iconTheme: const IconThemeData(color: _textPrimary),
         bottom: TabBar(
@@ -291,10 +329,7 @@ class _SupplyScreenState extends State<SupplyScreen>
           ? const Center(child: CircularProgressIndicator(color: _brown))
           : TabBarView(
               controller: _tabController,
-              children: [
-                _buildRequestTab(),
-                _buildDonateTab(),
-              ],
+              children: [_buildRequestTab(), _buildDonateTab()],
             ),
     );
   }
@@ -338,9 +373,12 @@ class _RequestCardState extends State<SupplyRequestCard> {
   Future<void> _submit() async {
     final qty = int.tryParse(_qtyCtrl.text.trim());
     if (qty == null || qty <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
           content: Text('請輸入有效數量'),
-          behavior: SnackBarBehavior.floating));
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       return;
     }
     setState(() => _isSubmitting = true);
@@ -349,15 +387,21 @@ class _RequestCardState extends State<SupplyRequestCard> {
       _qtyCtrl.clear();
       if (mounted) setState(() => _expanded = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
             content: Text('申請成功！'),
-            behavior: SnackBarBehavior.floating));
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
             content: Text('申請失敗：$e'),
-            behavior: SnackBarBehavior.floating));
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -367,8 +411,7 @@ class _RequestCardState extends State<SupplyRequestCard> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final catColor =
-        kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
+    final catColor = kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
 
     return _SupplyCardShell(
       item: item,
@@ -380,12 +423,13 @@ class _RequestCardState extends State<SupplyRequestCard> {
         children: [
           Row(
             children: [
-              Text(item.category,
-                  style: TextStyle(fontSize: 12, color: catColor)),
+              Text(
+                item.category,
+                style: TextStyle(fontSize: 12, color: catColor),
+              ),
               const Spacer(),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: catColor.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
@@ -393,9 +437,10 @@ class _RequestCardState extends State<SupplyRequestCard> {
                 child: Text(
                   '庫存 ${item.inventoryQty} ${item.unit}',
                   style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: catColor),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: catColor,
+                  ),
                 ),
               ),
             ],
@@ -460,9 +505,12 @@ class _DonateCardState extends State<SupplyDonateCard> {
   Future<void> _submit() async {
     final qty = int.tryParse(_qtyCtrl.text.trim());
     if (qty == null || qty <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
           content: Text('請輸入有效數量'),
-          behavior: SnackBarBehavior.floating));
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       return;
     }
     setState(() => _isSubmitting = true);
@@ -471,15 +519,21 @@ class _DonateCardState extends State<SupplyDonateCard> {
       _qtyCtrl.clear();
       if (mounted) setState(() => _expanded = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
             content: Text('感謝您的捐贈承諾！'),
-            behavior: SnackBarBehavior.floating));
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
             content: Text('操作失敗：$e'),
-            behavior: SnackBarBehavior.floating));
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -488,32 +542,35 @@ class _DonateCardState extends State<SupplyDonateCard> {
 
   /// 四欄平分寬度；數量或單位太長（大字體、窄螢幕）時縮小字級，不超出卡片（#79）。
   Widget _stat(String label, String value, Color color) => Expanded(
-        child: Column(
-          children: [
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(value,
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: color)),
+    child: Column(
+      children: [
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
             ),
-            const SizedBox(height: 2),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(label,
-                  style: const TextStyle(
-                      fontSize: 10, color: _textSecondary)),
-            ),
-          ],
+          ),
         ),
-      );
+        const SizedBox(height: 2),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 10, color: _textSecondary),
+          ),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final catColor =
-        kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
+    final catColor = kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
     final progress = item.fulfillProgress;
 
     return _SupplyCardShell(
@@ -525,7 +582,10 @@ class _DonateCardState extends State<SupplyDonateCard> {
       trailing: Text(
         '${(progress * 100).toStringAsFixed(0)}%',
         style: TextStyle(
-            fontSize: 13, fontWeight: FontWeight.w700, color: catColor),
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: catColor,
+        ),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -540,15 +600,15 @@ class _DonateCardState extends State<SupplyDonateCard> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _stat('需求量',
-                    '${item.totalRequestedQty} ${item.unit}',
-                    _textSecondary),
+                _stat(
+                  '需求量',
+                  '${item.totalRequestedQty} ${item.unit}',
+                  _textSecondary,
+                ),
                 Container(width: 1, height: 28, color: Colors.grey[300]),
-                _stat('庫存',
-                    '${item.inventoryQty} ${item.unit}', catColor),
+                _stat('庫存', '${item.inventoryQty} ${item.unit}', catColor),
                 Container(width: 1, height: 28, color: Colors.grey[300]),
-                _stat('已承諾',
-                    '${item.totalPledgedQty} ${item.unit}', catColor),
+                _stat('已承諾', '${item.totalPledgedQty} ${item.unit}', catColor),
                 Container(width: 1, height: 28, color: Colors.grey[300]),
                 _stat(
                   '仍需',
@@ -614,8 +674,7 @@ class _SupplyCardShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final catColor =
-        kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
+    final catColor = kCategoryColors[item.category] ?? const Color(0xFF7AA67A);
 
     return Container(
       clipBehavior: Clip.antiAlias,
@@ -623,13 +682,16 @@ class _SupplyCardShell extends StatelessWidget {
         color: _card,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: expanded ? catColor.withValues(alpha: 0.45) : Colors.transparent,
+          color: expanded
+              ? catColor.withValues(alpha: 0.45)
+              : Colors.transparent,
         ),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
         ],
       ),
       child: Column(
@@ -647,18 +709,22 @@ class _SupplyCardShell extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Icon(
-                        kCategoryIcons[item.category] ??
-                            Icons.inventory_2_rounded,
-                        color: catColor,
-                        size: 18),
+                      kCategoryIcons[item.category] ??
+                          Icons.inventory_2_rounded,
+                      color: catColor,
+                      size: 18,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(item.name,
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: _textPrimary)),
+                    child: Text(
+                      item.name,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: _textPrimary,
+                      ),
+                    ),
                   ),
                   if (trailing != null) ...[
                     trailing!,
@@ -677,8 +743,11 @@ class _SupplyCardShell extends StatelessWidget {
                           color: _brown.withValues(alpha: 0.08),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.expand_more_rounded,
-                            size: 20, color: _brown),
+                        child: const Icon(
+                          Icons.expand_more_rounded,
+                          size: 20,
+                          color: _brown,
+                        ),
                       ),
                     ),
                   ),
@@ -737,13 +806,17 @@ class _QtyInputRow extends StatelessWidget {
               hintText: hint,
               suffixText: unit,
               isDense: true,
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
               focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: _brown, width: 2)),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _brown, width: 2),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
             ),
           ),
         ),
@@ -756,7 +829,8 @@ class _QtyInputRow extends StatelessWidget {
               backgroundColor: buttonColor,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+                borderRadius: BorderRadius.circular(10),
+              ),
               disabledBackgroundColor: buttonColor.withValues(alpha: 0.5),
             ),
             child: submitting
@@ -764,10 +838,17 @@ class _QtyInputRow extends StatelessWidget {
                     height: 16,
                     width: 16,
                     child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : Text(buttonLabel,
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : Text(
+                    buttonLabel,
                     style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.bold)),
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
           ),
         ),
       ],
