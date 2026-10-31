@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Gossip-based synchronization manager using on-demand GCS filters.
- * Tracks seen public packets (ANNOUNCE, broadcast MESSAGE, broadcast HEALTH_REPORT) and
+ * Tracks seen public packets (ANNOUNCE, broadcast MESSAGE, HEALTH_REPORT and supply exchange) and
  * periodically requests sync from neighbors. Responds to REQUEST_SYNC by sending missing packets.
  */
 class GossipSyncManager(
@@ -53,7 +53,7 @@ class GossipSyncManager(
     private val defaultFpr = SyncDefaults.DEFAULT_FPR_PERCENT
 
     // Stored packets for sync:
-    // - broadcast messages: keep up to seenCapacity() most recent, keyed by packetId
+    // - broadcast messages and supply exchanges: keep up to seenCapacity() most recent, keyed by packetId
     private val messages = LinkedHashMap<String, BitchatPacket>()
     // - announcements: only keep latest per sender peerID. Dropped once older than
     //   STALE_PEER_TIMEOUT_MS or when the peer is removed, except while we still hold that sender's
@@ -123,18 +123,19 @@ class GossipSyncManager(
     }
 
     fun onPublicPacketSeen(packet: BitchatPacket) {
-        // Only ANNOUNCE, broadcast MESSAGE or broadcast HEALTH_REPORT
+        // Only ANNOUNCE and supported public broadcast packet types
         val mt = MessageType.fromValue(packet.type)
         val isBroadcast = (packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST))
         val isBroadcastMessage = (mt == MessageType.MESSAGE && isBroadcast)
         val isAnnouncement = (mt == MessageType.ANNOUNCE)
         val isBroadcastHealthReport = (mt == MessageType.HEALTH_REPORT && isBroadcast)
-        if (!isBroadcastMessage && !isAnnouncement && !isBroadcastHealthReport) return
+        val isBroadcastSupplyExchange = (mt == MessageType.SUPPLY_EXCHANGE && isBroadcast)
+        if (!isBroadcastMessage && !isAnnouncement && !isBroadcastHealthReport && !isBroadcastSupplyExchange) return
 
         val idBytes = PacketIdUtil.computeIdBytes(packet)
         val id = idBytes.joinToString("") { b -> "%02x".format(b) }
 
-        if (isBroadcastMessage) {
+        if (isBroadcastMessage || isBroadcastSupplyExchange) {
             synchronized(messages) {
                 messages[id] = packet
                 // Enforce capacity (remove oldest when exceeded)

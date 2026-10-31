@@ -41,7 +41,10 @@ Map<String, String> _kotlinErrorCodes(String path) => {
 Set<String> _dartErrorCodes(String className) {
   final block = RegExp('abstract final class $className \\{([^}]*)\\}').firstMatch(_read(_dartBridge))?.group(1) ??
       fail('$className not found in $_dartBridge');
-  return {for (final m in RegExp(r"static const \w+ = '([^']+)';").allMatches(block)) m.group(1)!};
+  return {
+    for (final m in RegExp(r"static const\s+\w+\s*=\s*'([^']+)';").allMatches(block))
+      m.group(1)!,
+  };
 }
 
 /// Method names the Kotlin bridge answers. `BitchatFlutterChannels.handle` matches string
@@ -66,7 +69,10 @@ Set<String> _nativeMethods() {
 Map<String, String> _dartConstants(String source, String className) {
   final block = RegExp('abstract final class $className \\{([^}]*)\\}').firstMatch(source)?.group(1) ??
       fail('$className not found in $_dartBridge');
-  return {for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(block)) m.group(1)!: m.group(2)!};
+  return {
+    for (final m in RegExp(r"static const\s+(\w+)\s*=\s*'([^']+)';").allMatches(block))
+      m.group(1)!: m.group(2)!,
+  };
 }
 
 /// Method names `BitchatBridge` invokes, with `ChatMethods.x` / `SettingsMethods.x` /
@@ -78,7 +84,8 @@ Set<String> _dartInvokedMethods() {
   final methodClasses = {
     for (final block in RegExp(r'abstract final class (\w+Methods) \{([^}]*)\}').allMatches(source))
       block.group(1)!: {
-        for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(block.group(2)!)) m.group(1)!: m.group(2)!,
+        for (final m in RegExp(r"static const\s+(\w+)\s*=\s*'([^']+)';").allMatches(block.group(2)!))
+          m.group(1)!: m.group(2)!,
       },
   };
   for (final name in const ['ChatMethods', 'SettingsMethods', 'ExperimentMethods']) {
