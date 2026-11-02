@@ -39,6 +39,13 @@ updates:
   # --write-locks --write-verification-metadata sha256 commands from
   # docs/reproducible-builds.md, reviews every new checksum, and pushes the
   # result. Major updates stay ungrouped so each one gets its own review.
+  #
+  # The same ecosystem also bumps the Gradle wrapper, including
+  # distributionSha256Sum in gradle-wrapper.properties, the only pin on the
+  # Gradle distribution. Do not take that checksum from the PR: compare it with
+  # https://gradle.org/release-checksums/ before merging. A new Gradle can need
+  # the same lock and verification refresh as above. The wrapper is kept out of
+  # the group so it always gets its own PR instead of hiding among libraries.
   - package-ecosystem: gradle
     directory: /
     schedule:
@@ -48,6 +55,7 @@ updates:
     groups:
       gradle-minor-and-patch:
         update-types: [minor, patch]
+        exclude-patterns: [gradle-wrapper]
 
   # Flutter itself is pinned in TOOLCHAIN.env and is not managed here. A bump
   # that pulls in a new flutter_inappwebview_android has to redo its patch in
