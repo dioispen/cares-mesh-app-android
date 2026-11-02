@@ -35,19 +35,6 @@ if [ "$actual_java_version" != "$expected_java_version" ]; then
   exit 1
 fi
 
-# BUILDINFO.json reports the Gradle version the wrapper actually runs. It is read
-# from distributionUrl rather than pinned a second time in TOOLCHAIN.env, where a
-# wrapper bump (e.g. from Dependabot) could leave the copy behind.
-# Parse it as leniently as Gradle does: the file has no eol attribute, so a
-# Windows `git archive` can hand it over with CRLF, and properties syntax allows
-# whitespace around the separator and after the value.
-gradle_version="$(tr -d '\r' <"$PROJECT_ROOT/gradle/wrapper/gradle-wrapper.properties" |
-  sed -nE 's/^[[:space:]]*distributionUrl[[:space:]]*[=:][[:space:]]*.*gradle-([^/]+)-(bin|all)\.zip[[:space:]]*$/\1/p')"
-if [ -z "$gradle_version" ]; then
-  echo "error: cannot read the Gradle version from distributionUrl in gradle-wrapper.properties" >&2
-  exit 1
-fi
-
 "$PROJECT_ROOT/tools/arti-build/verify-checksums.sh"
 
 # settings.gradle.kts applies flutter_ui/.android/include_flutter.groovy, which
@@ -120,7 +107,7 @@ cat > "$OUTPUT_DIR/BUILDINFO.json" <<EOF
   "sourceCommit": "$source_commit",
   "sourceDateEpoch": $SOURCE_DATE_EPOCH,
   "javaVersion": "$JAVA_VERSION",
-  "gradleVersion": "$gradle_version",
+  "gradleVersion": "$GRADLE_VERSION",
   "androidCompileSdk": "$ANDROID_COMPILE_SDK",
   "androidBuildToolsVersion": "$ANDROID_BUILD_TOOLS_VERSION",
   "flutterVersion": "$FLUTTER_VERSION",

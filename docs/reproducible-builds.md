@@ -576,10 +576,8 @@ Studio resolves these outside the build dependency graph, and they are not build
 inputs. Compiled artifacts and dependency metadata remain checksum-verified.
 
 When changing Gradle, update the wrapper and independently verify the new
-distribution SHA-256. `BUILDINFO.json` takes the Gradle version from the
-wrapper's `distributionUrl`, so there is no second pin to move. When changing
-JDK or Android tools, update the exact version, archive checksum, and
-base-image digest together. Native updates follow
+distribution SHA-256. When changing JDK or Android tools, update the exact
+version, archive checksum, and base-image digest together. Native updates follow
 [`tools/arti-build/README.md`](../tools/arti-build/README.md).
 
 ## References
