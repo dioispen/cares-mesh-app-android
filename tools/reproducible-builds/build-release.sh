@@ -38,8 +38,11 @@ fi
 # BUILDINFO.json reports GRADLE_VERSION, but the wrapper decides which Gradle
 # actually runs. Both replicas would use the same wrapper, so the byte
 # comparison cannot catch the two drifting apart (e.g. a Dependabot wrapper bump).
-wrapper_gradle_version="$(sed -nE 's/^distributionUrl=.*gradle-(.+)-(bin|all)\.zip$/\1/p' \
-  "$PROJECT_ROOT/gradle/wrapper/gradle-wrapper.properties")"
+# Parse it as leniently as Gradle does: the file has no eol attribute, so a
+# Windows `git archive` can hand it over with CRLF, and properties syntax allows
+# whitespace around the separator and after the value.
+wrapper_gradle_version="$(tr -d '\r' <"$PROJECT_ROOT/gradle/wrapper/gradle-wrapper.properties" |
+  sed -nE 's/^[[:space:]]*distributionUrl[[:space:]]*[=:][[:space:]]*.*gradle-([^/]+)-(bin|all)\.zip[[:space:]]*$/\1/p')"
 if [ "$wrapper_gradle_version" != "$GRADLE_VERSION" ]; then
   echo "error: TOOLCHAIN.env pins Gradle $GRADLE_VERSION; the wrapper uses ${wrapper_gradle_version:-an unparseable distributionUrl}" >&2
   exit 1
