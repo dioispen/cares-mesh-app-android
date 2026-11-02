@@ -19,6 +19,10 @@
 #   of the app.
 version: 2
 updates:
+  # PR CI only runs android-build.yml. release.yml runs on tags, so a breaking
+  # major of an action it uses (attest-build-provenance, upload/download-
+  # artifact) would only surface at release time. Majors stay ungrouped so
+  # each one gets its own review against release.yml.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -27,7 +31,7 @@ updates:
       prefix: chore
     groups:
       github-actions:
-        patterns: ["*"]
+        update-types: [minor, patch]
 
   # Dependabot edits gradle/libs.versions.toml but cannot regenerate the
   # strict gradle.lockfile files or gradle/verification-metadata.xml, so these
@@ -35,6 +39,11 @@ updates:
   # --write-locks --write-verification-metadata sha256 commands from
   # docs/reproducible-builds.md, reviews every new checksum, and pushes the
   # result. Major updates stay ungrouped so each one gets its own review.
+  #
+  # The gradle ecosystem also bumps gradle/wrapper/gradle-wrapper.properties.
+  # Such a PR must also move GRADLE_VERSION in TOOLCHAIN.env, which
+  # BUILDINFO.json reports; build-release.sh fails the reproducible build
+  # until it does.
   - package-ecosystem: gradle
     directory: /
     schedule:

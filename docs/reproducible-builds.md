@@ -575,8 +575,9 @@ attachments (`*-javadoc.jar`, `*-sources.jar`, and Gradle's `*-src.zip`). Androi
 Studio resolves these outside the build dependency graph, and they are not build
 inputs. Compiled artifacts and dependency metadata remain checksum-verified.
 
-When changing Gradle, update the wrapper and independently verify the new
-distribution SHA-256. When changing JDK or Android tools, update the exact
+When changing Gradle, update the wrapper and `GRADLE_VERSION` in
+`TOOLCHAIN.env` together, and independently verify the new distribution
+SHA-256. `build-release.sh` refuses to build when the two differ. When changing JDK or Android tools, update the exact
 version, archive checksum, and base-image digest together. Native updates follow
 [`tools/arti-build/README.md`](../tools/arti-build/README.md).
 
