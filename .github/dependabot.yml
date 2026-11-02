@@ -39,11 +39,6 @@ updates:
   # --write-locks --write-verification-metadata sha256 commands from
   # docs/reproducible-builds.md, reviews every new checksum, and pushes the
   # result. Major updates stay ungrouped so each one gets its own review.
-  #
-  # The gradle ecosystem also bumps gradle/wrapper/gradle-wrapper.properties.
-  # Such a PR must also move GRADLE_VERSION in TOOLCHAIN.env, which
-  # BUILDINFO.json reports; build-release.sh fails the reproducible build
-  # until it does.
   - package-ecosystem: gradle
     directory: /
     schedule:
