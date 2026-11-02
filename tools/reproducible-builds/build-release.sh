@@ -35,6 +35,16 @@ if [ "$actual_java_version" != "$expected_java_version" ]; then
   exit 1
 fi
 
+# BUILDINFO.json reports GRADLE_VERSION, but the wrapper decides which Gradle
+# actually runs. Both replicas would use the same wrapper, so the byte
+# comparison cannot catch the two drifting apart (e.g. a Dependabot wrapper bump).
+wrapper_gradle_version="$(sed -nE 's/^distributionUrl=.*gradle-(.+)-(bin|all)\.zip$/\1/p' \
+  "$PROJECT_ROOT/gradle/wrapper/gradle-wrapper.properties")"
+if [ "$wrapper_gradle_version" != "$GRADLE_VERSION" ]; then
+  echo "error: TOOLCHAIN.env pins Gradle $GRADLE_VERSION; the wrapper uses ${wrapper_gradle_version:-an unparseable distributionUrl}" >&2
+  exit 1
+fi
+
 "$PROJECT_ROOT/tools/arti-build/verify-checksums.sh"
 
 # settings.gradle.kts applies flutter_ui/.android/include_flutter.groovy, which
