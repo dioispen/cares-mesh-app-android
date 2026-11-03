@@ -22,6 +22,11 @@ service cloud.firestore {
       return request.auth != null && userId == request.auth.uid;
     }
 
+    function isAdmin() {
+      return request.auth != null
+          && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
     // 健康回報的狀況調查：依 ADR-0007 拆在兩份文件（Detail Tier 的 survey、Sensitive Tier
     // 的 surveySensitive）。只檢查最外層的 keys() 擋不到巢狀 map 裡的內容，所以這兩個欄位
     // 自己也要用 hasOnly() 鎖住，敏感項目才不會誤寫進大家都讀得到的 Detail Tier。
@@ -268,6 +273,55 @@ service cloud.firestore {
                          ['pledged', 'delivered', 'cancelled'];
 
       allow delete: if isOwner(resource.data.userId);
+    }
+
+    // Mesh-relayed supply events are immutable and deduplicated by Packet ID.
+    // Signed-in clients may get a known ID for an upload transaction, but only
+    // Administrators may list the collection.
+    match /mesh_supply_packets/{packetId} {
+      function validPacket() {
+        return request.auth != null
+            && packetId.matches('^[0-9a-f]{32}$')
+            && request.resource.data.keys().hasOnly([
+                 'schemaVersion', 'packetId', 'packetType', 'payloadVersion',
+                 'action', 'originPeerId', 'itemId', 'itemName', 'quantity',
+                 'unit', 'createdAt', 'rawPacket', 'gatewayUid', 'receivedAt'
+               ])
+            && request.resource.data.keys().hasAll([
+                 'schemaVersion', 'packetId', 'packetType', 'payloadVersion',
+                 'action', 'originPeerId', 'itemId', 'itemName', 'quantity',
+                 'unit', 'createdAt', 'rawPacket', 'gatewayUid', 'receivedAt'
+               ])
+            && request.resource.data.schemaVersion == 1
+            && request.resource.data.packetId == packetId
+            && request.resource.data.packetType == 49
+            && request.resource.data.payloadVersion == 1
+            && request.resource.data.action in ['request', 'offer']
+            && request.resource.data.originPeerId is string
+            && request.resource.data.originPeerId.matches('^[0-9a-f]{16}$')
+            && request.resource.data.itemId is string
+            && request.resource.data.itemId.size() > 0
+            && request.resource.data.itemId.size() <= 128
+            && request.resource.data.itemName is string
+            && request.resource.data.itemName.size() > 0
+            && request.resource.data.itemName.size() <= 256
+            && request.resource.data.quantity is int
+            && request.resource.data.quantity > 0
+            && request.resource.data.quantity <= 4294967295
+            && request.resource.data.unit is string
+            && request.resource.data.unit.size() > 0
+            && request.resource.data.unit.size() <= 64
+            && request.resource.data.createdAt is timestamp
+            && request.resource.data.rawPacket is string
+            && request.resource.data.rawPacket.size() <= 8192
+            && request.resource.data.gatewayUid == request.auth.uid
+            && request.resource.data.receivedAt == request.time;
+      }
+
+      allow get: if request.auth != null;
+      allow list: if isAdmin();
+      allow create: if validPacket();
+      allow update, delete: if false;
     }
 
     // 舊版 pledges 路徑保留既有擁有者保護，避免影響尚未遷移的資料。

@@ -117,6 +117,8 @@ tools/reproducible-builds/run-in-container.sh bash -c 'cd flutter_ui && flutter 
 
 **任何規則變更都必須走 PR**，與其他程式碼相同（見 [CONTRIBUTING.md](CONTRIBUTING.md)）。不要直接在 Firebase 主控台編輯規則——主控台的改動不會回到 repo，下一次部署就會被覆蓋掉。
 
+Mesh 物資需求／捐贈封包的 collection、欄位與 Firebase 設定見 [`docs/MESH_SUPPLY_PACKETS.md`](docs/MESH_SUPPLY_PACKETS.md)。
+
 部署（需要該 Firebase 專案的權限；由專案擁有者執行）：
 
 ```bash

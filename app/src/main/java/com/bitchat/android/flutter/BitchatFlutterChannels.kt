@@ -16,6 +16,7 @@ import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.SupplyExchangePacket
 import com.bitchat.android.util.toHexString
 import com.google.gson.Gson
 import io.flutter.plugin.common.BinaryMessenger
@@ -217,6 +218,36 @@ class BitchatFlutterChannels(
                         result.success(true)
                     } else {
                         result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
+                    }
+                } catch (e: Exception) {
+                    result.error("SEND_FAILED", e.message, null)
+                }
+            }
+
+            "sendSupplyExchange" -> {
+                try {
+                    val values = call.arguments as? Map<*, *>
+                        ?: run {
+                            result.error("INVALID_FORMAT", "Expected a supply packet map", null)
+                            return true
+                        }
+                    val payload = SupplyExchangePacket.fromMap(values)?.encode()
+                    if (payload == null) {
+                        result.error("INVALID_FORMAT", "Invalid supply packet fields", null)
+                        return true
+                    }
+                    if (MeshServiceHolder.meshService?.isStarted() != true) {
+                        result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
+                        return true
+                    }
+                    if (!com.bitchat.android.service.SupplyExchangeBroadcast.send(
+                            MeshServiceHolder.meshService,
+                            payload
+                        )
+                    ) {
+                        result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
+                    } else {
+                        result.success(true)
                     }
                 } catch (e: Exception) {
                     result.error("SEND_FAILED", e.message, null)

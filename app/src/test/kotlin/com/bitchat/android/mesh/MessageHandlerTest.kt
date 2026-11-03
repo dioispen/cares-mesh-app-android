@@ -17,6 +17,8 @@ import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
+import com.bitchat.android.protocol.SupplyExchangeAction
+import com.bitchat.android.protocol.SupplyExchangePacket
 import com.bitchat.android.services.meshgraph.MeshGraphService
 import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.runBlocking
@@ -324,6 +326,55 @@ class MessageHandlerTest {
             verify(delegate).onMessageReceived(any())
             assertEquals(1, forwarded.size)
             assertArrayEquals(healthReportData(), forwarded.single().payload)
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun `valid supply exchange packet is published to background listeners`() = runBlocking {
+        val forwarded = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { forwarded.add(it) }
+        InboundPacketBridge.addListener(listener)
+        try {
+            val payload = SupplyExchangePacket(
+                SupplyExchangeAction.OFFER,
+                itemId = "water",
+                itemName = "礦泉水",
+                quantity = 2,
+                unit = "瓶"
+            ).encode()
+            val packet = BitchatPacket(
+                type = MessageType.SUPPLY_EXCHANGE.value,
+                ttl = 7u,
+                senderID = peerID,
+                payload = payload
+            )
+
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+            assertEquals(listOf(packet), forwarded)
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun `malformed supply exchange packet is not published`() = runBlocking {
+        val forwarded = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { forwarded.add(it) }
+        InboundPacketBridge.addListener(listener)
+        try {
+            val packet = BitchatPacket(
+                type = MessageType.SUPPLY_EXCHANGE.value,
+                ttl = 7u,
+                senderID = peerID,
+                payload = byteArrayOf(1, 3)
+            )
+
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+
+            assertTrue(forwarded.isEmpty())
         } finally {
             InboundPacketBridge.removeListener(listener)
         }

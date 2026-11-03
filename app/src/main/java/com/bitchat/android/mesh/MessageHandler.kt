@@ -420,16 +420,26 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         val recipientID = packet.recipientID?.takeIf { !it.contentEquals(delegate?.getBroadcastRecipient()) }
 
         if (recipientID == null) {
-            if (packet.type == MessageType.HEALTH_REPORT.value) {
-                handleTaggedBroadcast(routed)
-            } else {
-                handleBroadcastMessage(routed)
+            when (packet.type) {
+                MessageType.HEALTH_REPORT.value -> handleTaggedBroadcast(routed)
+                MessageType.SUPPLY_EXCHANGE.value -> handleSupplyExchange(routed)
+                else -> handleBroadcastMessage(routed)
             }
         } else if (recipientID.toHexString() == myPeerID) {
             // PRIVATE MESSAGE FOR US
             handlePrivateMessage(packet, peerID)
         }
+
         // Message relay is now handled by centralized PacketRelayManager
+    }
+
+    private fun handleSupplyExchange(routed: RoutedPacket) {
+        val packet = routed.packet
+        if (com.bitchat.android.protocol.SupplyExchangePacket.decode(packet.payload) == null) {
+            Log.w(TAG, "Dropping malformed supply exchange packet")
+            return
+        }
+        InboundPacketBridge.onPacketReceived?.invoke(packet)
     }
 
     /** Validate and ingest an ephemeral public push-to-talk frame. */

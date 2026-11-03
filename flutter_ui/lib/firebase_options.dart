@@ -47,11 +47,11 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyD7lXRGmxGp7NoOocsHgaL4PSfuN9PLLQg',
-    appId: '1:412525981883:android:675d8deb44cfd88e6cb99e',
-    messagingSenderId: '412525981883',
-    projectId: 'disaster-app-b2370',
-    storageBucket: 'disaster-app-b2370.firebasestorage.app',
+    apiKey: 'AIzaSyAhKVLrEYJsvtOYuaIPOVNwtoKt3h5T8eo',
+    appId: '1:1037557501335:android:d1ba1d6e1f83d99a6b48d2',
+    messagingSenderId: '1037557501335',
+    projectId: 'bitchat-android-disaster-app',
+    storageBucket: 'bitchat-android-disaster-app.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
