@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/health_report_delivery.dart';
 import 'package:flutter_ui/models/user.dart';
+import 'package:flutter_ui/screens/sos_screen.dart' show sosDeliveryMessage;
 import 'package:flutter_ui/services/sos.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -234,68 +236,67 @@ void main() {
     });
   });
 
-  group('SosDelivery：mesh 與雲端兩條路的結果', () {
+  group('sosDeliveryMessage 與兩條路的結果', () {
     test('都送出、有位置', () {
-      const d = SosDelivery(withLocation: true);
+      const d = HealthReportDelivery(withLocation: true);
 
-      expect(d.message, 'SOS 已發送，請保持冷靜等待救援。');
+      expect(sosDeliveryMessage(d), 'SOS 已發送，請保持冷靜等待救援。');
       expect(d.complete, isTrue);
       expect(d.failed, isFalse);
     });
 
     test('都送出、沒有位置', () {
-      const d = SosDelivery(withLocation: false);
+      const d = HealthReportDelivery(withLocation: false);
 
-      expect(d.message, 'SOS 已發送，但沒有附上位置，請設法告知所在地。');
-      expect(d.complete, isFalse);
+      expect(sosDeliveryMessage(d), 'SOS 已發送，但沒有附上位置，請設法告知所在地。');
     });
 
     test('mesh 已送出、雲端逾時：說附近裝置已收到，不是失敗', () {
-      const d = SosDelivery(withLocation: true, uploadQueued: true);
+      const d = HealthReportDelivery(withLocation: true, uploadQueued: true);
 
-      expect(d.message, '附近裝置已收到求救，雲端尚未上傳，恢復連線後會自動送出。');
+      expect(sosDeliveryMessage(d), '附近裝置已收到求救，雲端尚未上傳，恢復連線後會自動送出。');
       expect(d.failed, isFalse);
       expect(d.complete, isFalse);
     });
 
     test('mesh 已送出、雲端失敗', () {
-      const d = SosDelivery(withLocation: true, uploadFailure: 'permission-denied');
+      const d = HealthReportDelivery(withLocation: true, uploadFailure: 'permission-denied');
 
-      expect(d.message, '附近裝置已收到求救，但雲端上傳失敗（permission-denied）。');
+      expect(sosDeliveryMessage(d), '附近裝置已收到求救，但雲端上傳失敗（permission-denied）。');
       expect(d.failed, isFalse);
     });
 
     test('mesh 失敗、雲端送到', () {
-      const d = SosDelivery(withLocation: true, broadcastFailure: 'mesh 尚未啟動');
+      const d = HealthReportDelivery(withLocation: true, broadcastFailure: 'mesh 尚未啟動');
 
-      expect(d.message, '求救已上傳雲端，但附近廣播失敗（mesh 尚未啟動）。');
+      expect(sosDeliveryMessage(d), '求救已上傳雲端，但附近廣播失敗（mesh 尚未啟動）。');
       expect(d.failed, isFalse);
     });
 
     test('mesh 失敗、雲端暫存', () {
-      const d = SosDelivery(withLocation: true, broadcastFailure: 'mesh 尚未啟動', uploadQueued: true);
+      const d = HealthReportDelivery(withLocation: true, broadcastFailure: 'mesh 尚未啟動', uploadQueued: true);
 
-      expect(d.message, '目前離線，附近廣播也失敗（mesh 尚未啟動）。求救已暫存，恢復連線後會自動送出。');
+      expect(sosDeliveryMessage(d), '目前離線，附近廣播也失敗（mesh 尚未啟動）。求救已暫存，恢復連線後會自動送出。');
       expect(d.failed, isFalse);
     });
 
     test('兩條路都失敗', () {
-      const d = SosDelivery(withLocation: true, broadcastFailure: 'mesh 尚未啟動', uploadFailure: 'unavailable');
+      const d = HealthReportDelivery(withLocation: true, broadcastFailure: 'mesh 尚未啟動', uploadFailure: 'unavailable');
 
-      expect(d.message, '發送失敗：附近廣播失敗（mesh 尚未啟動），雲端上傳也失敗（unavailable）。請再試一次。');
+      expect(sosDeliveryMessage(d), '發送失敗：附近廣播失敗（mesh 尚未啟動），雲端上傳也失敗（unavailable）。請再試一次。');
       expect(d.failed, isTrue);
     });
 
     test('reachedSomeone：mesh 送出、或雲端確認收到，才算有人收到', () {
-      expect(const SosDelivery(withLocation: true).reachedSomeone, isTrue);
-      expect(const SosDelivery(withLocation: true, uploadQueued: true).reachedSomeone, isTrue);
-      expect(const SosDelivery(withLocation: true, broadcastFailure: 'x').reachedSomeone, isTrue);
-      expect(const SosDelivery(withLocation: true, broadcastFailure: 'x', uploadQueued: true).reachedSomeone, isFalse);
-      expect(const SosDelivery(withLocation: true, broadcastFailure: 'x', uploadFailure: 'y').reachedSomeone, isFalse);
+      expect(const HealthReportDelivery(withLocation: true).reachedSomeone, isTrue);
+      expect(const HealthReportDelivery(withLocation: true, uploadQueued: true).reachedSomeone, isTrue);
+      expect(const HealthReportDelivery(withLocation: true, broadcastFailure: 'x').reachedSomeone, isTrue);
+      expect(const HealthReportDelivery(withLocation: true, broadcastFailure: 'x', uploadQueued: true).reachedSomeone, isFalse);
+      expect(const HealthReportDelivery(withLocation: true, broadcastFailure: 'x', uploadFailure: 'y').reachedSomeone, isFalse);
     });
 
     test('withUpload：暫存的上傳之後送到或失敗，其餘結果不變', () {
-      const queued = SosDelivery(withLocation: false, broadcastFailure: 'x', uploadQueued: true);
+      const queued = HealthReportDelivery(withLocation: false, broadcastFailure: 'x', uploadQueued: true);
 
       final arrived = queued.withUpload();
       expect((arrived.withLocation, arrived.broadcastFailure, arrived.uploadQueued, arrived.uploadFailure),
@@ -306,9 +307,9 @@ void main() {
     });
 
     test('有但書又沒有位置時，兩件事都要說', () {
-      const d = SosDelivery(withLocation: false, uploadQueued: true);
+      const d = HealthReportDelivery(withLocation: false, uploadQueued: true);
 
-      expect(d.message, '附近裝置已收到求救，雲端尚未上傳，恢復連線後會自動送出。沒有附上位置，請設法告知所在地。');
+      expect(sosDeliveryMessage(d), '附近裝置已收到求救，雲端尚未上傳，恢復連線後會自動送出。沒有附上位置，請設法告知所在地。');
     });
   });
 }

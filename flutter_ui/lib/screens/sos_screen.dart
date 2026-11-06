@@ -15,6 +15,22 @@ import '../services/own_report_cache.dart';
 import '../services/sos.dart';
 import '../widgets/fill_or_scroll.dart';
 
+/// SOS 的求救要怎麼告訴使用者：兩條路各自的狀況，以及有沒有附上位置。
+///
+/// 斷網是災害現場的常態：mesh 已送出而雲端逾時，要說「附近裝置已收到」，不能說成失敗。
+String sosDeliveryMessage(HealthReportDelivery delivery) {
+  final outcome = switch ((delivery.broadcastFailure, delivery.uploadFailure)) {
+    (null, null) when delivery.uploadQueued => '附近裝置已收到求救，雲端尚未上傳，恢復連線後會自動送出。',
+    (final broadcast?, null) when delivery.uploadQueued => '目前離線，附近廣播也失敗（$broadcast）。求救已暫存，恢復連線後會自動送出。',
+    (null, null) => delivery.withLocation ? 'SOS 已發送，請保持冷靜等待救援。' : 'SOS 已發送，但沒有附上位置，請設法告知所在地。',
+    (final broadcast?, null) => '求救已上傳雲端，但附近廣播失敗（$broadcast）。',
+    (null, final upload?) => '附近裝置已收到求救，但雲端上傳失敗（$upload）。',
+    (final broadcast?, final upload?) => '發送失敗：附近廣播失敗（$broadcast），雲端上傳也失敗（$upload）。請再試一次。',
+  };
+  final caveatAlreadySaid = delivery.failed || delivery.complete;
+  return delivery.withLocation || caveatAlreadySaid ? outcome : '$outcome沒有附上位置，請設法告知所在地。';
+}
+
 /// 一份帶（或撤回）SOS 的 Health Report 經兩條路送出的結果，還沒換成給使用者看的說法。
 typedef _Sent = ({
   String? broadcastFailure,
@@ -84,7 +100,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   bool _isSending = false;
 
   /// 這次進到畫面後最近一次舉起 SOS 的結果；從之前就舉著、這次還沒送過時為 null。
-  SosDelivery? _delivery;
+  HealthReportDelivery? _delivery;
 
   /// 上面那次送出用的 Status 與位置，定位晚到時據此補送。沒有位置時 [_sentPosition] 為 null。
   String? _sentStatus;
@@ -309,7 +325,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         position: position,
         previousStatus: last.status,
       );
-      final delivery = SosDelivery(
+      final delivery = HealthReportDelivery(
         withLocation: position != null,
         broadcastFailure: sent.broadcastFailure,
         uploadFailure: sent.uploadFailure,
@@ -317,7 +333,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       );
       if (delivery.failed) {
         // 誰都沒收到：不算舉起，按鈕維持可以再按。
-        _showMessage(delivery.message, _sosRed);
+        _showMessage(sosDeliveryMessage(delivery), _sosRed);
         return;
       }
 
@@ -329,7 +345,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         _sentStatus = raise.report.status;
         _sentPosition = position;
       });
-      if (!delivery.complete) _showMessage(delivery.message, _caveat);
+      if (!_isFullyDelivered(delivery)) _showMessage(sosDeliveryMessage(delivery), _caveat);
       if (delivery.reachedSomeone) _playSuccessSound();
       if (sent.uploadQueued) {
         unawaited(_followQueuedUpload(sent.upload, announce: !delivery.reachedSomeone));
@@ -361,7 +377,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     setState(() => _isSending = true);
     try {
       final sent = await _send(user, (status: status, sos: true), position: fix, previousStatus: status);
-      final followUp = SosDelivery(
+      final followUp = HealthReportDelivery(
         withLocation: true,
         broadcastFailure: sent.broadcastFailure,
         uploadFailure: sent.uploadFailure,
@@ -403,7 +419,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       );
       if (delivery.failed) {
         // 誰都沒收到撤回：附近的人與雲端都還看到 SOS，畫面不能說已撤回。
-        _showMessage('撤回失敗，SOS 仍在。${delivery.message(withdraw.report.status)}', _sosRed);
+        _showMessage('撤回失敗，SOS 仍在。${reportDeliveryMessage(delivery, withdraw.report.status)}', _sosRed);
         return;
       }
       if (sent.uploadQueued) {
@@ -419,7 +435,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         _sentPosition = null;
       });
       _showMessage(
-        '已撤回 SOS。${delivery.message(withdraw.report.status)}',
+        '已撤回 SOS。${reportDeliveryMessage(delivery, withdraw.report.status)}',
         delivery.complete ? _green : _caveat,
       );
     } catch (e) {
@@ -582,6 +598,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
   }
 
+  /// 兩條路都送到，也附上了位置。少一樣都有但書，畫面不給全綠。
+  static bool _isFullyDelivered(HealthReportDelivery delivery) => delivery.complete && delivery.withLocation;
+
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _showMessage(String message, Color color) {
     if (!mounted) return null;
     // SnackBar 是排隊一個一個顯示的。不先收掉舊的，送出結果要等前面的提示播完才看得到。
@@ -603,14 +622,15 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     if (!_raised) return _sosRed;
     final delivery = _delivery;
     if (delivery == null) return _sosRed;
-    return delivery.complete ? _green : _caveat;
+    return _isFullyDelivered(delivery) ? _green : _caveat;
   }
 
   /// 上方橫幅的文字。送出之後要照實說明兩條路各自的狀況，以及有沒有附上位置。
   String get _statusMessage {
     if (!_raised) return '長按下方按鈕 3 秒發出求救訊號';
     // 之前就舉著、這次進來還沒送過：不知道當時送到哪裡，只說 SOS 還在。
-    return _delivery?.message ?? 'SOS 舉起中：之後的每份健康回報都會帶著 SOS，直到撤回或回報「安全」。';
+    final delivery = _delivery;
+    return delivery != null ? sosDeliveryMessage(delivery) : 'SOS 舉起中：之後的每份健康回報都會帶著 SOS，直到撤回或回報「安全」。';
   }
 
   String get _locationText {
@@ -665,7 +685,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                     Icon(
                       !_raised
                           ? Icons.info_outline_rounded
-                          : (_delivery?.complete ?? false)
+                          : (_delivery != null && _isFullyDelivered(_delivery!))
                               ? Icons.check_circle_rounded
                               : Icons.warning_amber_rounded,
                       color: _statusColor,

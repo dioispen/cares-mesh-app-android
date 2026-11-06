@@ -608,7 +608,7 @@ class _HealthScreenState extends State<HealthScreen>
       if (delivery.failed) {
         // 兩條路都沒送出：誰都沒收到這份回報，畫面不能顯示已回報。
         _revertStatus(previousStatus, previousSubInjury);
-        _showTaskSnackBar(delivery.message(status), _red);
+        _showTaskSnackBar(reportDeliveryMessage(delivery, status), _red);
         return;
       }
 
@@ -624,7 +624,7 @@ class _HealthScreenState extends State<HealthScreen>
 
       if (!mounted) return;
       _showTaskSnackBar(
-        raisedNow ? '已舉起 SOS。${delivery.message(status)}' : delivery.message(status),
+        raisedNow ? '已舉起 SOS。${reportDeliveryMessage(delivery, status)}' : reportDeliveryMessage(delivery, status),
         delivery.complete ? _statusColor() : _orange,
       );
     } catch (e) {
