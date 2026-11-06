@@ -97,15 +97,30 @@ enum CloudSosWrite {
   patch,
 }
 
-/// Status 改變、或還沒有文件（[previousStatus] 為 null）時整份寫入。另外，已完成（`done`）的
-/// 任務又舉起 SOS 時也重新開一筆，否則這次求救不會出現在任何人的待救援清單上。
+/// 這份回報要不要讓任務回到等待中（`taskStatus`／`helperId`）。健康回報與 SOS 都照這條規則。
+///
+/// 內容變了（Status 改變、還沒有文件時 [previousStatus] 為 null，或 [injuryChanged]），沿用舊的
+/// 認領會讓協助者看到對不上的任務。已完成（`done`）的任務又帶著 SOS 也重新開一筆，否則這次求救
+/// 不會出現在任何人的待救援清單上。其餘情況不動：重送相同內容不該讓路上的協助者丟掉任務。
+bool reportResetsTask({
+  required String? previousStatus,
+  required String status,
+  bool injuryChanged = false,
+  required bool sos,
+  String? taskStatus,
+}) =>
+    previousStatus != status || injuryChanged || (sos && taskStatus == 'done');
+
+/// [reportResetsTask] 成立時整份寫入，否則只改那幾個欄位。
 CloudSosWrite cloudSosWriteFor({
   required String? previousStatus,
   required String status,
   required bool sos,
   String? taskStatus,
 }) =>
-    previousStatus != status || (sos && taskStatus == 'done') ? CloudSosWrite.replace : CloudSosWrite.patch;
+    reportResetsTask(previousStatus: previousStatus, status: status, sos: sos, taskStatus: taskStatus)
+        ? CloudSosWrite.replace
+        : CloudSosWrite.patch;
 
 /// 寫進 `health_reports/{uid}` 的欄位（Detail Tier，ADR-0005）。
 ///

@@ -153,12 +153,6 @@ class HealthSurvey {
     );
   }
 
-  /// 只換掉 Sensitive Tier 那一半（本人另外讀回 health_report_sensitive 時用）。
-  HealthSurvey withSensitive(Map<String, dynamic>? sensitive) {
-    final s = HealthSurvey.fromMaps(sensitive: sensitive);
-    return copyWith(vulnerable: s.vulnerable, selfVulnerable: s.selfVulnerable, notes: s.notes);
-  }
-
   /// 改同住或同行的人數。改成 0 時，需要特別照顧的「人」已經沒有對象，一併清掉；寵物不算在人數裡，保留。
   HealthSurvey withCompanions(int companions) => copyWith(
         companions: companions,

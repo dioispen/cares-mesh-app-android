@@ -16,8 +16,8 @@ import '../bridge/bitchat_bridge.dart';
 import '../protocol/ble_packet_decoder.dart';
 import '../services/mascot_service.dart';
 import '../services/mutual_aid_tasks.dart';
-import '../services/own_report_cache.dart';
-import '../services/sos.dart';
+import '../services/health_report_publisher.dart';
+import '../services/sos.dart' show SosState;
 import '../widgets/health_survey_form.dart';
 import 'sos_screen.dart';
 
@@ -26,7 +26,10 @@ HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
     HealthReportPayload.decode(payload);
     
 class HealthScreen extends StatefulWidget {
-  const HealthScreen({super.key});
+  const HealthScreen({super.key, this.publisher});
+
+  /// 測試用；預設為 app 層級的 [HealthReportPublisher.instance]。
+  final HealthReportPublisher? publisher;
 
   @override
   State<HealthScreen> createState() => _HealthScreenState();
@@ -34,19 +37,17 @@ class HealthScreen extends StatefulWidget {
 
 class _HealthScreenState extends State<HealthScreen>
     with SingleTickerProviderStateMixin, RouteAware {
+  HealthReportPublisher get _publisher => widget.publisher ?? HealthReportPublisher.instance;
+
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
   late TabController _tabController;
 
-  /// 自己是否正舉著 SOS。只用來顯示；送出時以 [SosStore] 為準，SOS 畫面可能在這之間改過它。
+  /// 自己是否正舉著 SOS。只用來顯示；送出時以 [HealthReportPublisher] 為準，SOS 畫面可能在這之間改過它。
   SosState _sosState = const SosState.lowered();
 
   /// 自己上一次回報的狀況調查，用來帶入表單；還沒回報過時是空白表單。
   HealthSurvey _mySurvey = const HealthSurvey();
-
-  /// 自己 Sensitive Tier 裡的那一半調查（需要特別照顧的人、補充說明）。只有本人讀得到，
-  /// 開頁時讀一次；Detail Tier 的監聽每次更新都要把它併回去，表單才完整。
-  Map<String, dynamic>? _ownSensitiveSurvey;
 
   Position? _currentPosition;
   String? _currentUserId;
@@ -54,14 +55,11 @@ class _HealthScreenState extends State<HealthScreen>
   /// 自己是不是 Verified Rescuer（rescuers/{uid} 存在）。只用來決定詳情畫面怎麼說明，
   /// 真正的把關在 firestore.rules。
   bool _isVerifiedRescuer = false;
-  String? _myBroadcastHandle;
-  Future<String>? _broadcastHandleFuture;
   List<ReportEntry> _reports = [];
   List<BleTaskEntry> _bleTaskEntries = [];
   final Map<String, TaskStatus> _taskStatusOverrides = {};
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tasksSubscription;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
-      _ownReportSubscription;
+  StreamSubscription<OwnReport>? _ownReportSubscription;
   StreamSubscription? _bridgeSubscription;
 
   /// 第一批任務資料還沒到 vs. 真的沒有任務——這兩件事要分開講，
@@ -145,7 +143,7 @@ class _HealthScreenState extends State<HealthScreen>
   }
 
   Future<void> _loadSosState(String uid) async {
-    final state = await SosStore.load(uid);
+    final state = await _publisher.sosState(uid);
     if (mounted) setState(() => _sosState = state);
   }
 
@@ -172,12 +170,7 @@ class _HealthScreenState extends State<HealthScreen>
       if (!mounted) return;
 
       // 不顯示自己發出的報告（Broadcast Tier 沒有帳號 ID，以廣播 handle 比對）。
-      // handle 是非同步載入的，還沒備好就比對會把自己的廣播當成別人的求助，
-      // 所以這裡等它產生／讀取完成再判斷。
-      final myHandle = _myBroadcastHandle ??
-          await _getOrCreateBroadcastHandle(
-              await SharedPreferences.getInstance());
-      if (decoded.reporterHandle == myHandle) return;
+      if (decoded.reporterHandle == await _publisher.reporterHandle()) return;
       if (!mounted) return;
 
       final report = decoded.toBroadcastReport();
@@ -219,18 +212,9 @@ class _HealthScreenState extends State<HealthScreen>
     });
   }
 
-  /// 取得（或首次產生）本機的 Reporter Handle（[loadOrCreateReporterHandle]），供接收端
-  /// 過濾自己的回報用。
-  ///
-  /// 用 [_broadcastHandleFuture] memoize，確保 initState 與使用者點擊兩條 async 路徑
-  /// 不會各自產生並寫入不同的隨機值。
-  Future<String> _getOrCreateBroadcastHandle(SharedPreferences prefs) {
-    return _broadcastHandleFuture ??= loadOrCreateReporterHandle(prefs);
-  }
-
   /// 舊版存在不分帳號的 'health_status'／'health_sub_injury' 裡：同一台裝置
   /// A 帳號回報「輕傷／割傷」後登出，B 帳號登入時會讀到同一份值，看起來像兩個
-  /// 帳號的健康狀態被同步了。現在的快取綁 uid（[OwnStatusCache]）。
+  /// 帳號的健康狀態被同步了。現在的快取綁 uid（`OwnStatusCache`）。
   static const _legacyStatusKey = 'health_status';
   static const _legacySubInjuryKey = 'health_sub_injury';
 
@@ -252,11 +236,8 @@ class _HealthScreenState extends State<HealthScreen>
     final uid = user?.id ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid != null && mounted) setState(() => _currentUserId = uid);
 
-    final handle = await _getOrCreateBroadcastHandle(prefs);
-    if (mounted) setState(() => _myBroadcastHandle = handle);
-
     if (uid != null) {
-      final saved = await OwnStatusCache.load(uid);
+      final saved = await _publisher.lastStatus(uid);
       if (mounted) {
         setState(() {
           if (saved.status != null) _selectedStatus = saved.status!;
@@ -298,66 +279,17 @@ class _HealthScreenState extends State<HealthScreen>
     }
   }
 
-  /// 訂閱自己那份回報文件，讓「我的狀態」以後端為準。
-  ///
-  /// 一人一筆之後文件 ID 就是 uid，所以這裡只讀自己的文件：換帳號登入不可能
-  /// 看到別人的狀態，換裝置或從別的裝置改狀態也會同步過來。
-  /// 本機快取只是監聽還沒回來前的離線初值。
+  /// 訂閱自己的回報，讓「我的狀態」以後端為準。本機記得的狀態只是監聽還沒回來前的離線初值。
   void _subscribeToOwnReport(String uid) {
-    unawaited(_loadOwnSensitiveSurvey(uid));
     _ownReportSubscription?.cancel();
-    _ownReportSubscription = FirebaseFirestore.instance
-        .collection('health_reports')
-        .doc(uid)
-        .snapshots()
-        .listen((doc) async {
-      final data = doc.data();
-      // 文件 ID 是 uid 不代表內容是自己寫的：規則補上「ID 必須是自己 uid」之前，
-      // 別人可以搶先建立這份文件。reporterId 對不上就不能當成自己的狀態顯示。
-      if (doc.exists && data?['reporterId'] != uid) {
-        debugPrint('health_reports/$uid has a foreign reporterId, ignoring');
-        return;
-      }
-      final status = data?['status'] as String?;
-      if (!doc.exists || status == null) {
-        // 後端沒有這份文件時不清掉本機顯示的狀態——寧可留著待確認的傷勢，也不要把
-        // 使用者的回報悄悄降級成「尚未回報」。
-        return;
-      }
-      final subInjury = data?['description'] as String?;
-      final survey = data?['survey'];
-      if (mounted) {
-        setState(() {
-          _selectedStatus = status;
-          _selectedSubInjury = subInjury;
-          _mySurvey = HealthSurvey.fromMaps(
-            description: subInjury,
-            detail: survey is Map ? Map<String, dynamic>.from(survey) : null,
-            sensitive: _ownSensitiveSurvey,
-          );
-        });
-      }
-      await OwnStatusCache.save(uid, status, subInjury);
-    }, onError: (Object e) => debugPrint('own report stream failed: $e'));
-  }
-
-  /// 讀回自己 Sensitive Tier 那一半調查。讀不到（離線、還沒回報過）就留空，不擋畫面。
-  Future<void> _loadOwnSensitiveSurvey(String uid) async {
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('health_report_sensitive')
-          .doc(uid)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      final survey = doc.data()?['surveySensitive'];
-      if (survey is! Map || !mounted) return;
+    _ownReportSubscription = _publisher.watchOwnReport(uid).listen((own) {
+      if (!mounted) return;
       setState(() {
-        _ownSensitiveSurvey = Map<String, dynamic>.from(survey);
-        _mySurvey = _mySurvey.withSensitive(_ownSensitiveSurvey);
+        _selectedStatus = own.status;
+        _selectedSubInjury = own.subInjury;
+        _mySurvey = own.survey;
       });
-    } catch (e) {
-      debugPrint('own sensitive survey unavailable: $e');
-    }
+    });
   }
 
   /// 把任務狀態寫回 Firestore，讓被協助者與其他協助者看到同一份進度。
@@ -470,10 +402,7 @@ class _HealthScreenState extends State<HealthScreen>
     return match.isEmpty ? _textSecondary : match.first['color'] as Color;
   }
 
-  /// 送出一筆健康回報：BLE 廣播、Firestore、本機快取三條路各自獨立。
-  ///
-  /// 災難現場可能只有 BLE 沒有網路，也可能有網路但裝置不支援 BLE，
-  /// 所以任一條失敗都不能拖垮其他兩條。
+  /// 送出一筆健康回報（[HealthReportPublisher.submitSurvey]）。
   ///
   /// [raiseSos]：調查表選到需要立即救援的傷勢，Reporter 選擇一併舉起 SOS。
   Future<void> _select(String status, HealthSurvey survey, bool raiseSos) async {
@@ -505,106 +434,15 @@ class _HealthScreenState extends State<HealthScreen>
       }
       final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
 
-      final handle = _myBroadcastHandle ?? await _getOrCreateBroadcastHandle(prefs);
-      if (mounted && _myBroadcastHandle == null) {
-        setState(() => _myBroadcastHandle = handle);
-      }
-
-      // 舉著 SOS 時，每一份回報都帶著它；回報安全就是撤回（#82）。
-      final sosBefore = await SosStore.load(user.id);
-      final sos = healthReportTransition(sosBefore, status, raise: raiseSos, now: DateTime.now());
-      final raisedNow = !sosBefore.raised && sos.state.raised;
-
-      final report = HealthReport(
-        reporterId: user.id,
-        name: user.name,
-        area: user.area,
+      final sent = await _publisher.submitSurvey(
+        user,
         status: status,
-        description: subInjury,
+        survey: survey,
+        raiseSos: raiseSos,
         lat: _currentPosition?.latitude,
         lng: _currentPosition?.longitude,
-        reportTime: DateTime.now(),
-        sos: sos.report.sos,
-        phone: user.phone,
-        bloodType: user.bloodType,
-        medicalInfo: user.medicalInfo,
-        emergencyContactName: user.emergencyContactName,
-        emergencyContactPhone: user.emergencyContactPhone,
-        emergencyContactRelation: user.emergencyContactRelation,
-        survey: survey,
       );
-
-      // BLE 廣播只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標
-      // （由原生端就地降精度為 geohash）。姓名／電話／血型／自由文字一律不進入廣播（ADR-0003）。
-      //
-      // 自己包 try：沒開藍牙、裝置不支援、原生端拋錯，都不該讓雲端回報跟著失敗。
-      String? broadcastFailure;
-      try {
-        await BitchatBridge.sendHealthReport(
-          reporterHandle: handle,
-          status: status,
-          lat: _currentPosition?.latitude,
-          lng: _currentPosition?.longitude,
-          sos: sos.report.sos,
-        );
-      } catch (e) {
-        debugPrint('HealthScreen: Health Report broadcast failed: $e');
-        broadcastFailure = HealthReportDelivery.broadcastFailureReason(e);
-      }
-
-      // 附近廣播失敗也照樣上傳。後端拆成兩份文件（ADR-0005）：Detail Tier 寫進大家都讀得到
-      // 的 health_reports，電話、血型、病史、緊急聯絡人寫進 health_report_sensitive。
-      // 同一個 batch：兩份要嘛一起寫進去，要嘛都沒有。
-      //
-      // 一人一筆：文件 ID 就用 uid，改狀態是直接覆寫同一份文件，不再 add() 新增。
-      // 舊做法每回報一次就多一筆，同一個人會在後端留下一串過期狀態（回報安全之後，
-      // 之前那筆「輕傷」還在互救任務清單上）。
-      //
-      // 傷勢一改就回到「等待中／無人認領」：內容已經不一樣了，沿用舊的認領紀錄會讓
-      // 協助者看到對不上的任務。但重送一模一樣的狀態（例如不小心再點一次）不算改，
-      // 這時清掉認領，已經在路上的協助者會無聲無息地丟掉任務，還可能被別人接走。
-      // toDetailJson() 每個欄位都會寫（含 null），所以 merge 只會保留 taskStatus／helperId。
-      final contentChanged =
-          status != previousStatus || subInjury != previousSubInjury;
-      final db = FirebaseFirestore.instance;
-      final write = (db.batch()
-            ..set(
-              db.collection('health_reports').doc(user.id),
-              {
-                ...report.toDetailJson(),
-                if (contentChanged) ...{'taskStatus': 'waiting', 'helperId': null},
-              },
-              SetOptions(merge: true),
-            )
-            ..set(
-              db.collection('health_report_sensitive').doc(user.id),
-              report.toSensitiveJson(),
-            ))
-          .commit();
-
-      // set() 的 Future 要等伺服器確認才完成，離線時會一直不完成（資料已進本機佇列，
-      // 恢復連線會自動送出）。所以不無限等待——災難時離線是常態，使用者需要立刻得到
-      // 回饋，而不是一個永遠轉不完的按鈕。
-      var uploadQueued = false;
-      String? uploadFailure;
-      try {
-        await write.timeout(const Duration(seconds: 6));
-      } on TimeoutException {
-        uploadQueued = true;
-        // 佇列中的寫入之後才失敗的話，錯誤沒人接會變成未處理例外。
-        unawaited(write.catchError((Object e) {
-          debugPrint('queued health report failed: $e');
-        }));
-      } catch (e) {
-        debugPrint('HealthScreen: Health Report upload failed: $e');
-        uploadFailure = '$e';
-      }
-
-      final delivery = HealthReportDelivery(
-        broadcastFailure: broadcastFailure,
-        uploadFailure: uploadFailure,
-        uploadQueued: uploadQueued,
-      );
+      final delivery = sent.delivery;
       if (delivery.failed) {
         // 兩條路都沒送出：誰都沒收到這份回報，畫面不能顯示已回報。
         _revertStatus(previousStatus, previousSubInjury);
@@ -612,23 +450,20 @@ class _HealthScreenState extends State<HealthScreen>
         return;
       }
 
-      await OwnStatusCache.save(user.id, status, subInjury);
-      await SosStore.save(user.id, sos.state);
-      if (mounted) {
-        setState(() {
-          _sosState = sos.state;
-          _mySurvey = survey;
-          _ownSensitiveSurvey = survey.toSensitiveMap();
-        });
-      }
-
       if (!mounted) return;
+      setState(() {
+        _sosState = sent.sos;
+        _mySurvey = survey;
+      });
+      final message = reportDeliveryMessage(delivery, status);
       _showTaskSnackBar(
-        raisedNow ? '已舉起 SOS。${reportDeliveryMessage(delivery, status)}' : reportDeliveryMessage(delivery, status),
+        sent.raisedNow ? '已舉起 SOS。$message' : message,
         delivery.complete ? _statusColor() : _orange,
       );
+      final queued = sent.queuedUpload;
+      if (queued != null) unawaited(_followQueuedUpload(queued));
     } catch (e) {
-      // 寫入被規則擋下、或本機儲存失敗：後端根本沒有這筆，畫面不能顯示已回報。
+      // 本機儲存失敗之類的意外：不確定有沒有送出，畫面不能顯示已回報。
       debugPrint('health report failed: $e');
       _revertStatus(previousStatus, previousSubInjury);
       _showTaskSnackBar('回報失敗，請稍後再試', _red);
@@ -636,6 +471,11 @@ class _HealthScreenState extends State<HealthScreen>
       _isSubmitting = false;
       if (mounted) setState(() {});
     }
+  }
+
+  /// 離線暫存的上傳之後才失敗（例如權限被擋）：只記 log 的話，使用者會一直以為恢復連線就會送出。
+  Future<void> _followQueuedUpload(Future<HealthReportDelivery> queued) async {
+    if ((await queued).uploadFailure != null) _showTaskSnackBar('暫存的回報沒有上傳到雲端。', _red);
   }
 
   /// 回報沒成功時把畫面退回原本的狀態，不留下一個假的「已回報」。
