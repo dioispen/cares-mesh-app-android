@@ -75,9 +75,6 @@ class _HealthScreenState extends State<HealthScreen>
   /// 回報送出中：擋住連點造成的重複廣播與互相覆蓋的寫入。
   bool _isSubmitting = false;
 
-  /// 舊版隨機 ID 文件只補查一次，避免監聽每次觸發都打一次 query。
-  bool _legacyRestoreAttempted = false;
-
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -237,9 +234,6 @@ class _HealthScreenState extends State<HealthScreen>
   static const _legacyStatusKey = 'health_status';
   static const _legacySubInjuryKey = 'health_sub_injury';
 
-  /// 舊文件清理只需要成功一次，之後不再重複查詢。
-  static String _prunedKey(String uid) => 'health_reports_pruned:$uid';
-
   Future<void> _loadUserAndPosition() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -326,10 +320,8 @@ class _HealthScreenState extends State<HealthScreen>
       }
       final status = data?['status'] as String?;
       if (!doc.exists || status == null) {
-        // 後端沒有這份文件：可能是舊版 add() 留下隨機 ID 的回報，補查一次。
-        // 查不到也不清掉本機顯示的狀態——寧可留著待確認的傷勢，也不要把
+        // 後端沒有這份文件時不清掉本機顯示的狀態——寧可留著待確認的傷勢，也不要把
         // 使用者的回報悄悄降級成「尚未回報」。
-        await _restoreLegacyOwnStatus(uid);
         return;
       }
       final subInjury = data?['description'] as String?;
@@ -367,70 +359,6 @@ class _HealthScreenState extends State<HealthScreen>
       debugPrint('own sensitive survey unavailable: $e');
     }
   }
-
-  /// 補查舊版 add() 流程留下的自己的回報（文件 ID 不是 uid 的那些）。
-  ///
-  /// 只讀 reporterId 等於自己的文件。失敗（離線、權限）就維持現狀，不阻擋畫面。
-  Future<void> _restoreLegacyOwnStatus(String uid) async {
-    if (_legacyRestoreAttempted) return;
-    _legacyRestoreAttempted = true;
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('health_reports')
-          .where('reporterId', isEqualTo: uid)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      if (snapshot.docs.isEmpty) return;
-
-      // reportTime 是 ISO8601 字串，字典序等於時間序。這裡刻意不用 orderBy：
-      // 等式條件 + 排序會需要額外的複合索引，而自己的回報筆數很少，在本機挑最新的即可。
-      final latest = snapshot.docs.reduce((a, b) {
-        final at = a.data()['reportTime'] as String? ?? '';
-        final bt = b.data()['reportTime'] as String? ?? '';
-        return at.compareTo(bt) >= 0 ? a : b;
-      });
-      final status = latest.data()['status'] as String?;
-      if (status == null) return;
-      final subInjury = latest.data()['description'] as String?;
-
-      if (mounted) {
-        setState(() {
-          _selectedStatus = status;
-          _selectedSubInjury = subInjury;
-        });
-      }
-      await OwnStatusCache.save(uid, status, subInjury);
-    } catch (_) {}
-  }
-
-  /// 刪掉自己在舊版 add() 流程留下的多餘回報（文件 ID 不等於 uid 的那些）。
-  ///
-  /// 只動 reporterId 等於自己的文件，這也是 firestore.rules 唯一允許刪除的範圍。
-  /// 失敗（離線、權限）就跳過，不影響這次回報。
-  Future<void> _pruneLegacyOwnReports(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(_prunedKey(uid)) == true) return;
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('health_reports')
-          .where('reporterId', isEqualTo: uid)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      final stale = snapshot.docs.where((doc) => doc.id != uid).toList();
-      if (stale.isNotEmpty) {
-        final batch = FirebaseFirestore.instance.batch();
-        for (final doc in stale) {
-          batch.delete(doc.reference);
-        }
-        await batch.commit().timeout(const Duration(seconds: 10));
-      }
-      // 清完才記錄，失敗的話下次回報會再試一次。
-      await prefs.setBool(_prunedKey(uid), true);
-    } catch (e) {
-      debugPrint('pruneLegacyOwnReports failed: $e');
-    }
-  }
-
 
   /// 把任務狀態寫回 Firestore，讓被協助者與其他協助者看到同一份進度。
   ///
@@ -692,11 +620,6 @@ class _HealthScreenState extends State<HealthScreen>
           _mySurvey = survey;
           _ownSensitiveSurvey = survey.toSensitiveMap();
         });
-      }
-
-      if (!uploadQueued && uploadFailure == null) {
-        // 清掉舊版 add() 在後端留下的多餘文件。純後端整理，不讓它擋住回饋。
-        unawaited(_pruneLegacyOwnReports(user.id));
       }
 
       if (!mounted) return;
