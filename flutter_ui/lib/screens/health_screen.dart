@@ -25,12 +25,6 @@ import 'sos_screen.dart';
 HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
     HealthReportPayload.decode(payload);
     
-class HealthService {
-  String status = 'unknown';
-  void updateStatus(String newStatus) => status = newStatus;
-  String getStatus() => status;
-}
-
 class HealthScreen extends StatefulWidget {
   const HealthScreen({super.key});
 
@@ -40,7 +34,6 @@ class HealthScreen extends StatefulWidget {
 
 class _HealthScreenState extends State<HealthScreen>
     with SingleTickerProviderStateMixin, RouteAware {
-  final HealthService _healthService = HealthService();
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
   late TabController _tabController;
@@ -341,7 +334,6 @@ class _HealthScreenState extends State<HealthScreen>
       }
       final subInjury = data?['description'] as String?;
       final survey = data?['survey'];
-      _healthService.updateStatus(status);
       if (mounted) {
         setState(() {
           _selectedStatus = status;
@@ -401,7 +393,6 @@ class _HealthScreenState extends State<HealthScreen>
       if (status == null) return;
       final subInjury = latest.data()['description'] as String?;
 
-      _healthService.updateStatus(status);
       if (mounted) {
         setState(() {
           _selectedStatus = status;
@@ -566,7 +557,6 @@ class _HealthScreenState extends State<HealthScreen>
     final previousStatus = _selectedStatus;
     final previousSubInjury = _selectedSubInjury;
 
-    _healthService.updateStatus(status);
     setState(() {
       _isSubmitting = true;
       _selectedStatus = status;
@@ -727,7 +717,6 @@ class _HealthScreenState extends State<HealthScreen>
 
   /// 回報沒成功時把畫面退回原本的狀態，不留下一個假的「已回報」。
   void _revertStatus(String previousStatus, String? previousSubInjury) {
-    _healthService.updateStatus(previousStatus);
     if (!mounted) return;
     setState(() {
       _selectedStatus = previousStatus;
