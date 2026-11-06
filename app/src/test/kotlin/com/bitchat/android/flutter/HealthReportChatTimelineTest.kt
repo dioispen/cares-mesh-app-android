@@ -7,6 +7,7 @@ import com.bitchat.android.mesh.PeerInfo
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
@@ -26,7 +27,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Pins the Health Report decision against the real producer: whatever line
- * MessageHandler.handleHealthReport() hands the chat delegate must not reach the Flutter chat
+ * MessageHandler hands the chat delegate for a Health Report must not reach the Flutter chat
  * timeline. If the producer's text changes, this fails instead of the report silently
  * reappearing in the chat room.
  */
@@ -44,7 +45,7 @@ class HealthReportChatTimelineTest {
         val handler = MessageHandler(me.peerID, RuntimeEnvironment.getApplication())
         handler.delegate = delegate
 
-        handler.handleHealthReport(RoutedPacket(healthReportPacket(), peerID, "direct-link"))
+        handler.handleMessage(RoutedPacket(healthReportPacket(), peerID, "direct-link"))
 
         val delivered = argumentCaptor<BitchatMessage>()
             .apply { verify(delegate).onMessageReceived(capture()) }
@@ -87,7 +88,7 @@ class HealthReportChatTimelineTest {
             type = MessageType.HEALTH_REPORT.value,
             senderID = ByteArray(8) { (it + 1).toByte() },
             timestamp = System.currentTimeMillis().toULong(),
-            payload = payload,
+            payload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload,
             ttl = 3u
         )
     }

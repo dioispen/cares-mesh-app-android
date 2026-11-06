@@ -13,6 +13,7 @@ class SettingsService {
     Future<void> Function(bool enabled)? setBackgroundEnabled,
     Future<void> Function(bool enabled)? setAutoStartEnabled,
     Future<void> Function(bool enabled)? setNotificationAutoRestore,
+    Future<void> Function(bool enabled)? setGatewayEnabled,
     Stream<Map<String, dynamic>> Function()? events,
   })  : _getState = getState ?? BitchatBridge.getSettingsState,
         _requestPermission = requestPermission ?? BitchatBridge.requestSettingsPermission,
@@ -20,6 +21,7 @@ class SettingsService {
         _setBackgroundEnabled = setBackgroundEnabled ?? BitchatBridge.setBackgroundEnabled,
         _setAutoStartEnabled = setAutoStartEnabled ?? BitchatBridge.setAutoStartEnabled,
         _setNotificationAutoRestore = setNotificationAutoRestore ?? BitchatBridge.setNotificationAutoRestore,
+        _setGatewayEnabled = setGatewayEnabled ?? BitchatBridge.setGatewayEnabled,
         _events = events ?? BitchatBridge.events;
 
   final Future<Map<String, dynamic>> Function() _getState;
@@ -28,6 +30,7 @@ class SettingsService {
   final Future<void> Function(bool enabled) _setBackgroundEnabled;
   final Future<void> Function(bool enabled) _setAutoStartEnabled;
   final Future<void> Function(bool enabled) _setNotificationAutoRestore;
+  final Future<void> Function(bool enabled) _setGatewayEnabled;
   final Stream<Map<String, dynamic>> Function() _events;
 
   Future<SettingsState> loadState() async => SettingsState.fromMap(await _getState());
@@ -42,6 +45,9 @@ class SettingsService {
   Future<void> setAutoStartEnabled(bool enabled) => _setAutoStartEnabled(enabled);
 
   Future<void> setNotificationAutoRestore(bool enabled) => _setNotificationAutoRestore(enabled);
+
+  /// 「代傳附近的求救與回報」（Gateway，#113）。
+  Future<void> setGatewayEnabled(bool enabled) => _setGatewayEnabled(enabled);
 
   /// 系統藍牙或定位狀態改變（原生 `statusReceiver` 推的 `system_status`）。
   Stream<void> get systemStatusChanges =>

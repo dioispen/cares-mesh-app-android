@@ -53,7 +53,9 @@ class BitchatFlutterChannels(
     /** 回覆 method 的執行緒（主執行緒）；[destroy] 時取消。 */
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     /** 讀加密身分儲存區（keystore 與磁碟）的地方，不在主執行緒。 */
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** 本機 Ed25519 簽章公鑰（ANNOUNCE 裡的那一把）；mesh service 還不存在時為 null。 */
+    private val signingPublicKey: () -> ByteArray? = { MeshServiceHolder.meshService?.getSigningPublicKey() }
 ) : BridgeMethodHandler {
 
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL_NAME)
@@ -166,6 +168,18 @@ class BitchatFlutterChannels(
             }
 
             "isRegistered" -> answerIsRegistered(result)
+
+            // Reporter Handle 登記（#110）：reporter_handles 記下這把公鑰，管理後台日後能以它分辨
+            // 冒領同一個 Handle 的帳號（ADR-0009）。FlutterChatActivity 在 engine 之前就建好 mesh
+            // service，所以 null 只會出現在 service 被拆掉的空檔。
+            "getSigningPublicKey" -> {
+                val key = signingPublicKey()
+                if (key != null) {
+                    result.success(key)
+                } else {
+                    result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
+                }
+            }
 
             "startMesh" -> {
                 try {

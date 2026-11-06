@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
  *
  * It reads and changes what the Flutter settings screen shows: the permissions the setup flow asks
  * for, Bluetooth, battery optimization ([SettingsDevice]), the mesh service's background
- * preferences ([MeshBackgroundSettings]), and upstream's panic clear. Everything it reads comes
+ * preferences and the Gateway switch ([MeshBackgroundSettings]), and upstream's panic clear. Everything it reads comes
  * from upstream's own sources — permissions from `PermissionManager`, preferences from
  * `MeshServicePreferences` — and nothing is cached here: the screen asks for [METHOD_GET_STATE]
  * again whenever it comes back from the system's settings.
@@ -57,6 +57,10 @@ class SettingsBridge(
                 // Without background there is no ongoing notification to rebuild.
                 if (meshSettings.backgroundEnabled) meshSettings.repostNotification()
             }
+            // The running gateway follows the stored preference by itself (#113).
+            METHOD_SET_GATEWAY_ENABLED -> setSwitch(call, result) { enabled ->
+                meshSettings.gatewayEnabled = enabled
+            }
             METHOD_PANIC_CLEAR -> runPanicClear(result)
             else -> return false
         }
@@ -71,6 +75,7 @@ class SettingsBridge(
         "backgroundEnabled" to meshSettings.backgroundEnabled,
         "autoStartEnabled" to meshSettings.autoStartEnabled,
         "notificationAutoRestore" to meshSettings.notificationAutoRestore,
+        "gatewayEnabled" to meshSettings.gatewayEnabled,
         "appVersion" to device.appVersion
     )
 
@@ -152,6 +157,7 @@ class SettingsBridge(
         const val METHOD_SET_BACKGROUND_ENABLED = "settings_setBackgroundEnabled"
         const val METHOD_SET_AUTO_START_ENABLED = "settings_setAutoStartEnabled"
         const val METHOD_SET_NOTIFICATION_AUTO_RESTORE = "settings_setNotificationAutoRestore"
+        const val METHOD_SET_GATEWAY_ENABLED = "settings_setGatewayEnabled"
         const val METHOD_PANIC_CLEAR = "settings_panicClear"
 
         /** [METHOD_REQUEST_PERMISSION] showed the system's permission prompt. */
@@ -229,6 +235,8 @@ interface MeshBackgroundSettings {
     var backgroundEnabled: Boolean
     var autoStartEnabled: Boolean
     var notificationAutoRestore: Boolean
+    /** Act as a Gateway: write nearby Health Reports to Firestore (#113); the service watches it. */
+    var gatewayEnabled: Boolean
 
     fun startForegroundService()
     fun stopForegroundService()

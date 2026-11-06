@@ -62,6 +62,7 @@ class SettingsBridgeTest {
         mesh.backgroundEnabled = true
         mesh.autoStartEnabled = false
         mesh.notificationAutoRestore = true
+        mesh.gatewayEnabled = false
 
         val state = call(SettingsBridge.METHOD_GET_STATE).values.single() as Map<*, *>
 
@@ -69,6 +70,7 @@ class SettingsBridgeTest {
         assertEquals(true, state["backgroundEnabled"])
         assertEquals(false, state["autoStartEnabled"])
         assertEquals(true, state["notificationAutoRestore"])
+        assertEquals(false, state["gatewayEnabled"])
         assertEquals("9.9.9 (99)", state["appVersion"])
     }
 
@@ -258,11 +260,24 @@ class SettingsBridgeTest {
     }
 
     @Test
+    fun `the gateway switch is stored, and the service is left to follow it`() {
+        call(SettingsBridge.METHOD_SET_GATEWAY_ENABLED, mapOf("enabled" to false))
+
+        assertFalse(mesh.gatewayEnabled)
+        assertEquals(emptyList<String>(), mesh.actions)
+
+        call(SettingsBridge.METHOD_SET_GATEWAY_ENABLED, mapOf("enabled" to true))
+
+        assertTrue(mesh.gatewayEnabled)
+    }
+
+    @Test
     fun `a switch without a boolean is an invalid argument and changes nothing`() {
         for (method in listOf(
             SettingsBridge.METHOD_SET_BACKGROUND_ENABLED,
             SettingsBridge.METHOD_SET_AUTO_START_ENABLED,
-            SettingsBridge.METHOD_SET_NOTIFICATION_AUTO_RESTORE
+            SettingsBridge.METHOD_SET_NOTIFICATION_AUTO_RESTORE,
+            SettingsBridge.METHOD_SET_GATEWAY_ENABLED
         )) {
             assertEquals(listOf("error:$INVALID_ARGUMENT"), call(method, mapOf("enabled" to "yes")).calls)
         }
@@ -356,12 +371,13 @@ class SettingsBridgeTest {
         override var backgroundEnabled = true
         override var autoStartEnabled = true
         override var notificationAutoRestore = false
+        override var gatewayEnabled = true
         val actions = mutableListOf<String>()
 
         override fun startForegroundService() { actions += "start" }
         override fun stopForegroundService() { actions += "stop" }
         override fun repostNotification() { actions += "repost" }
 
-        fun snapshot() = listOf(backgroundEnabled, autoStartEnabled, notificationAutoRestore)
+        fun snapshot() = listOf(backgroundEnabled, autoStartEnabled, notificationAutoRestore, gatewayEnabled)
     }
 }

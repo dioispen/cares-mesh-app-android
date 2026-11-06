@@ -189,10 +189,14 @@ dependencies {
     // Google Play Services Location
     implementation(libs.gms.location)
 
-    // Kotlin 端沒有使用 Firebase，但這行不是多餘的：它把 FlutterFire 外掛帶入的 Firebase
-    // 原生 SDK 從 firebase_core 預設的 BoM 33.x 統一拉到這個版本，實機驗證過的也是這個
-    // 版本。刪掉等於把 Firebase 降一個大版本。
+    // 這個 BoM 也把 FlutterFire 外掛帶入的 Firebase 原生 SDK 從 firebase_core 預設的 BoM 33.x
+    // 統一拉到這個版本，實機驗證過的也是這個版本。刪掉等於把 Firebase 降一個大版本。
     implementation(platform("com.google.firebase:firebase-bom:34.11.0"))
+    // Kotlin 端只有 Gateway 用 Firebase（ADR-0009）：在 mesh 前景服務裡讀登入狀態、寫 mesh_reports，
+    // Flutter engine 不在時也照常代傳。與 FlutterFire 共用同一個 FirebaseAuth 與 Firestore 實例；
+    // 原生程式庫早已隨 FlutterFire 進入 APK，版本由上面的 BoM 決定。
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-auth")
 
     // ProcessCameraProvider.getInstance() 與 CoroutineWorker.getForegroundInfoAsync() 回傳
     // ListenableFuture。CameraX／WorkManager 只在 runtime 帶入 Guava，compile classpath 上

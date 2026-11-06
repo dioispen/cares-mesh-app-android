@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -7,6 +8,7 @@ import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
 import 'services/chat_service.dart';
 import 'services/mascot_service.dart';
+import 'services/reporter_handle_registration.dart';
 import 'widgets/mascot_assistant.dart';
 
 // 全局 NavigatorKey 用於在沒有 Context 的情況下顯示 Dialog
@@ -30,6 +32,8 @@ void main() async{
     debugPrint('Firebase initialization warning: $e');
   }
 
+  _startReporterHandleRegistration();
+
   try {
     await loadMascotEnabled();
   } catch (e) {
@@ -38,6 +42,21 @@ void main() async{
   }
 
   runApp(const BitchatFlutterUiApp());
+}
+
+/// 已登入就登記這次安裝的 Reporter Handle（#110）：App 啟動時一次，之後每次登入成功再一次。
+/// 訂閱跟著 App 存活，不取消。
+void _startReporterHandleRegistration() {
+  if (kIsWeb) return;
+  try {
+    registerReporterHandleOnSignIn(
+      FirebaseAuth.instance.authStateChanges().map((user) => user?.uid),
+      ReporterHandleRegistration().register,
+    );
+  } catch (e) {
+    // Firebase 沒有初始化成功：這次啟動不登記，下次啟動再試。
+    debugPrint('Reporter Handle registration unavailable: $e');
+  }
 }
 
 class BitchatFlutterUiApp extends StatefulWidget {

@@ -11,6 +11,7 @@ Map<String, dynamic> _stateMap({List<Map<String, dynamic>>? permissions}) => {
       'backgroundEnabled': true,
       'autoStartEnabled': false,
       'notificationAutoRestore': true,
+      'gatewayEnabled': false,
       'appVersion': '2.0.2 (39)',
     };
 
@@ -26,6 +27,7 @@ void main() {
     expect(state.backgroundEnabled, isTrue);
     expect(state.autoStartEnabled, isFalse);
     expect(state.notificationAutoRestore, isTrue);
+    expect(state.gatewayEnabled, isFalse);
     expect(state.appVersion, '2.0.2 (39)');
   });
 
@@ -50,6 +52,12 @@ void main() {
 
   test('a map missing a field is a format error, not a guess', () {
     final map = _stateMap()..remove('bluetoothEnabled');
+
+    expect(() => SettingsState.fromMap(map), throwsFormatException);
+  });
+
+  test('a native side that does not answer the Gateway switch (#113) is a format error too', () {
+    final map = _stateMap()..remove('gatewayEnabled');
 
     expect(() => SettingsState.fromMap(map), throwsFormatException);
   });

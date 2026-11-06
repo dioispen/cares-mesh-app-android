@@ -28,7 +28,7 @@ class SettingsPermissionStatus {
   final bool granted;
 }
 
-/// 原生 `settings_getState` 的回答（#80）：權限、藍牙、mesh 背景運作的偏好與版本號。
+/// 原生 `settings_getState` 的回答（#80）：權限、藍牙、mesh 背景運作與 Gateway 的偏好，以及版本號。
 ///
 /// 每次都整份重新讀取，Dart 不自行推導：從系統設定回來（`resumed`）或系統狀態廣播時再讀一次。
 class SettingsState {
@@ -38,6 +38,7 @@ class SettingsState {
     required this.backgroundEnabled,
     required this.autoStartEnabled,
     required this.notificationAutoRestore,
+    required this.gatewayEnabled,
     required this.appVersion,
   });
 
@@ -49,6 +50,10 @@ class SettingsState {
   final bool backgroundEnabled;
   final bool autoStartEnabled;
   final bool notificationAutoRestore;
+
+  /// 「代傳附近的求救與回報」（#113）：已登入、有網路時，這支手機把經 mesh 收到的別人的
+  /// Health Report（Broadcast Tier）代傳到後端，也就是當 Gateway。原生預設開啟。
+  final bool gatewayEnabled;
   final String appVersion;
 
   /// 缺欄位或型別不對時丟 [FormatException]，不猜預設值。
@@ -69,6 +74,7 @@ class SettingsState {
       backgroundEnabled: field<bool>('backgroundEnabled'),
       autoStartEnabled: field<bool>('autoStartEnabled'),
       notificationAutoRestore: field<bool>('notificationAutoRestore'),
+      gatewayEnabled: field<bool>('gatewayEnabled'),
       appVersion: field<String>('appVersion'),
     );
   }

@@ -1494,7 +1494,20 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     fun getStaticNoisePublicKey(): ByteArray? {
         return encryptionService.getStaticPublicKey()
     }
-    
+
+    /** Our Ed25519 signing public key (32 bytes), the one every ANNOUNCE carries. */
+    fun getSigningPublicKey(): ByteArray? {
+        return encryptionService.getSigningPublicKey()
+    }
+
+    /**
+     * The verified, signed ANNOUNCE of [peerID] held by the Health Report key cache (#95); the
+     * Gateway uploads it with that peer's report so it can be verified later (ADR-0009).
+     */
+    fun healthReportAnnouncementFor(peerID: String): BitchatPacket? {
+        return securityManager.healthReportAnnouncementFor(peerID)
+    }
+
     /**
      * Check if encryption icon should be shown for a peer
      */

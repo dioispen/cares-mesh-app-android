@@ -15,6 +15,18 @@
 //   - rescuers：救援者身分的唯一依據，客戶端一律不可寫（不可自我提權）
 //   - users：含電話、緊急聯絡人、病史，只能讀自己的
 //   最關鍵的一條是「在 users 自填 role 不會變成救援者」——角色機制最容易寫錯的地方。
+//
+//   issue #109
+//   - admins：Administrator 身分的唯一依據，客戶端一律不可寫，名單不外流
+//   最關鍵的一條是「Administrator 不會被當成 Verified Rescuer」——兩個角色互相獨立。
+//
+//   issue #110
+//   - reporter_handles：Reporter Handle 屬於哪個帳號，只有 Administrator 與本人讀得到
+//   最關鍵的一條是「其他登入者（含 Verified Rescuer）查不到 Handle 是誰」（ADR-0009）。
+//
+//   issue #111
+//   - mesh_reports：Gateway 代傳的 Broadcast Tier，任何登入帳號都能寫，只有 Administrator 能讀
+//   最關鍵的兩條是「gatewayUid 必須是寫入者自己」與「update 的 reportTime 必須嚴格遞增」。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -24,7 +36,10 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  Bytes,
+  Timestamp,
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
@@ -42,6 +57,7 @@ const ALICE = 'uid-alice';
 const BOB = 'uid-bob';
 const CAROL = 'uid-carol';
 const RESCUER = 'uid-rescuer';
+const ADMIN = 'uid-admin';
 
 let testEnv;
 
@@ -85,6 +101,8 @@ beforeEach(async () => {
     });
     // 救援者身分只能由後台（Firebase console / Admin SDK）寫入
     await setDoc(doc(db, `rescuers/${RESCUER}`), { grantedAt: new Date() });
+    // Administrator 同樣只能由後台寫入；刻意不給 rescuers 文件，兩個角色互相獨立
+    await setDoc(doc(db, `admins/${ADMIN}`), { grantedAt: new Date() });
     await setDoc(doc(db, 'health_reports/report-alice'), {
       id: 'report-alice',
       reporterId: ALICE,
@@ -761,6 +779,472 @@ describe('rescuers（issue #33：救援者身分不可自我提權）', () => {
 
   it('不可讀取他人的救援者身分文件', async () => {
     await assertFails(getDoc(doc(dbFor(BOB), `rescuers/${RESCUER}`)));
+  });
+});
+
+describe('admins（#109：Administrator 身分不可自我提權）', () => {
+  it('本人可讀自己的 Administrator 身分文件（供 App 判斷顯示）', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ADMIN), `admins/${ADMIN}`)));
+    // 不是 Administrator 的人查自己也要能查（文件不存在）
+    await assertSucceeds(getDoc(doc(dbFor(BOB), `admins/${BOB}`)));
+  });
+
+  it('★ 不可讀取他人的 Administrator 身分文件（名單不外流）', async () => {
+    await assertFails(getDoc(doc(dbFor(BOB), `admins/${ADMIN}`)));
+    await assertFails(getDoc(doc(dbFor(RESCUER), `admins/${ADMIN}`)));
+    await assertFails(getDocs(collection(dbFor(BOB), 'admins')));
+  });
+
+  it('未登入不可讀', async () => {
+    await assertFails(getDoc(doc(anonDb(), `admins/${ADMIN}`)));
+  });
+
+  it('★ 使用者不可把自己登記為 Administrator', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), `admins/${BOB}`), { grantedAt: new Date() }));
+    await assertFails(setDoc(doc(dbFor(BOB), `admins/${BOB}`), {}));
+  });
+
+  it('★ Verified Rescuer 不可把自己登記為 Administrator', async () => {
+    await assertFails(setDoc(doc(dbFor(RESCUER), `admins/${RESCUER}`), { grantedAt: new Date() }));
+  });
+
+  it('★ Administrator 也不可替他人授權', async () => {
+    await assertFails(setDoc(doc(dbFor(ADMIN), `admins/${BOB}`), { grantedAt: new Date() }));
+  });
+
+  it('Administrator 不可改動或撤銷自己的身分文件', async () => {
+    await assertFails(updateDoc(doc(dbFor(ADMIN), `admins/${ADMIN}`), { extra: 1 }));
+    await assertFails(deleteDoc(doc(dbFor(ADMIN), `admins/${ADMIN}`)));
+  });
+
+  it('Administrator 不可刪除他人的身分文件', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `admins/${CAROL}`), { grantedAt: new Date() });
+    });
+    await assertFails(deleteDoc(doc(dbFor(ADMIN), `admins/${CAROL}`)));
+    await assertFails(deleteDoc(doc(dbFor(BOB), `admins/${CAROL}`)));
+  });
+
+  it('未登入不可寫', async () => {
+    await assertFails(setDoc(doc(anonDb(), `admins/${BOB}`), { grantedAt: new Date() }));
+  });
+
+  it('★ Administrator 不會被當成 Verified Rescuer：接下任務也讀不到 Sensitive Tier', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `health_reports/${ALICE}`), {
+        reporterId: ALICE,
+        status: '重傷',
+        taskStatus: 'accepted',
+        helperId: ADMIN,
+      });
+      await setDoc(doc(ctx.firestore(), `health_report_sensitive/${ALICE}`), {
+        reporterId: ALICE,
+        phone: '0912345678',
+      });
+    });
+    await assertFails(getDoc(doc(dbFor(ADMIN), `health_report_sensitive/${ALICE}`)));
+
+    // 對照組：同一個帳號另外被列為 Verified Rescuer 後就讀得到，
+    // 所以上面讀不到只能是因為 Administrator 身分不算 Verified Rescuer。
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `rescuers/${ADMIN}`), { grantedAt: new Date() });
+    });
+    await assertSucceeds(getDoc(doc(dbFor(ADMIN), `health_report_sensitive/${ALICE}`)));
+  });
+});
+
+// 測試用的 bytes 欄位：長度 n、內容固定。
+const bytesOf = (n, fill = 7) => Bytes.fromUint8Array(new Uint8Array(n).fill(fill));
+
+// reporter_handles/{uid}/installations/{reporterHandle}（#110、docs/MESH_GATEWAY.md 5.3）
+describe('reporter_handles（#110：Reporter Handle 與帳號的對應只給 Administrator 與本人）', () => {
+  const HANDLE = 'a1b2c3d4e5f6';
+  const pathOf = (uid, handle = HANDLE) => `reporter_handles/${uid}/installations/${handle}`;
+  const installation = (handle = HANDLE, extra = {}) => ({
+    reporterHandle: handle,
+    signingPublicKey: bytesOf(32),
+    registeredAt: serverTimestamp(),
+    ...extra,
+  });
+  const register = (uid, handle = HANDLE, data = installation(handle)) =>
+    setDoc(doc(dbFor(uid), pathOf(uid, handle)), data);
+  // 以後台身分鋪底：Alice 已在有網路時登記過這支手機
+  const seed = async (uid = ALICE, handle = HANDLE) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), pathOf(uid, handle)), {
+        reporterHandle: handle,
+        signingPublicKey: bytesOf(32),
+        registeredAt: Timestamp.now(),
+      });
+    });
+  };
+
+  describe('寫入', () => {
+    it('★ 本人可以在自己的 uid 底下登記（registeredAt 用伺服器時間）', async () => {
+      await assertSucceeds(register(ALICE));
+    });
+
+    it('★ 本人可以重複登記同一份（App 每次啟動整份覆寫）', async () => {
+      await seed();
+      await assertSucceeds(register(ALICE));
+      await assertSucceeds(register(ALICE));
+    });
+
+    it('一個帳號可以登記多支手機', async () => {
+      await seed();
+      await assertSucceeds(register(ALICE, '0123456789ab'));
+    });
+
+    it('同一個 Handle 可以出現在不同 uid 底下（一支手機先後登入不同帳號）', async () => {
+      await seed(ALICE);
+      await assertSucceeds(register(BOB));
+    });
+
+    it('★ 不能寫在別人的 uid 底下', async () => {
+      await assertFails(setDoc(doc(dbFor(BOB), pathOf(ALICE)), installation()));
+    });
+
+    it('Administrator 也不能替別人登記', async () => {
+      await assertFails(setDoc(doc(dbFor(ADMIN), pathOf(ALICE)), installation()));
+    });
+
+    it('未登入不能寫', async () => {
+      await assertFails(setDoc(doc(anonDb(), pathOf(ALICE)), installation()));
+    });
+
+    it('不能夾帶多餘欄位', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { name: 'Alice' })));
+    });
+
+    it('不能缺欄位', async () => {
+      const { signingPublicKey, ...withoutKey } = installation();
+      await assertFails(register(ALICE, HANDLE, withoutKey));
+      const { registeredAt, ...withoutTime } = installation();
+      await assertFails(register(ALICE, HANDLE, withoutTime));
+    });
+
+    it('★ signingPublicKey 必須剛好 32 bytes', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: bytesOf(31) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: bytesOf(33) })));
+    });
+
+    it('signingPublicKey 必須是 bytes', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: 'ab'.repeat(32) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: Array(32).fill(7) })));
+    });
+
+    it('Handle 必須是小寫 12 碼十六進位', async () => {
+      for (const bad of ['A1B2C3D4E5F6', 'a1b2c3d4e5f', 'a1b2c3d4e5f6a', 'g1b2c3d4e5f6']) {
+        await assertFails(register(ALICE, bad, installation(bad)));
+      }
+    });
+
+    it('★ reporterHandle 必須等於文件 ID', async () => {
+      await assertFails(register(ALICE, HANDLE, installation('0123456789ab')));
+    });
+
+    it('registeredAt 必須是伺服器時間', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { registeredAt: Timestamp.now() })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { registeredAt: new Date() })));
+    });
+  });
+
+  describe('讀取', () => {
+    it('★ Administrator 與本人讀得到', async () => {
+      await seed();
+      await assertSucceeds(getDoc(doc(dbFor(ADMIN), pathOf(ALICE))));
+      await assertSucceeds(getDoc(doc(dbFor(ALICE), pathOf(ALICE))));
+      await assertSucceeds(getDocs(collection(dbFor(ALICE), `reporter_handles/${ALICE}/installations`)));
+    });
+
+    it('★ 其他登入者讀不到，Verified Rescuer 也一樣（不是 Administrator）', async () => {
+      await seed();
+      await assertFails(getDoc(doc(dbFor(BOB), pathOf(ALICE))));
+      await assertFails(getDoc(doc(dbFor(RESCUER), pathOf(ALICE))));
+      await assertFails(getDocs(collection(dbFor(BOB), `reporter_handles/${ALICE}/installations`)));
+    });
+
+    it('未登入讀不到', async () => {
+      await seed();
+      await assertFails(getDoc(doc(anonDb(), pathOf(ALICE))));
+    });
+
+    // 管理後台的去重流程（docs/MESH_GATEWAY.md 第 8 節）：由 Handle 反查 uid。
+    it('★ Administrator 可以用 collection group 查詢由 Handle 找出 uid', async () => {
+      await seed(ALICE);
+      await seed(BOB, '0123456789ab');
+      const snap = await assertSucceeds(getDocs(query(
+        collectionGroup(dbFor(ADMIN), 'installations'),
+        where('reporterHandle', '==', HANDLE),
+      )));
+      const owners = snap.docs.map((d) => d.ref.parent.parent.id);
+      if (owners.length !== 1 || owners[0] !== ALICE) {
+        throw new Error(`查到的 uid 不對：${JSON.stringify(owners)}`);
+      }
+    });
+
+    it('★ 非 Administrator 不能用 collection group 查詢，Verified Rescuer 也一樣', async () => {
+      await seed();
+      for (const db of [dbFor(BOB), dbFor(ALICE), dbFor(RESCUER), anonDb()]) {
+        await assertFails(getDocs(query(
+          collectionGroup(db, 'installations'),
+          where('reporterHandle', '==', HANDLE),
+        )));
+      }
+    });
+  });
+
+  describe('刪除', () => {
+    it('Administrator 與本人可以刪', async () => {
+      await seed();
+      await assertSucceeds(deleteDoc(doc(dbFor(ALICE), pathOf(ALICE))));
+      await seed();
+      await assertSucceeds(deleteDoc(doc(dbFor(ADMIN), pathOf(ALICE))));
+    });
+
+    it('其他人不能刪', async () => {
+      await seed();
+      await assertFails(deleteDoc(doc(dbFor(BOB), pathOf(ALICE))));
+      await assertFails(deleteDoc(doc(dbFor(RESCUER), pathOf(ALICE))));
+      await assertFails(deleteDoc(doc(anonDb(), pathOf(ALICE))));
+    });
+  });
+});
+
+// mesh_reports/{reporterHandle}（#111、docs/MESH_GATEWAY.md 5.2）：Gateway 代傳的 Broadcast Tier。
+// 情境：Alice（無網路的 Reporter）的回報經 mesh 到達 Carol（有網路的 Gateway），由 Carol 寫入。
+describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Administrator 讀）', () => {
+  const GATEWAY = CAROL;
+  const OTHER_GATEWAY = BOB;
+  const HANDLE = 'a1b2c3d4e5f6';
+  // reportTime 是 Reporter 手機的時鐘，精度到秒
+  const minutesFromNow = (m) =>
+    Timestamp.fromMillis(Math.floor((Date.now() + m * 60_000) / 1000) * 1000);
+  const meshReport = (extra = {}) => ({
+    schemaVersion: 1,
+    reporterHandle: HANDLE,
+    status: '未宣告',
+    sos: true,
+    geohash: 'wsqqqq',
+    reportTime: minutesFromNow(-1),
+    uploadedAt: serverTimestamp(),
+    gatewayUid: GATEWAY,
+    senderPeerId: '0123456789abcdef',
+    rawPacket: bytesOf(256),
+    announcement: bytesOf(256, 9),
+    ...extra,
+  });
+  const upload = (data, uid = GATEWAY, handle = HANDLE) =>
+    setDoc(doc(dbFor(uid), `mesh_reports/${handle}`), data);
+  const uploadFails = (extra) => assertFails(upload(meshReport(extra)));
+  // 以後台身分鋪底：Carol 已經寫入 Alice 一份 reportTime 為 at 的回報
+  const seed = async (at = minutesFromNow(-5)) => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `mesh_reports/${HANDLE}`), {
+        ...meshReport({ reportTime: at }),
+        uploadedAt: Timestamp.now(),
+      });
+    });
+    return at;
+  };
+  const reportRef = (db) => doc(db, `mesh_reports/${HANDLE}`);
+
+  describe('讀取與刪除', () => {
+    it('★ 只有 Administrator 讀得到（單筆與整個 collection）', async () => {
+      await seed();
+      await assertSucceeds(getDoc(reportRef(dbFor(ADMIN))));
+      await assertSucceeds(getDocs(collection(dbFor(ADMIN), 'mesh_reports')));
+    });
+
+    it('★ 寫入的 Gateway、一般登入者、Verified Rescuer、未登入都讀不到', async () => {
+      await seed();
+      for (const db of [dbFor(GATEWAY), dbFor(ALICE), dbFor(RESCUER), anonDb()]) {
+        await assertFails(getDoc(reportRef(db)));
+        await assertFails(getDocs(collection(db, 'mesh_reports')));
+      }
+    });
+
+    it('只有 Administrator 能刪', async () => {
+      await seed();
+      for (const db of [dbFor(GATEWAY), dbFor(ALICE), dbFor(RESCUER), anonDb()]) {
+        await assertFails(deleteDoc(reportRef(db)));
+      }
+      await assertSucceeds(deleteDoc(reportRef(dbFor(ADMIN))));
+    });
+  });
+
+  describe('建立', () => {
+    it('★ 格式正確的文件可以建立（未宣告 + SOS）', async () => {
+      await assertSucceeds(upload(meshReport()));
+    });
+
+    it('geohash 與 announcement 可以是 null', async () => {
+      await assertSucceeds(upload(meshReport({ geohash: null, announcement: null })));
+    });
+
+    it('Status 與 SOS 的其他合法組合都可以建立（ADR-0004）', async () => {
+      const combos = [
+        ['輕傷', true], ['重傷', true], ['安全', false], ['輕傷', false], ['重傷', false],
+      ];
+      // 每個組合各寫一份新的 Handle，都是 create
+      for (const [i, [status, sos]] of combos.entries()) {
+        const handle = `a1b2c3d4e5f${i}`;
+        await assertSucceeds(upload(meshReport({ reporterHandle: handle, status, sos }), GATEWAY, handle));
+      }
+    });
+
+    it('★ gatewayUid 不是自己被擋', async () => {
+      await assertFails(upload(meshReport({ gatewayUid: OTHER_GATEWAY })));
+      await assertFails(upload(meshReport(), OTHER_GATEWAY));
+    });
+
+    it('未登入被擋', async () => {
+      await assertFails(setDoc(reportRef(anonDb()), meshReport()));
+      await assertFails(setDoc(reportRef(anonDb()), meshReport({ gatewayUid: null })));
+    });
+
+    it('多餘欄位被擋', async () => {
+      await uploadFails({ name: 'Alice' });
+      await uploadFails({ lat: 25.0339, lng: 121.5645 });
+    });
+
+    it('缺欄位被擋（geohash、announcement 沒有值也要寫 null）', async () => {
+      for (const field of ['geohash', 'announcement', 'senderPeerId', 'rawPacket', 'schemaVersion']) {
+        const { [field]: _, ...rest } = meshReport();
+        await assertFails(upload(rest));
+      }
+    });
+
+    it('非法 Status 被擋', async () => {
+      await uploadFails({ status: '受傷' });
+      await uploadFails({ status: 'safe', sos: false });
+      await uploadFails({ status: null });
+    });
+
+    it('★ 「安全」帶 SOS 被擋', async () => {
+      await uploadFails({ status: '安全', sos: true });
+    });
+
+    it('★ 「未宣告」不帶 SOS 被擋', async () => {
+      await uploadFails({ status: '未宣告', sos: false });
+    });
+
+    it('sos 必須是布林值', async () => {
+      await uploadFails({ sos: 'true' });
+      await uploadFails({ sos: null });
+    });
+
+    it('geohash 不是 null 也不是 6 碼被擋', async () => {
+      await uploadFails({ geohash: 'wsqqq' });
+      await uploadFails({ geohash: 'wsqqqqq' });
+      await uploadFails({ geohash: 123456 });
+    });
+
+    it('★ Handle 格式錯誤或不等於文件 ID 被擋', async () => {
+      for (const bad of ['A1B2C3D4E5F6', 'a1b2c3d4e5f']) {
+        await assertFails(upload(meshReport({ reporterHandle: bad }), GATEWAY, bad));
+      }
+      await uploadFails({ reporterHandle: '0123456789ab' });
+    });
+
+    it('schemaVersion 必須是 1', async () => {
+      await uploadFails({ schemaVersion: 2 });
+      await uploadFails({ schemaVersion: '1' });
+    });
+
+    it('uploadedAt 必須是伺服器時間', async () => {
+      await uploadFails({ uploadedAt: Timestamp.now() });
+      await uploadFails({ uploadedAt: minutesFromNow(-1) });
+    });
+
+    it('★ reportTime 比伺服器時間晚 10 分鐘以上被擋，10 分鐘內可以', async () => {
+      await uploadFails({ reportTime: minutesFromNow(11) });
+      await assertSucceeds(upload(meshReport({ reportTime: minutesFromNow(9) })));
+    });
+
+    it('★ reportTime 比伺服器時間早 2 小時 10 分鐘以上被擋，以內可以', async () => {
+      await uploadFails({ reportTime: minutesFromNow(-131) });
+      await assertSucceeds(upload(meshReport({ reportTime: minutesFromNow(-129) })));
+    });
+
+    it('reportTime 必須是 timestamp', async () => {
+      await uploadFails({ reportTime: new Date().toISOString() });
+      await uploadFails({ reportTime: Date.now() });
+    });
+
+    it('rawPacket 超過 1 KB 被擋，剛好 1 KB 可以', async () => {
+      await uploadFails({ rawPacket: bytesOf(1025) });
+      await assertSucceeds(upload(meshReport({ rawPacket: bytesOf(1024) })));
+    });
+
+    it('announcement 超過 1 KB 被擋，剛好 1 KB 可以', async () => {
+      await uploadFails({ announcement: bytesOf(1025) });
+      await assertSucceeds(upload(meshReport({ announcement: bytesOf(1024) })));
+    });
+
+    it('rawPacket、announcement 必須是 bytes', async () => {
+      await uploadFails({ rawPacket: 'deadbeef' });
+      await uploadFails({ rawPacket: null });
+      await uploadFails({ announcement: 'deadbeef' });
+    });
+
+    it('senderPeerId 必須是 16 個小寫十六進位字元', async () => {
+      for (const bad of ['0123456789ABCDEF', '0123456789abcde', '0123456789abcdef0', 'g123456789abcdef']) {
+        await uploadFails({ senderPeerId: bad });
+      }
+      await uploadFails({ senderPeerId: 1234567890123456 });
+    });
+  });
+
+  describe('更新（每個 Handle 只保留最新的一份）', () => {
+    it('★ reportTime 相同被擋（包括同一秒內的第二份回報）', async () => {
+      const at = await seed();
+      await assertFails(upload(meshReport({ reportTime: at, status: '安全', sos: false })));
+    });
+
+    it('★ reportTime 較舊被擋：慢一步的 Gateway 不會蓋掉較新的回報', async () => {
+      const at = await seed();
+      const older = Timestamp.fromMillis(at.toMillis() - 1000);
+      await assertFails(upload(meshReport({ reportTime: older })));
+      await assertFails(upload(meshReport({ reportTime: older, gatewayUid: OTHER_GATEWAY }), OTHER_GATEWAY));
+    });
+
+    it('★ reportTime 嚴格遞增可以更新', async () => {
+      const at = await seed();
+      const newer = Timestamp.fromMillis(at.toMillis() + 1000);
+      await assertSucceeds(upload(meshReport({ reportTime: newer, status: '安全', sos: false })));
+    });
+
+    it('★ 換另一支 Gateway 寫入較新的回報也可以，gatewayUid 改成新的寫入者', async () => {
+      await seed();
+      await assertSucceeds(upload(
+        meshReport({ reportTime: minutesFromNow(0), gatewayUid: OTHER_GATEWAY }),
+        OTHER_GATEWAY,
+      ));
+      const snap = await getDoc(reportRef(dbFor(ADMIN)));
+      if (snap.data().gatewayUid !== OTHER_GATEWAY) {
+        throw new Error(`gatewayUid 沒有換成新的寫入者：${snap.data().gatewayUid}`);
+      }
+    });
+
+    it('更新時也不能冒用別人的 gatewayUid', async () => {
+      await seed();
+      await assertFails(upload(meshReport({ reportTime: minutesFromNow(0), gatewayUid: OTHER_GATEWAY })));
+    });
+
+    it('較新但格式不對的回報仍被擋', async () => {
+      await seed();
+      await assertFails(upload(meshReport({ reportTime: minutesFromNow(0), status: '安全', sos: true })));
+    });
+
+    it('實際流程：Alice 舉起 SOS → 撤回 SOS，同一份文件更新為不帶 SOS', async () => {
+      await assertSucceeds(upload(meshReport({ reportTime: minutesFromNow(-2) })));
+      await assertSucceeds(upload(meshReport({ reportTime: minutesFromNow(-1), status: '安全', sos: false })));
+      const snap = await getDoc(reportRef(dbFor(ADMIN)));
+      if (snap.data().sos !== false || snap.data().status !== '安全') {
+        throw new Error(`沒有更新成撤回 SOS：${JSON.stringify(snap.data())}`);
+      }
+    });
   });
 });
 

@@ -89,10 +89,14 @@ data class HealthReportPayload(
         val HANDLE_REGEX = Regex("[0-9a-fA-F]{${HANDLE_BYTES * 2}}")
 
         /**
-         * Broadcast Tier 的「隱私半徑」單一決策點。
-         * geohash-5 ≈ 數公里見方——足以做檢傷排序，不足以定位到 Reporter 本人。
+         * Broadcast Tier 的「隱私半徑」單一決策點（ADR-0008）。
+         * geohash-6 在台灣緯度約 0.6 × 1.1 km，對應村里層級：管理後台能以村里、收容所為單位
+         * 統計，都市裡一格仍有數千人，單看 Broadcast Tier 不足以定位到 Reporter 本人。
+         *
+         * 解碼端只接受 0 或這個長度。改這個值就是改線路格式：舊版與新版裝置互相拒收，
+         * 所有裝置要一起更新，並同步改 Dart 端的 `HealthReportPayload.geohashPrecision`。
          */
-        const val GEOHASH_PRECISION = 5
+        const val GEOHASH_PRECISION = 6
 
         /** Broadcast Tier 的位元組上界：1 + handle + status + flags + geohashLen + geohash + time。 */
         const val MAX_ENCODED_SIZE = 1 + HANDLE_BYTES + 1 + 1 + 1 + GEOHASH_PRECISION + 4

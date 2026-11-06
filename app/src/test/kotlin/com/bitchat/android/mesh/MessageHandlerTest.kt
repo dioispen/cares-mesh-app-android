@@ -24,6 +24,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -343,6 +344,91 @@ class MessageHandlerTest {
 
         verify(delegate, never()).onMessageReceived(any())
         assertTrue(toFlutter.isEmpty())
+    }
+
+    // ── Gateway hook（#111）：交出收到時的原始封包，Flutter 那條路維持剝掉 tag ──────────
+
+    @Test
+    fun `verified health report is handed to the gateway hook as received, tag and all`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val packet = healthReportPacket()
+        val toFlutter = mutableListOf<BitchatPacket>()
+        val flutterListener: (BitchatPacket) -> Unit = { toFlutter += it }
+        InboundPacketBridge.addListener(flutterListener)
+
+        val hooked = collectGatewayHook {
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+        }
+
+        InboundPacketBridge.removeListener(flutterListener)
+        val report = hooked.single()
+        assertSame("the packet as received, wire encoding included", packet, report.packet)
+        assertEquals(BroadcastContentTag.HEALTH_REPORT.value, report.packet.payload.first())
+        assertArrayEquals(signature, report.packet.signature)
+        assertEquals("abcdef012345", report.report.reporterHandle)
+        assertEquals(HealthStatus.SAFE, report.report.status)
+        assertEquals(peerID, report.senderPeerID)
+        // Flutter 照舊拿到剝掉 content tag 的 payload（CLAUDE.md 架構限制 1）
+        assertArrayEquals(healthReportData(), toFlutter.single().payload)
+    }
+
+    @Test
+    fun `a health report verified with a departed reporter's cached key reaches the gateway hook`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(null)
+        whenever(delegate.hasCachedHealthReportSigningKey(peerID)).thenReturn(true)
+
+        val hooked = collectGatewayHook {
+            handler.handleMessage(RoutedPacket(healthReportPacket(), peerID, "sync-link"))
+        }
+
+        assertEquals(1, hooked.size)
+    }
+
+    @Test
+    fun `health report from an unverified peer never reaches the gateway hook`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey).copy(isVerifiedNickname = false))
+
+        val hooked = collectGatewayHook {
+            handler.handleMessage(RoutedPacket(healthReportPacket(), peerID, "direct-link"))
+        }
+
+        assertTrue(hooked.isEmpty())
+    }
+
+    @Test
+    fun `an undecodable health report never reaches the gateway hook`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val junk = healthReportPacket().copy(payload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value, 0x09, 0x01, 0x02))
+
+        val hooked = collectGatewayHook {
+            handler.handleMessage(RoutedPacket(junk, peerID, "direct-link"))
+        }
+
+        assertTrue(hooked.isEmpty())
+        verify(delegate, never()).onMessageReceived(any())
+    }
+
+    @Test
+    fun `a field-experiment health report never reaches the gateway hook`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+
+        val hooked = collectGatewayHook {
+            handler.handleMessage(RoutedPacket(healthReportPacket(reporterHandle = "ee0000000003"), peerID, "direct-link"))
+        }
+
+        assertTrue(hooked.isEmpty())
+    }
+
+    private suspend fun collectGatewayHook(block: suspend () -> Unit): List<VerifiedHealthReport> {
+        val hooked = mutableListOf<VerifiedHealthReport>()
+        val listener: (VerifiedHealthReport) -> Unit = { hooked += it }
+        VerifiedHealthReportBridge.addListener(listener)
+        try {
+            block()
+        } finally {
+            VerifiedHealthReportBridge.removeListener(listener)
+        }
+        return hooked
     }
 
     @Test

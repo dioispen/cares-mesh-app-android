@@ -14,7 +14,7 @@ class DisasterReportTest {
 
     /**
      * 跨端權威向量 —— Dart 端 `health_report_payload_test.dart` 使用相同的 bytes 與欄位值。
-     * version=2, handle=abcdef012345, status=重傷(2), flags=SOS, geohash="wsqqm",
+     * version=2, handle=abcdef012345, status=重傷(2), flags=SOS, geohash="wsqqqm"（geohash-6，ADR-0008），
      * reportTime=1_700_000_000 秒。
      */
     private val vectorBytes: ByteArray = byteArrayOf(
@@ -22,8 +22,8 @@ class DisasterReportTest {
         0xAB.toByte(), 0xCD.toByte(), 0xEF.toByte(), 0x01, 0x23, 0x45,
         0x02,
         0x01,
-        0x05,
-        'w'.code.toByte(), 's'.code.toByte(), 'q'.code.toByte(), 'q'.code.toByte(), 'm'.code.toByte(),
+        0x06,
+        'w'.code.toByte(), 's'.code.toByte(), 'q'.code.toByte(), 'q'.code.toByte(), 'q'.code.toByte(), 'm'.code.toByte(),
         0x65, 0x53, 0xF1.toByte(), 0x00
     )
 
@@ -40,13 +40,13 @@ class DisasterReportTest {
         0x65, 0x53, 0xF1.toByte(), 0x00
     )
 
-    /** 版本 1 的向量（沒有 flags byte）：version=1, status=重傷, geohash="wsqqm"。 */
+    /** 版本 1 的向量（沒有 flags byte）：version=1, status=重傷, geohash="wsqqqm"。 */
     private val vectorV1Bytes: ByteArray = byteArrayOf(
         0x01,
         0xAB.toByte(), 0xCD.toByte(), 0xEF.toByte(), 0x01, 0x23, 0x45,
         0x02,
-        0x05,
-        'w'.code.toByte(), 's'.code.toByte(), 'q'.code.toByte(), 'q'.code.toByte(), 'm'.code.toByte(),
+        0x06,
+        'w'.code.toByte(), 's'.code.toByte(), 'q'.code.toByte(), 'q'.code.toByte(), 'q'.code.toByte(), 'm'.code.toByte(),
         0x65, 0x53, 0xF1.toByte(), 0x00
     )
 
@@ -55,7 +55,7 @@ class DisasterReportTest {
         val payload = HealthReportPayload(
             reporterHandle = "abcdef012345",
             status = HealthStatus.SEVERE,
-            geohash = "wsqqm",
+            geohash = "wsqqqm",
             reportTimeMillis = 1_700_000_000_000L,
             sos = true
         )
@@ -69,13 +69,13 @@ class DisasterReportTest {
         assertEquals("abcdef012345", decoded?.reporterHandle)
         assertEquals(HealthStatus.SEVERE, decoded?.status)
         assertEquals(true, decoded?.sos)
-        assertEquals("wsqqm", decoded?.geohash)
+        assertEquals("wsqqqm", decoded?.geohash)
         assertEquals(1_700_000_000_000L, decoded?.reportTimeMillis)
     }
 
     @Test
     fun withoutSosTheFlagsByteIsZero() {
-        val payload = HealthReportPayload("abcdef012345", HealthStatus.SEVERE, "wsqqm", 1_700_000_000_000L)
+        val payload = HealthReportPayload("abcdef012345", HealthStatus.SEVERE, "wsqqqm", 1_700_000_000_000L)
         assertArrayEquals(vectorNoSosBytes, payload.encode())
         assertEquals(false, HealthReportPayload.decode(vectorNoSosBytes)?.sos)
     }
@@ -100,7 +100,7 @@ class DisasterReportTest {
         assertNotNull(decoded)
         assertEquals(HealthStatus.SEVERE, decoded?.status)
         assertEquals(false, decoded?.sos)
-        assertEquals("wsqqm", decoded?.geohash)
+        assertEquals("wsqqqm", decoded?.geohash)
         assertEquals(1_700_000_000_000L, decoded?.reportTimeMillis)
     }
 
@@ -199,12 +199,43 @@ class DisasterReportTest {
         val decoded = HealthReportPayload.decode(
             HealthReportPayload.fromLocation("abcdef012345", HealthStatus.SAFE, lat, lng, 1L).encode()
         )!!
+        assertEquals("wsqqqm", decoded.geohash)
         val approx = decoded.approximateLatLng()!!
         assertNotEquals(lat, approx.first, 0.0)
         assertNotEquals(lng, approx.second, 0.0)
-        // 誤差落在 geohash-5 精度的量級（數公里 ≈ 0.1 度以內）
-        assertTrue(Math.abs(lat - approx.first) < 0.1)
-        assertTrue(Math.abs(lng - approx.second) < 0.1)
+        // geohash-6 一格約 0.0055° × 0.011°，誤差不超過半格（約一公里內）
+        assertTrue(Math.abs(lat - approx.first) < 0.003)
+        assertTrue(Math.abs(lng - approx.second) < 0.006)
+    }
+
+    /** 6 碼的概略中心就是那一格的中心：App 內 BLE 互助任務的距離與導航用的就是它。 */
+    @Test
+    fun approximateCenterOfTheAuthoritativeVector() {
+        val approx = HealthReportPayload.decode(vectorBytes)!!.approximateLatLng()!!
+        assertEquals(25.03509521484375, approx.first, 1e-12)
+        assertEquals(121.5692138671875, approx.second, 1e-12)
+    }
+
+    /**
+     * 解碼端只接受 0 或 6 碼。舊版裝置的 geohash-5 回報一律拒收（ADR-0008：所有裝置一起更新，
+     * 不混用），其他長度也一樣。
+     */
+    @Test
+    fun rejectsGeohashOfAnyOtherLength() {
+        for (length in listOf(1, 5, 7, 12)) {
+            val geohash = "wsqqqmwsqqqm".take(length).toByteArray(Charsets.US_ASCII)
+            val v2 = byteArrayOf(0x02, 0xAB.toByte(), 0xCD.toByte(), 0xEF.toByte(), 0x01, 0x23, 0x45, 0x02, 0x01) +
+                byteArrayOf(length.toByte()) + geohash + byteArrayOf(0x65, 0x53, 0xF1.toByte(), 0x00)
+            val v1 = byteArrayOf(0x01, 0xAB.toByte(), 0xCD.toByte(), 0xEF.toByte(), 0x01, 0x23, 0x45, 0x02) +
+                byteArrayOf(length.toByte()) + geohash + byteArrayOf(0x65, 0x53, 0xF1.toByte(), 0x00)
+            assertNull("version 2, geohash length $length", HealthReportPayload.decode(v2))
+            assertNull("version 1, geohash length $length", HealthReportPayload.decode(v1))
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun encodeRejectsAGeohash5() {
+        HealthReportPayload("abcdef012345", HealthStatus.SEVERE, "wsqqq", 1_700_000_000_000L).encode()
     }
 
     @Test
@@ -226,8 +257,10 @@ class DisasterReportTest {
             "abcdef012345", HealthStatus.SEVERE, 25.0330, 121.5654, 1_700_000_000_000L
         ).encode()
         assertTrue(encoded.size <= HealthReportPayload.MAX_ENCODED_SIZE)
-        assertEquals(19, HealthReportPayload.MAX_ENCODED_SIZE)
-        assertEquals(19, vectorBytes.size)
+        // 1 + 6 + 1 + 1 + 1 + 6 + 4：geohash-6 讓上界從 19 增為 20（ADR-0008）
+        assertEquals(20, HealthReportPayload.MAX_ENCODED_SIZE)
+        assertEquals(20, encoded.size)
+        assertEquals(20, vectorBytes.size)
     }
 
     @Test

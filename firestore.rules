@@ -14,6 +14,22 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/rescuers/$(request.auth.uid));
     }
 
+    // Administrator（管理後台的帳號，見 CONTEXT.md 與 docs/MESH_GATEWAY.md）的唯一依據：
+    // admins/{uid} 文件存在與否。只有 Administrator 讀得到 Gateway 代傳的 mesh_reports，
+    // 以及 Reporter Handle 屬於哪個帳號（reporter_handles，ADR-0009）。
+    //
+    // 授予方式：由專案管理者在 Firebase console（或用 Admin SDK）建立 admins/{該帳號的 uid}，
+    // 內容不限，空文件也可以；刪掉那份文件就是撤銷。
+    //
+    // 與 Verified Rescuer 互相獨立：rescuers 與 admins 是兩份名單，持有其中一個不會得到
+    // 另一個的任何權限——Administrator 讀不到 Sensitive Tier，Verified Rescuer 也讀不到
+    // Gateway 的資料。和 isRescuer() 一樣不放在 users/{uid} 的欄位，因為使用者能寫自己的
+    // users 文件，放在那裡等於讓人自我提權。
+    function isAdmin() {
+      return request.auth != null
+          && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
     function isNonNegativeInt(value) {
       return value is int && value >= 0;
     }
@@ -40,6 +56,13 @@ service cloud.firestore {
 
     match /rescuers/{uid} {
       // 只能查自己是不是 Verified Rescuer；名單本身不外流。
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /admins/{uid} {
+      // 比照 rescuers：只能查自己是不是 Administrator，名單不外流。客戶端一律不可寫，
+      // 連 Administrator 自己也不能替別人授權或撤銷自己，只能由後台處理。
       allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
@@ -165,6 +188,121 @@ service cloud.firestore {
     // NOTE: 這裡的任何欄位（例如 role）都不構成授權依據，救援者身分見 rescuers。
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // reporter_handles/{uid}/installations/{reporterHandle}：Reporter 本人登記「這次安裝的
+    // Reporter Handle 屬於我」（docs/MESH_GATEWAY.md 5.3），讓管理後台能把 Gateway 代傳的
+    // mesh_reports 對回已註冊的帳號，並與 health_reports 去重。一個帳號用幾支手機就有幾份；
+    // 一支手機先後登入不同帳號時，同一個 Handle 會出現在多個 uid 底下，所以不擋重複的 Handle。
+    //
+    // 只有 Administrator 與本人讀得到（ADR-0009）：Reporter Handle 在 mesh 上是明文，
+    // 附近任何人都聽得到；要是登入帳號就能查，等於讓人憑空中聽到的 Handle 查出是誰。
+    //
+    // 只有本人能寫，而且只能寫在自己的 uid 底下——寫在別人底下等於替別人認領 Handle。
+    // 但這擋不住把「聽到的別人的 Handle」登記在自己底下（冒領）：規則不知道 Handle 背後是
+    // 哪一把 key。後台遇到多個 uid 宣稱同一個 Handle 時，比對 signingPublicKey 與
+    // mesh_reports 原始封包的簽章 key 才分得出來（docs/MESH_GATEWAY.md 第 9 節）。
+    // Administrator 可以刪（清理冒領或災後清空），但不能替人登記。
+    match /reporter_handles/{uid}/installations/{handle} {
+      function validInstallation(handle) {
+        let data = request.resource.data;
+        let fields = ['reporterHandle', 'signingPublicKey', 'registeredAt'];
+        return data.keys().hasAll(fields)
+            && data.keys().hasOnly(fields)
+            // 文件 ID 就是 Handle；小寫 12 碼十六進位，與 mesh_reports 的文件 ID 一致，
+            // 後台才能直接拿來對照。
+            && handle.matches('^[0-9a-f]{12}$')
+            && handle == data.reporterHandle
+            // ANNOUNCE 裡的那把 Ed25519 簽章公鑰，固定 32 bytes。
+            && data.signingPublicKey is bytes
+            && data.signingPublicKey.size() == 32
+            // 用伺服器時間：後台以最新的 registeredAt 判斷 Handle 目前屬於哪個帳號，
+            // 不能讓客戶端填未來的時間搶先。
+            && data.registeredAt == request.time;
+      }
+
+      allow read: if isAdmin() || isOwner(uid);
+      // create 與 update 同一套檢查：App 每次啟動都會整份覆寫一次（idempotent 登記）。
+      allow create, update: if isOwner(uid) && validInstallation(handle);
+      allow delete: if isAdmin() || isOwner(uid);
+    }
+
+    // 管理後台用 collection group 查詢 installations（where reporterHandle == handle），從
+    // 結果的路徑取出 uid（docs/MESH_GATEWAY.md 第 8 節）。collection group 查詢只認遞迴
+    // 萬用字元的 match，上面 /reporter_handles/{uid}/installations/{handle} 的規則套用不到，
+    // 所以另外開這一條給 Administrator。
+    //
+    // 規則是「任一條 allow 成立即可」，所以這條對 reporter_handles 底下的文件只會多放行
+    // Administrator，而 Administrator 本來就讀得到；其他人沒有新增任何讀取權。
+    // NOTE: 它也涵蓋任何路徑下名為 installations 的 collection，別的資料不要取這個名字，
+    // 否則 Administrator 也讀得到。
+    match /{path=**}/installations/{handle} {
+      allow read: if isAdmin();
+    }
+
+    // mesh_reports/{reporterHandle}：Gateway 代傳上來的 Health Report Broadcast Tier
+    // （docs/MESH_GATEWAY.md 5.2、ADR-0009）。每個 Reporter Handle 一份，只保留 reportTime
+    // 最新的那份。內容只有 Status、SOS、geohash-6 與稽核材料，沒有 Detail／Sensitive Tier。
+    //
+    // 只有 Administrator 能讀、能刪：這是給管理後台統計的資料，寫入的 Gateway 自己也讀不到
+    // （它本來就不先讀再寫）。App 不刪除任何 mesh_reports，災後由 Administrator 清空。
+    //
+    // 任何登入帳號都可能是 Gateway，所以任何登入帳號都能寫。伺服器端不驗簽（沒有 Cloud
+    // Functions），規則看不出內容是不是 Reporter 真的發的：偽造 SOS、用「安全」蓋掉真的 SOS
+    // 都擋不住（docs/MESH_GATEWAY.md 第 9 節）。規則能做的是：
+    //   - 格式：欄位、型別、Status 與 SOS 的合法組合都要對，後台不必處理垃圾資料。
+    //   - 稽核：gatewayUid 必須是寫入者自己，出事時能追到是哪個帳號寫的。
+    //   - 時間：reportTime 的範圍與 update 的嚴格遞增，見下方說明。
+    match /mesh_reports/{handle} {
+      function validMeshReport(handle) {
+        let data = request.resource.data;
+        let fields = ['schemaVersion', 'reporterHandle', 'status', 'sos', 'geohash',
+                      'reportTime', 'uploadedAt', 'gatewayUid', 'senderPeerId',
+                      'rawPacket', 'announcement'];
+        return request.auth != null
+            && data.gatewayUid == request.auth.uid
+            // 欄位一個都不能少：geohash 與 announcement 沒有值時也要明確寫 null。
+            && data.keys().hasAll(fields)
+            && data.keys().hasOnly(fields)
+            && data.schemaVersion is int
+            && data.schemaVersion == 1
+            // 文件 ID 就是 Handle，與 reporter_handles 的文件 ID 同一種格式，後台才能對照。
+            && handle.matches('^[0-9a-f]{12}$')
+            && handle == data.reporterHandle
+            && data.status in ['安全', '輕傷', '重傷', '未宣告']
+            && data.sos is bool
+            // ADR-0004：宣告「安全」就是撤回 SOS；「未宣告」只會出現在舉起 SOS 而沒說
+            // 傷勢的時候。
+            && !(data.status == '安全' && data.sos)
+            && !(data.status == '未宣告' && !data.sos)
+            // ADR-0008：Broadcast Tier 的 geohash 精度是 6；Reporter 沒有位置時為 null。
+            && (data.geohash == null || (data.geohash is string && data.geohash.size() == 6))
+            && data.uploadedAt == request.time
+            // reportTime 是 Reporter 手機的時鐘，精度到秒。往後最多容忍 10 分鐘的時鐘誤差：
+            // 再晚的話，一份未來時間的回報會讓之後真的回報都不夠「新」，把文件鎖死。
+            // 往前最多 2 小時 10 分鐘：Gateway 只轉送 2 小時內的回報，再舊的已過保留期限。
+            && data.reportTime is timestamp
+            && data.reportTime <= request.time + duration.value(10, 'm')
+            && data.reportTime >= request.time - duration.value(130, 'm')
+            // 封包標頭的 senderID：8 bytes，16 個小寫十六進位字元。
+            && data.senderPeerId is string
+            && data.senderPeerId.matches('^[0-9a-f]{16}$')
+            // 日後驗簽的材料，現在沒有人驗。正常的 HEALTH_REPORT 與 ANNOUNCE 編碼（含
+            // padding）都在 1 KB 以內；設上限是不讓這兩個欄位被拿來塞大檔案。
+            && data.rawPacket is bytes
+            && data.rawPacket.size() <= 1024
+            && (data.announcement == null
+                || (data.announcement is bytes && data.announcement.size() <= 1024));
+      }
+
+      allow read, delete: if isAdmin();
+      allow create: if validMeshReport(handle);
+      // update 要求 reportTime 嚴格遞增：Gateway 不先讀再寫，慢一步的 Gateway 拿著較舊的
+      // 回報整份覆寫時，會被這條擋下，不會蓋掉別的 Gateway 已經寫入的較新回報（Gateway
+      // 把 PERMISSION_DENIED 當成「已經有人寫過」）。換哪一支 Gateway 寫都可以，gatewayUid
+      // 會換成新的寫入者。代價是同一秒內送出的第二份回報會被拒；極少見，接受。
+      allow update: if validMeshReport(handle)
+                    && request.resource.data.reportTime > resource.data.reportTime;
     }
 
     // supply_items 是所有使用者共用的型錄；套用欄位限制而非擁有者限制，
