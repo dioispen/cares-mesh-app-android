@@ -58,7 +58,7 @@ void main() {
     final restored = HealthSurvey.fromMaps(sensitive: s.toSensitiveMap());
     expect(restored.selfVulnerable, ['孕婦']);
     expect(restored.vulnerable, ['幼童']);
-    expect(const HealthSurvey().withSensitive({'selfVulnerable': ['長者']}).selfVulnerable, ['長者']);
+    expect(HealthSurvey.fromMaps(sensitive: {'selfVulnerable': ['長者']}).selfVulnerable, ['長者']);
   });
 
   test('「我本人」與同行人數無關：只有我時也照常保留', () {
@@ -103,14 +103,6 @@ void main() {
     expect(restored.companions, 2);
     expect(restored.vulnerable, ['長者']);
     expect(restored.notes, '家中長者的降血壓藥快用完了');
-  });
-
-  test('withSensitive 只換掉敏感的那一半', () {
-    final s = HealthSurvey.fromMaps(detail: survey.toDetailMap())
-        .withSensitive({'vulnerable': ['幼童'], 'notes': '需要奶粉'});
-    expect(s.needs, ['飲用水', '藥品']);
-    expect(s.vulnerable, ['幼童']);
-    expect(s.notes, '需要奶粉');
   });
 
   test('欄位缺漏或型別錯誤的舊文件退回預設值，不會丟例外', () {
