@@ -8,6 +8,7 @@ import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
 import 'services/chat_service.dart';
 import 'services/mascot_service.dart';
+import 'services/mutual_aid_task_board.dart';
 import 'services/reporter_handle_registration.dart';
 import 'widgets/mascot_assistant.dart';
 
@@ -78,6 +79,7 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
       _checkInitialStatus();
       _listenToSystemStatus();
       _startChat();
+      _startMutualAidTasks();
     });
   }
 
@@ -86,6 +88,12 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   void _startChat() {
     if (kIsWeb) return;
     unawaited(ChatService.instance.start());
+  }
+
+  /// BLE 收到的互救任務也從 app 啟動就開始收，不必等到打開健康回報頁（[MutualAidTaskBoard]）。
+  void _startMutualAidTasks() {
+    if (kIsWeb) return;
+    MutualAidTaskBoard.instance.startCollecting();
   }
 
   @override

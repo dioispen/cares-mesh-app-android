@@ -472,6 +472,16 @@ void main() {
       expect(merged.single.status, '重傷');
     });
 
+    test('滿了時新的 Reporter 擠掉回報最舊的那位；同一位的新回報不擠', () {
+      final t0 = DateTime.utc(2026, 10, 7, 17, 0);
+      final full = [ble('bbbbbbbbbbbb', t2), ble('cccccccccccc', t0)];
+
+      expect([for (final r in mergeBleReport(full, ble('aaaaaaaaaaaa', t1), capacity: 2)) r.reporterHandle],
+          ['bbbbbbbbbbbb', 'aaaaaaaaaaaa']);
+      expect([for (final r in mergeBleReport(full, ble('bbbbbbbbbbbb', t2), capacity: 2)) r.reporterHandle],
+          ['bbbbbbbbbbbb', 'cccccccccccc']);
+    });
+
     test('不同 Reporter Handle 各留一筆，新來的排在後面', () {
       final merged = mergeBleReport([ble('bbbbbbbbbbbb', t2)], ble('aaaaaaaaaaaa', t1));
 

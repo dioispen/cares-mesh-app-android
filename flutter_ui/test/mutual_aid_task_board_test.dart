@@ -232,15 +232,85 @@ void main() {
     await expectLater(board.readSensitive('alice'), throwsA(isA<TaskAccessDenied>()));
   });
 
-  test('停止收集之後 BLE 任務清掉（頁面關閉時的現況）', () async {
-    board.startCollecting();
-    final list = await watch();
-    await receive(_packet(_payload(handle: 'bbbbbbbbbbbb')));
-    expect(list().tasksNear(), hasLength(1));
+  group('BLE 回報從 app 啟動就開始收，不必開著清單', () {
+    test('關掉清單時照樣收，再打開時看得到', () async {
+      board.startCollecting();
+      final first = board.watch(currentUserId: 'me').listen((_) {});
+      await pumpEventQueue();
+      await first.cancel();
 
-    board.stopCollecting();
-    await pumpEventQueue();
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb')));
+      final list = await watch();
 
-    expect(list().tasksNear(), isEmpty);
+      expect(list().tasksNear().single.userId, 'bbbbbbbbbbbb');
+    });
+
+    test('本機的進度在關掉清單後也留著', () async {
+      board.startCollecting();
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb')));
+      final first = await watch();
+      await board.updateStatus(first().tasksNear().single, TaskStatus.accepted, currentUserId: 'me');
+
+      final again = await watch();
+
+      expect(again().tasksNear().single.status, TaskStatus.accepted);
+    });
+
+    test('登出或緊急清除時忘掉收到的回報與本機進度，之後照常收', () async {
+      board.startCollecting();
+      final list = await watch();
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb')));
+      await board.updateStatus(list().tasksNear().single, TaskStatus.accepted, currentUserId: 'me');
+
+      board.clear();
+      await pumpEventQueue();
+      expect(list().tasksNear(), isEmpty);
+
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb')));
+      expect(list().tasksNear().single.status, TaskStatus.waiting);
+    });
+
+    test('清除前收到、清除後才解碼完的回報不留下來', () async {
+      final decoding = Completer<void>();
+      board = MutualAidTaskBoard(
+        store: store,
+        events: () => events.stream,
+        ownHandle: () async => _myHandle,
+        decode: (bytes) async {
+          await decoding.future;
+          return HealthReportPayload.decode(bytes);
+        },
+      );
+      board.startCollecting();
+      final list = await watch();
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb')));
+
+      board.clear();
+      decoding.complete();
+      await pumpEventQueue();
+
+      expect(list().tasksNear(), isEmpty);
+    });
+
+    test('Reporter 太多時丟掉回報最舊的那位，連同本機進度', () async {
+      board = MutualAidTaskBoard(
+        store: store,
+        events: () => events.stream,
+        ownHandle: () async => _myHandle,
+        decode: (bytes) async => HealthReportPayload.decode(bytes),
+        bleCapacity: 2,
+      );
+      board.startCollecting();
+      final list = await watch();
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb', secs: 1700000000)));
+      await board.updateStatus(list().tasksNear().single, TaskStatus.accepted, currentUserId: 'me');
+      await receive(_packet(_payload(handle: 'cccccccccccc', secs: 1700000200)));
+
+      await receive(_packet(_payload(handle: 'dddddddddddd', secs: 1700000100)));
+
+      expect(list().tasksNear().map((t) => t.userId).toSet(), {'cccccccccccc', 'dddddddddddd'});
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb', secs: 1700000300)));
+      expect(list().tasksNear().firstWhere((t) => t.userId == 'bbbbbbbbbbbb').status, TaskStatus.waiting);
+    });
   });
 }

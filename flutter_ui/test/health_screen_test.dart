@@ -34,22 +34,30 @@ Future<void> animate(WidgetTester tester) async {
 void main() {
   late InMemoryMutualAidTaskStore tasks;
   late StreamController<Map<String, dynamic>> events;
+  late MutualAidTaskBoard board;
+  late HealthReportPublisher publisher;
 
-  Future<void> openMutualAidTab(WidgetTester tester) async {
+  setUp(() {
     SharedPreferences.setMockInitialValues({'app_user': jsonEncode(_user.toJson())});
     tasks = InMemoryMutualAidTaskStore();
     events = StreamController.broadcast();
-    addTearDown(events.close);
-    final board = MutualAidTaskBoard(
+    board = MutualAidTaskBoard(
       store: tasks,
       events: () => events.stream,
       ownHandle: () async => 'aaaaaaaaaaaa',
       decode: (bytes) async => HealthReportPayload.decode(bytes),
     );
-    final publisher = HealthReportPublisher(
+    publisher = HealthReportPublisher(
       store: InMemoryHealthReportStore(),
       broadcast: ({required reporterHandle, required status, required lat, required lng, required sos}) async {},
     );
+    // 正式環境由 main.dart 在 app 啟動時開始收。
+    board.startCollecting();
+  });
+
+  tearDown(() => events.close());
+
+  Future<void> openMutualAidTab(WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: HealthScreen(publisher: publisher, taskBoard: board),
@@ -117,5 +125,27 @@ void main() {
 
     expect(find.text('協助中'), findsOneWidget);
     expect(tasks.updates, isEmpty, reason: 'BLE 任務沒有 Firestore 文件');
+  });
+
+  testWidgets('頁面關著時收到的回報，打開時看得到；先前收到的也還在', (tester) async {
+    await openMutualAidTab(tester);
+    events.add({
+      'type': 'packet',
+      'packetType': BlePacketType.healthReport,
+      'payload': [0x02, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0x02, 0x00, 0x00, 0x65, 0x53, 0xF1, 0x00],
+    });
+    await settle(tester);
+
+    await tester.pumpWidget(const SizedBox());
+    events.add({
+      'type': 'packet',
+      'packetType': BlePacketType.healthReport,
+      'payload': [0x02, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x02, 0x00, 0x00, 0x65, 0x53, 0xF1, 0x00],
+    });
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await openMutualAidTab(tester);
+
+    expect(find.text('匿名回報 bbbb'), findsOneWidget);
+    expect(find.text('匿名回報 cccc'), findsOneWidget);
   });
 }

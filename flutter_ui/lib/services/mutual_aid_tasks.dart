@@ -260,17 +260,28 @@ DateTime? _reportTime(ReportEntry report) {
   return raw is String ? DateTime.tryParse(raw) : null;
 }
 
+/// BLE 收到的回報最多記幾位 Reporter，比照 Gateway 暫存的上限（`MeshGateway.MAX_HELD_REPORTS`）。
+const maxBleReports = 1000;
+
 /// 把收到的一份 BLE 廣播回報併入清單：同一 Reporter Handle 只留 reportTime 最新的一份。
 ///
 /// 抵達順序不等於回報順序：封包會經不同路徑晚到，anti-entropy 同步也會在重新連上後
 /// 補送斷線期間的回報（#91）。reportTime 較舊的直接忽略並回傳原本那份清單（identical），
 /// 呼叫端可據此略過重繪。時間相同時以後到的為準——線路上只到秒，分不出先後。
+///
+/// 不按時間移除：手機沒電、不再更新的 SOS 反而最需要被看見。只有 Reporter 超過 [capacity] 位時，
+/// 新來的擠掉回報最舊的那位。
 List<BroadcastHealthReport> mergeBleReport(
   List<BroadcastHealthReport> current,
-  BroadcastHealthReport incoming,
-) {
+  BroadcastHealthReport incoming, {
+  int capacity = maxBleReports,
+}) {
   final index = current.indexWhere((r) => r.reporterHandle == incoming.reporterHandle);
-  if (index < 0) return [...current, incoming];
+  if (index < 0) {
+    if (current.length < capacity) return [...current, incoming];
+    final oldest = current.reduce((a, b) => b.reportTime.isBefore(a.reportTime) ? b : a);
+    return [...current.where((r) => !identical(r, oldest)), incoming];
+  }
   if (incoming.reportTime.isBefore(current[index].reportTime)) return current;
   return [...current]..[index] = incoming;
 }

@@ -140,10 +140,12 @@ class MutualAidTaskBoard {
     Stream<Map<String, dynamic>> Function() events = BitchatBridge.events,
     Future<String> Function()? ownHandle,
     Future<HealthReportPayload?> Function(List<int> payload) decode = _decodeInBackground,
+    int bleCapacity = maxBleReports,
   }) : _store = store,
        _events = events,
        _ownHandle = ownHandle ?? HealthReportPublisher.instance.reporterHandle,
-       _decode = decode;
+       _decode = decode,
+       _bleCapacity = bleCapacity;
 
   /// app 層級的那一份；screen 的建構子可以換成測試替身。
   static final MutualAidTaskBoard instance = MutualAidTaskBoard();
@@ -152,10 +154,15 @@ class MutualAidTaskBoard {
   final Stream<Map<String, dynamic>> Function() _events;
   final Future<String> Function() _ownHandle;
   final Future<HealthReportPayload?> Function(List<int> payload) _decode;
+  final int _bleCapacity;
 
   StreamSubscription<Map<String, dynamic>>? _collecting;
 
-  /// BLE 收到的回報，每個 Reporter Handle 一份。
+  /// 每次 [clear] 加一。清除之前收到、清除之後才解碼完的回報不能留下來。
+  int _generation = 0;
+
+  /// BLE 收到的回報，每個 Reporter Handle 一份。只放記憶體：寫進磁碟會累積成「誰在何時出現在附近」
+  /// 的長期紀錄（ADR-0006 同樣的考量）。
   List<BroadcastHealthReport> _bleReports = const [];
 
   /// BLE 任務的進度只記在本機：它沒有 Firestore 文件，別人看不到你接了它。
@@ -164,7 +171,8 @@ class MutualAidTaskBoard {
   /// 開著的清單，BLE 那一路有變化時通知它們。
   final Set<void Function()> _watchers = {};
 
-  /// 開始收 BLE 廣播的 Health Report。可重複呼叫，只有第一次有效。
+  /// 開始收 BLE 廣播的 Health Report。app 啟動時呼叫一次，之後不必開著清單也照樣收：只在頁面
+  /// 開著時收，會漏掉 Rescuer 沒在看清單時經過的回報。可重複呼叫，只有第一次有效。
   void startCollecting() {
     _collecting ??= _events().listen(
       (event) => unawaited(_receive(event)),
@@ -174,10 +182,10 @@ class MutualAidTaskBoard {
     );
   }
 
-  /// 停止收 BLE 廣播，並忘掉收到的回報與本機的進度。
-  void stopCollecting() {
-    unawaited(_collecting?.cancel());
-    _collecting = null;
+  /// 忘掉收到的回報與本機的進度，之後照常收。登出與緊急清除時呼叫：下一個登入的人不該看到前一個人
+  /// 接了哪些任務。
+  void clear() {
+    _generation++;
     _bleReports = const [];
     _bleProgress.clear();
     _notifyWatchers();
@@ -189,16 +197,20 @@ class MutualAidTaskBoard {
     if ((event['packetType'] as num?)?.toInt() != BlePacketType.healthReport) return;
     final payload = event['payload'];
     if (payload is! List) return;
+    final generation = _generation;
 
     final decoded = await _decode(List<int>.from(payload));
-    if (decoded == null || _collecting == null) return;
+    if (decoded == null) return;
     // 不列自己發出的回報（Broadcast Tier 沒有帳號 ID，以 Reporter Handle 比對）。
     if (decoded.reporterHandle == await _ownHandle()) return;
-    if (_collecting == null) return;
+    if (generation != _generation) return;
 
-    final merged = mergeBleReport(_bleReports, decoded.toBroadcastReport());
+    final merged = mergeBleReport(_bleReports, decoded.toBroadcastReport(), capacity: _bleCapacity);
     if (identical(merged, _bleReports)) return;
     _bleReports = merged;
+    // 被擠掉的 Reporter，本機進度也一起忘掉。
+    final kept = {for (final report in merged) bleTaskFrom(report, myLat: null, myLng: null).id};
+    _bleProgress.removeWhere((id, _) => !kept.contains(id));
     _notifyWatchers();
   }
 

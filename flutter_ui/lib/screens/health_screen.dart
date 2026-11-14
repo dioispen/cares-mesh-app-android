@@ -96,7 +96,6 @@ class _HealthScreenState extends State<HealthScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _board.startCollecting();
     _loadUserAndPosition();
   }
 
@@ -111,7 +110,6 @@ class _HealthScreenState extends State<HealthScreen>
     mascotRouteObserver.unsubscribe(this);
     _tasksSubscription?.cancel();
     _ownReportSubscription?.cancel();
-    _board.stopCollecting();
     _tabController.dispose();
     super.dispose();
   }
