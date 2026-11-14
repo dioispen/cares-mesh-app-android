@@ -8,6 +8,7 @@ import '../models/health_report.dart';
 import '../protocol/ble_packet_decoder.dart';
 import 'health_report_publisher.dart';
 import 'mutual_aid_tasks.dart';
+import 'sos.dart' show reportResetsTask;
 
 /// 讀取或寫入被 firestore.rules 擋下。
 class TaskAccessDenied implements Exception {
@@ -205,13 +206,33 @@ class MutualAidTaskBoard {
     if (decoded.reporterHandle == await _ownHandle()) return;
     if (generation != _generation) return;
 
-    final merged = mergeBleReport(_bleReports, decoded.toBroadcastReport(), capacity: _bleCapacity);
+    final incoming = decoded.toBroadcastReport();
+    final previous = _bleReports.where((r) => r.reporterHandle == incoming.reporterHandle).firstOrNull;
+    final merged = mergeBleReport(_bleReports, incoming, capacity: _bleCapacity);
     if (identical(merged, _bleReports)) return;
+    _reopenIfNeeded(previous, incoming);
     _bleReports = merged;
     // 被擠掉的 Reporter，本機進度也一起忘掉。
     final kept = {for (final report in merged) bleTaskFrom(report, myLat: null, myLng: null).id};
     _bleProgress.removeWhere((id, _) => !kept.contains(id));
     _notifyWatchers();
+  }
+
+  /// 較新的回報讓本機進度回到等待中的規則，與 Firestore 任務相同（[reportResetsTask]）：Status 變了，
+  /// 或已完成的任務又帶著 SOS。重送相同內容不動，路上的協助者不會丟掉任務。
+  void _reopenIfNeeded(BroadcastHealthReport? previous, BroadcastHealthReport incoming) {
+    if (previous == null) return;
+    final id = bleTaskFrom(incoming, myLat: null, myLng: null).id;
+    final progress = _bleProgress[id];
+    if (progress == null) return;
+    if (reportResetsTask(
+      previousStatus: previous.status,
+      status: incoming.status,
+      sos: incoming.sos,
+      taskStatus: progress.name,
+    )) {
+      _bleProgress.remove(id);
+    }
   }
 
   void _notifyWatchers() {

@@ -232,6 +232,73 @@ void main() {
     await expectLater(board.readSensitive('alice'), throwsA(isA<TaskAccessDenied>()));
   });
 
+  group('BLE 任務收到同一人較新的回報時，本機進度要不要回到等待中', () {
+    /// 收到 [first]、把進度改成 [progress]，再收到 [next]，回傳任務最後的進度。
+    Future<TaskStatus> progressAfter(List<int> first, TaskStatus progress, List<int> next) async {
+      board.startCollecting();
+      final list = await watch();
+      await receive(_packet(first));
+      await board.updateStatus(list().tasksNear().single, progress, currentUserId: 'me');
+      await receive(_packet(next));
+      return list().tasksNear().single.status;
+    }
+
+    test('已完成，對方又舉起 SOS：重新開一筆，不然這次求救沒人看得到', () async {
+      expect(
+        await progressAfter(
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000000),
+          TaskStatus.done,
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, sos: true, secs: 1700000100),
+        ),
+        TaskStatus.waiting,
+      );
+    });
+
+    test('進行中，對方的 Status 改變：回到等待中', () async {
+      expect(
+        await progressAfter(
+          _payload(handle: 'bbbbbbbbbbbb', status: 1, secs: 1700000000),
+          TaskStatus.accepted,
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000100),
+        ),
+        TaskStatus.waiting,
+      );
+    });
+
+    test('進行中，對方重送相同的 Status：進度保留，路上的協助者不會丟掉任務', () async {
+      expect(
+        await progressAfter(
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000000),
+          TaskStatus.accepted,
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000100),
+        ),
+        TaskStatus.accepted,
+      );
+    });
+
+    test('已完成，對方送相同的 Status 而沒有 SOS：維持已完成', () async {
+      expect(
+        await progressAfter(
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000000),
+          TaskStatus.done,
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000100),
+        ),
+        TaskStatus.done,
+      );
+    });
+
+    test('較舊的回報晚到時不影響進度', () async {
+      expect(
+        await progressAfter(
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, secs: 1700000100),
+          TaskStatus.done,
+          _payload(handle: 'bbbbbbbbbbbb', status: 1, sos: true, secs: 1700000000),
+        ),
+        TaskStatus.done,
+      );
+    });
+  });
+
   group('BLE 回報從 app 啟動就開始收，不必開著清單', () {
     test('關掉清單時照樣收，再打開時看得到', () async {
       board.startCollecting();
