@@ -146,7 +146,8 @@ typedef ReportEntry = ({String id, Map<String, dynamic> data});
 ///   都列出（[isMutualAidTask]）。
 /// * 排除自己的回報——自己的狀態在「我的狀態」頁，不該出現在待救援清單。
 ///   [currentUserId] 還沒讀到時一律不顯示任何 Firestore 任務，否則會閃出自己那筆。
-/// * BLE 任務的 handle 依設計無法與帳號 ID 連結（ADR-0003），只能在 handle 相同時去重。
+/// * Firestore 與 BLE 的任務不合併：一邊以 uid、一邊以 Reporter Handle 識別，系統刻意無從得知
+///   兩者是不是同一人，同一位 Reporter 可能出現兩筆（ADR-0010）。
 /// * SOS 排最前面；同一組內近的排前面，距離未知的排最後——未知不等於 0 公里，
 ///   不該插隊到最前面。
 List<MutualAidTask> buildMutualAidTasks({
@@ -202,7 +203,6 @@ List<MutualAidTask> buildMutualAidTasks({
 
   for (final bleTask in bleTasks) {
     if (!isMutualAidTask(bleTask.injury, sos: bleTask.sos)) continue;
-    if (tasks.any((t) => t.userId == bleTask.userId)) continue;
     tasks.add(bleTask.copyWith(
       status: bleStatusOverrides[bleTask.id] ?? bleTask.status,
     ));

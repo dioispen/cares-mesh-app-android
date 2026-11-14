@@ -225,7 +225,9 @@ void main() {
       expect(tasks.single.isBle, isTrue);
     });
 
-    test('同一個 handle 已有 Firestore 任務時以 Firestore 為主，不重複列出', () {
+    test('Firestore 與 BLE 的任務不合併，同一位 Reporter 可能出現兩筆（ADR-0010）', () {
+      // Firestore 以 uid、BLE 以 Reporter Handle 識別，系統刻意無從得知兩者是不是同一人。
+      // 就算值剛好相同也不能拿來合併。
       final tasks = buildMutualAidTasks(
         reports: [_report(id: 'aaaaaaaaaaaa', status: '重傷')],
         bleTasks: [_bleTask(handle: 'aaaaaaaaaaaa')],
@@ -234,8 +236,7 @@ void main() {
         myLng: null,
       );
 
-      expect(tasks, hasLength(1));
-      expect(tasks.single.isBle, isFalse);
+      expect([for (final t in tasks) t.isBle], unorderedEquals([false, true]));
     });
 
     test('組任務不會就地改動傳進來的 BLE 任務物件', () {
