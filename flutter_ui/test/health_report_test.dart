@@ -65,7 +65,7 @@ void main() {
 
     test('Detail Tier 只帶這些欄位：大家都讀得到，不能混進 Sensitive Tier', () {
       // 與 firestore.rules 的 detailTierKeys() 對應（taskStatus／helperId 由
-      // health_screen 視情況另外寫入）。多一個欄位，規則就會擋下整筆回報。
+      // HealthReportPublisher 視情況另外寫入）。多一個欄位，規則就會擋下整筆回報。
       expect(
         _report().toDetailJson().keys.toSet(),
         {
