@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/health_report.dart';
 import 'package:flutter_ui/services/mutual_aid_tasks.dart';
 
 /// 台北車站附近的三個點，用來驗證「近的排前面」。
@@ -224,7 +225,9 @@ void main() {
       expect(tasks.single.isBle, isTrue);
     });
 
-    test('同一個 handle 已有 Firestore 任務時以 Firestore 為主，不重複列出', () {
+    test('Firestore 與 BLE 的任務不合併，同一位 Reporter 可能出現兩筆（ADR-0010）', () {
+      // Firestore 以 uid、BLE 以 Reporter Handle 識別，系統刻意無從得知兩者是不是同一人。
+      // 就算值剛好相同也不能拿來合併。
       final tasks = buildMutualAidTasks(
         reports: [_report(id: 'aaaaaaaaaaaa', status: '重傷')],
         bleTasks: [_bleTask(handle: 'aaaaaaaaaaaa')],
@@ -233,8 +236,7 @@ void main() {
         myLng: null,
       );
 
-      expect(tasks, hasLength(1));
-      expect(tasks.single.isBle, isFalse);
+      expect([for (final t in tasks) t.isBle], unorderedEquals([false, true]));
     });
 
     test('組任務不會就地改動傳進來的 BLE 任務物件', () {
@@ -447,52 +449,133 @@ void main() {
   group('mergeBleReport', () {
     final t1 = DateTime.utc(2026, 10, 7, 18, 1);
     final t2 = DateTime.utc(2026, 10, 7, 18, 6);
+    BroadcastHealthReport ble(String handle, DateTime at, {String status = '重傷'}) =>
+        BroadcastHealthReport(reporterHandle: handle, status: status, reportTime: at);
 
     test('較新的回報取代同一 Reporter Handle 的舊回報', () {
-      final merged = mergeBleReport(
-        [(task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1)],
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t2),
-      );
+      final merged = mergeBleReport([ble('aaaaaaaaaaaa', t1, status: '輕傷')], ble('aaaaaaaaaaaa', t2));
 
-      expect(
-        [for (final r in merged) (r.task.injury, r.reportTime)],
-        [('重傷', t2)],
-      );
+      expect([for (final r in merged) (r.status, r.reportTime)], [('重傷', t2)]);
     });
 
     test('較舊的回報晚到（同步補送、繞路）時忽略，回傳原本那份', () {
-      final current = [
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t2),
-      ];
+      final current = [ble('aaaaaaaaaaaa', t2)];
 
-      final merged = mergeBleReport(
-        current,
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1),
-      );
+      final merged = mergeBleReport(current, ble('aaaaaaaaaaaa', t1, status: '輕傷'));
 
       expect(identical(merged, current), isTrue);
-      expect(merged.single.task.injury, '重傷');
+      expect(merged.single.status, '重傷');
     });
 
     test('reportTime 相同時以後到的為準', () {
-      final merged = mergeBleReport(
-        [(task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1)],
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t1),
-      );
+      final merged = mergeBleReport([ble('aaaaaaaaaaaa', t1, status: '輕傷')], ble('aaaaaaaaaaaa', t1));
 
-      expect(merged.single.task.injury, '重傷');
+      expect(merged.single.status, '重傷');
+    });
+
+    test('滿了時新的 Reporter 擠掉回報最舊的那位；同一位的新回報不擠', () {
+      final t0 = DateTime.utc(2026, 10, 7, 17, 0);
+      final full = [ble('bbbbbbbbbbbb', t2), ble('cccccccccccc', t0)];
+
+      expect([for (final r in mergeBleReport(full, ble('aaaaaaaaaaaa', t1), capacity: 2)) r.reporterHandle],
+          ['bbbbbbbbbbbb', 'aaaaaaaaaaaa']);
+      expect([for (final r in mergeBleReport(full, ble('bbbbbbbbbbbb', t2), capacity: 2)) r.reporterHandle],
+          ['bbbbbbbbbbbb', 'cccccccccccc']);
     });
 
     test('不同 Reporter Handle 各留一筆，新來的排在後面', () {
-      final merged = mergeBleReport(
-        [(task: _bleTask(handle: 'bbbbbbbbbbbb'), reportTime: t2)],
-        (task: _bleTask(handle: 'aaaaaaaaaaaa'), reportTime: t1),
+      final merged = mergeBleReport([ble('bbbbbbbbbbbb', t2)], ble('aaaaaaaaaaaa', t1));
+
+      expect([for (final r in merged) r.reporterHandle], ['bbbbbbbbbbbb', 'aaaaaaaaaaaa']);
+    });
+  });
+
+  group('bleTaskFrom', () {
+    test('只有 Broadcast Tier：匿名、概略位置，距離隨自己的位置現算', () {
+      final report = BroadcastHealthReport(
+        reporterHandle: 'abcdef012345',
+        status: '重傷',
+        sos: true,
+        approxLat: 25.0478,
+        approxLng: 121.5170,
+        reportTime: DateTime.utc(2026, 11, 14),
       );
 
-      expect(
-        [for (final r in merged) r.task.userId],
-        ['bbbbbbbbbbbb', 'aaaaaaaaaaaa'],
+      final near = bleTaskFrom(report, myLat: _about1km.lat, myLng: _about1km.lng);
+      final far = bleTaskFrom(report, myLat: _about5km.lat, myLng: _about5km.lng);
+
+      expect(near.name, '匿名回報 abcd');
+      expect(near.isBle, isTrue);
+      expect(near.sos, isTrue);
+      expect(near.location, '概略位置 25.05, 121.52');
+      expect(near.distanceKm, lessThan(far.distanceKm!));
+      expect(bleTaskFrom(report, myLat: null, myLng: null).distanceKm, isNull);
+    });
+
+    test('沒有位置的回報不編座標', () {
+      final report = BroadcastHealthReport(reporterHandle: 'abcdef012345', status: '輕傷', reportTime: DateTime.utc(2026, 11, 14));
+
+      final task = bleTaskFrom(report, myLat: 25.0, myLng: 121.5);
+
+      expect(task.location, '位置未提供');
+      expect(task.lat, isNull);
+      expect(task.distanceKm, isNull);
+    });
+  });
+
+  group('reportAgeLabel：回報是多久以前的', () {
+    final now = DateTime.utc(2026, 11, 14, 12, 0);
+
+    test('一分鐘內是剛剛', () {
+      expect(reportAgeLabel(now.subtract(const Duration(seconds: 59)), now: now), '剛剛');
+    });
+
+    test('一小時內說幾分鐘前', () {
+      expect(reportAgeLabel(now.subtract(const Duration(minutes: 1)), now: now), '1 分鐘前');
+      expect(reportAgeLabel(now.subtract(const Duration(minutes: 59, seconds: 59)), now: now), '59 分鐘前');
+    });
+
+    test('一天內說幾小時前，再久說幾天前', () {
+      expect(reportAgeLabel(now.subtract(const Duration(hours: 5, minutes: 40)), now: now), '5 小時前');
+      expect(reportAgeLabel(now.subtract(const Duration(days: 2, hours: 3)), now: now), '2 天前');
+    });
+
+    test('對方的時鐘比較快、回報時間在未來時說剛剛，不顯示負數', () {
+      expect(reportAgeLabel(now.add(const Duration(minutes: 3)), now: now), '剛剛');
+    });
+
+    test('不知道回報時間時不編', () {
+      expect(reportAgeLabel(null, now: now), isNull);
+    });
+  });
+
+  group('任務帶著回報時間', () {
+    test('Firestore 讀 reportTime，舊文件沒有 Z 的本地時間也讀得懂；讀不出來時是 null', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(id: 'a', reporterId: 'a', status: '重傷', reportTime: '2026-11-14T08:00:00Z'),
+          _report(id: 'b', reporterId: 'b', status: '重傷', reportTime: 'not a time'),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
       );
+
+      expect(tasks.firstWhere((t) => t.userId == 'a').reportTime, DateTime.utc(2026, 11, 14, 8));
+      expect(tasks.firstWhere((t) => t.userId == 'b').reportTime, isNull);
+    });
+
+    test('BLE 用 Broadcast Tier 裡的 reportTime，套用本機進度後也還在', () {
+      final at = DateTime.utc(2026, 11, 14, 8);
+      final task = bleTaskFrom(
+        BroadcastHealthReport(reporterHandle: 'abcdef012345', status: '重傷', reportTime: at),
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(task.reportTime, at);
+      expect(task.copyWith(status: TaskStatus.accepted).reportTime, at);
     });
   });
 
