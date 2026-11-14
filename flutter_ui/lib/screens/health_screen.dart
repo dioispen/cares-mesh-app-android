@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show compute, defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,24 +11,22 @@ import '../models/user.dart';
 import '../models/health_report.dart';
 import '../models/health_report_delivery.dart';
 import '../models/health_survey.dart';
-import '../bridge/bitchat_bridge.dart';
-import '../protocol/ble_packet_decoder.dart';
 import '../services/mascot_service.dart';
 import '../services/mutual_aid_tasks.dart';
 import '../services/health_report_publisher.dart';
+import '../services/mutual_aid_task_board.dart';
 import '../services/sos.dart' show SosState;
 import '../widgets/health_survey_form.dart';
 import 'sos_screen.dart';
 
-// Top-level function required by compute() — must live outside any class.
-HealthReportPayload? _decodeHealthReportPayload(List<int> payload) =>
-    HealthReportPayload.decode(payload);
-    
 class HealthScreen extends StatefulWidget {
-  const HealthScreen({super.key, this.publisher});
+  const HealthScreen({super.key, this.publisher, this.taskBoard});
 
   /// 測試用；預設為 app 層級的 [HealthReportPublisher.instance]。
   final HealthReportPublisher? publisher;
+
+  /// 測試用；預設為 app 層級的 [MutualAidTaskBoard.instance]。
+  final MutualAidTaskBoard? taskBoard;
 
   @override
   State<HealthScreen> createState() => _HealthScreenState();
@@ -38,6 +35,7 @@ class HealthScreen extends StatefulWidget {
 class _HealthScreenState extends State<HealthScreen>
     with SingleTickerProviderStateMixin, RouteAware {
   HealthReportPublisher get _publisher => widget.publisher ?? HealthReportPublisher.instance;
+  MutualAidTaskBoard get _board => widget.taskBoard ?? MutualAidTaskBoard.instance;
 
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
@@ -52,23 +50,13 @@ class _HealthScreenState extends State<HealthScreen>
   Position? _currentPosition;
   String? _currentUserId;
 
-  /// 自己是不是 Verified Rescuer（rescuers/{uid} 存在）。只用來決定詳情畫面怎麼說明，
-  /// 真正的把關在 firestore.rules。
-  bool _isVerifiedRescuer = false;
-  List<ReportEntry> _reports = [];
-  List<BleTaskEntry> _bleTaskEntries = [];
-  final Map<String, TaskStatus> _taskStatusOverrides = {};
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tasksSubscription;
+  /// 互救任務清單；第一次收到之前為 null。
+  MutualAidTaskList? _taskList;
+  StreamSubscription<MutualAidTaskList>? _tasksSubscription;
   StreamSubscription<OwnReport>? _ownReportSubscription;
-  StreamSubscription? _bridgeSubscription;
-
-  /// 第一批任務資料還沒到 vs. 真的沒有任務——這兩件事要分開講，
-  /// 否則載入中的空畫面會寫著「附近目前無求助任務」。
-  bool _tasksLoaded = false;
 
   /// 互救任務目前顯示哪一個分頁。
   TaskStatus _taskFilter = TaskStatus.waiting;
-  String? _tasksError;
 
   /// 回報送出中：擋住連點造成的重複廣播與互相覆蓋的寫入。
   bool _isSubmitting = false;
@@ -108,9 +96,8 @@ class _HealthScreenState extends State<HealthScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _board.startCollecting();
     _loadUserAndPosition();
-    _subscribeToTasks();
-    _listenToBridge();
   }
 
   @override
@@ -124,7 +111,7 @@ class _HealthScreenState extends State<HealthScreen>
     mascotRouteObserver.unsubscribe(this);
     _tasksSubscription?.cancel();
     _ownReportSubscription?.cancel();
-    _bridgeSubscription?.cancel();
+    _board.stopCollecting();
     _tabController.dispose();
     super.dispose();
   }
@@ -153,65 +140,6 @@ class _HealthScreenState extends State<HealthScreen>
     });
   }
 
-  void _listenToBridge() {
-    _bridgeSubscription = BitchatBridge.events().listen((event) async {
-      // 統一封包格式：Android 直接轉發原始封包，Flutter 負責解析
-      if (event['type'] != 'packet') return;
-      if ((event['packetType'] as num?)?.toInt() != BlePacketType.healthReport) return;
-
-      final rawPayload = event['payload'];
-      if (rawPayload == null) return;
-
-      final payload = List<int>.from(rawPayload as List);
-
-      // 在背景 isolate 解碼二進位 payload，避免佔用 UI thread
-      final decoded = await compute(_decodeHealthReportPayload, payload);
-      if (decoded == null) return;
-      if (!mounted) return;
-
-      // 不顯示自己發出的報告（Broadcast Tier 沒有帳號 ID，以廣播 handle 比對）。
-      if (decoded.reporterHandle == await _publisher.reporterHandle()) return;
-      if (!mounted) return;
-
-      final report = decoded.toBroadcastReport();
-      final position = _currentPosition;
-      final hasLocation = report.approxLat != null && report.approxLng != null;
-
-      final newTask = MutualAidTask(
-        id: 'ble_${report.reporterHandle}',
-        name: '匿名回報 ${report.reporterHandle.substring(0, 4)}',
-        userId: report.reporterHandle,
-        injury: report.status,
-        location: hasLocation
-            ? '概略位置 ${report.approxLat!.toStringAsFixed(2)}, ${report.approxLng!.toStringAsFixed(2)}'
-            : '位置未提供',
-        lat: report.approxLat,
-        lng: report.approxLng,
-        distanceKm: distanceKmBetween(
-          position?.latitude,
-          position?.longitude,
-          report.approxLat,
-          report.approxLng,
-        ),
-        note: '來自 BLE 廣播・聯絡資訊需另行請求',
-        isBle: true,
-        sos: report.sos,
-      );
-
-      // 同一 Reporter Handle 只留 reportTime 最新的一份；同步補送的舊回報晚到時不會蓋掉新的。
-      final merged = mergeBleReport(
-        _bleTaskEntries,
-        (task: newTask, reportTime: report.reportTime),
-      );
-      if (identical(merged, _bleTaskEntries)) return;
-      setState(() => _bleTaskEntries = merged);
-    }, onError: (Object e) {
-      // 沒有原生端的平台（iOS 模擬機、桌機）會丟 MissingPluginException。
-      // 收不到 BLE 廣播不影響 Firestore 那條路，記錄下來就好，不要變成未處理例外。
-      debugPrint('bitchat bridge stream unavailable: $e');
-    });
-  }
-
   /// 舊版存在不分帳號的 'health_status'／'health_sub_injury' 裡：同一台裝置
   /// A 帳號回報「輕傷／割傷」後登出，B 帳號登入時會讀到同一份值，看起來像兩個
   /// 帳號的健康狀態被同步了。現在的快取綁 uid（`OwnStatusCache`）。
@@ -235,6 +163,7 @@ class _HealthScreenState extends State<HealthScreen>
     // 少了個人資料不該連自己回報過什麼都看不到。
     final uid = user?.id ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid != null && mounted) setState(() => _currentUserId = uid);
+    if (mounted) _watchTasks(uid);
 
     if (uid != null) {
       final saved = await _publisher.lastStatus(uid);
@@ -247,7 +176,6 @@ class _HealthScreenState extends State<HealthScreen>
       // 監聽只是掛上去、不等網路，所以搶在定位之前接好：位置權限對話框停在
       // 那裡的時候，「我的狀態」不該跟著卡住。
       _subscribeToOwnReport(uid);
-      unawaited(_loadVerifiedRescuer(uid));
       unawaited(_loadSosState(uid));
     }
 
@@ -265,20 +193,6 @@ class _HealthScreenState extends State<HealthScreen>
     } catch (_) {}
   }
 
-  /// 讀不到（離線、逾時）就當作不是：詳情畫面頂多少顯示聯絡資訊，不會多顯示。
-  Future<void> _loadVerifiedRescuer(String uid) async {
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('rescuers')
-          .doc(uid)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      if (mounted) setState(() => _isVerifiedRescuer = doc.exists);
-    } catch (e) {
-      debugPrint('load rescuer status failed: $e');
-    }
-  }
-
   /// 訂閱自己的回報，讓「我的狀態」以後端為準。本機記得的狀態只是監聽還沒回來前的離線初值。
   void _subscribeToOwnReport(String uid) {
     _ownReportSubscription?.cancel();
@@ -292,54 +206,26 @@ class _HealthScreenState extends State<HealthScreen>
     });
   }
 
-  /// 把任務狀態寫回 Firestore，讓被協助者與其他協助者看到同一份進度。
-  ///
-  /// 先前這裡只改 [_taskStatusOverrides]（純記憶體 Map），所以「已接受／已完成」
-  /// 既不會同步給別人，App 重開也會整批退回等待中。
-  ///
-  /// BLE 任務沒有對應的 Firestore 文件——它只存在於現場廣播——因此仍走本機覆寫。
+  /// 改任務進度（[MutualAidTaskBoard.updateStatus]）。
   Future<void> _updateTaskStatus(
     MutualAidTask task,
     TaskStatus next,
     String successMessage,
     Color successColor,
   ) async {
-    if (task.isBle) {
-      setState(() {
-        _taskStatusOverrides[task.id] = next;
-        _taskFilter = next;
-      });
-      _showTaskSnackBar(successMessage, successColor);
-      return;
-    }
-
-    // 規則要求 helperId 必須等於 request.auth.uid，沒有本機使用者就一定會被擋，
-    // 與其讓使用者看到 permission-denied，不如直接說明原因。
-    if (_currentUserId == null) {
-      _showTaskSnackBar('請先完成註冊驗證，才能接任務', _red);
-      return;
-    }
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('health_reports')
-          .doc(task.id)
-          .update({
-        'taskStatus': next.name,
-        'helperId': next == TaskStatus.waiting ? null : _currentUserId,
-      });
-      // 任務會從原本的分頁移走，畫面要跟著切過去，不然剛接的任務看起來像不見了，
-      // 會讓人以為接受失敗或被別人接走。清單本身由 snapshots() 監聽帶回新狀態重繪。
-      if (mounted) setState(() => _taskFilter = next);
-      _showTaskSnackBar(successMessage, successColor);
-    } catch (e) {
-      debugPrint('updateTaskStatus failed: $e');
-      _showTaskSnackBar(
-        next == TaskStatus.accepted
-            ? '接任務失敗，可能已被其他夥伴接走'
-            : '更新任務狀態失敗，請稍後再試',
-        _red,
-      );
+    switch (await _board.updateStatus(task, next, currentUserId: _currentUserId)) {
+      case TaskUpdate.updated:
+        // 任務會從原本的分頁移走，畫面要跟著切過去，不然剛接的任務看起來像不見了，
+        // 會讓人以為接受失敗或被別人接走。
+        if (mounted) setState(() => _taskFilter = next);
+        _showTaskSnackBar(successMessage, successColor);
+      case TaskUpdate.signInRequired:
+        _showTaskSnackBar('請先完成註冊驗證，才能接任務', _red);
+      case TaskUpdate.failed:
+        _showTaskSnackBar(
+          next == TaskStatus.accepted ? '接任務失敗，可能已被其他夥伴接走' : '更新任務狀態失敗，請稍後再試',
+          _red,
+        );
     }
   }
 
@@ -356,45 +242,15 @@ class _HealthScreenState extends State<HealthScreen>
     );
   }
 
-  void _subscribeToTasks() {
-    _tasksSubscription = FirebaseFirestore.instance
-        .collection('health_reports')
-        .where('status', whereIn: mutualAidQueryStatuses.toList())
-        .snapshots()
-        .listen((snapshot) {
-      if (!mounted) return;
-      setState(() {
-        _reports = [
-          for (final doc in snapshot.docs)
-            (id: doc.id, data: doc.data()),
-        ];
-        _tasksLoaded = true;
-        _tasksError = null;
-      });
-    }, onError: (Object e) {
-      debugPrint('health_reports stream failed: $e');
-      if (!mounted) return;
-      // 讀取失敗要說出來。沿用「附近目前無求助任務」會讓人以為現場沒人需要幫忙。
-      // 離線時監聽不會報錯，而是給本機快取，所以會跑到這裡的多半是權限問題；
-      // 一律叫人檢查網路會讓人找錯方向。
-      final denied = e is FirebaseException && e.code == 'permission-denied';
-      setState(() {
-        _tasksLoaded = true;
-        _tasksError = denied
-            ? '你的帳號目前沒有權限查看互救任務清單'
-            : '任務清單載入失敗，請稍後重新進入此頁';
-      });
+  void _watchTasks(String? uid) {
+    _tasksSubscription?.cancel();
+    _tasksSubscription = _board.watch(currentUserId: uid).listen((list) {
+      if (mounted) setState(() => _taskList = list);
     });
   }
 
-  List<MutualAidTask> _buildTaskList() => buildMutualAidTasks(
-        reports: _reports,
-        bleTasks: [for (final r in _bleTaskEntries) r.task],
-        currentUserId: _currentUserId,
-        myLat: _currentPosition?.latitude,
-        myLng: _currentPosition?.longitude,
-        bleStatusOverrides: _taskStatusOverrides,
-      );
+  List<MutualAidTask> _buildTaskList() =>
+      _taskList?.tasksNear(lat: _currentPosition?.latitude, lng: _currentPosition?.longitude) ?? const [];
 
   Color _statusColor() {
     if (_selectedStatus == statusUndeclared) return _red;
@@ -561,8 +417,9 @@ class _HealthScreenState extends State<HealthScreen>
         sensitiveAccess: sensitiveAccessFor(
           task,
           currentUserId: _currentUserId,
-          isVerifiedRescuer: _isVerifiedRescuer,
+          isVerifiedRescuer: _taskList?.isVerifiedRescuer ?? false,
         ),
+        readSensitive: _board.readSensitive,
         // 沒有座標就沒得導航，按鈕不該出現在那裡讓人白按。
         onNavigate: task.lat != null && task.lng != null
             ? () => _openNavigation(task)
@@ -814,20 +671,27 @@ class _HealthScreenState extends State<HealthScreen>
 
   /// 清單是空的有三種原因，訊息不能混用：還在載入、載入失敗、真的沒有人需要協助。
   Widget _emptyTaskListMessage() {
-    if (_tasksError != null) {
+    final error = switch (_taskList?.error) {
+      // 讀取失敗要說出來。沿用「附近目前無求助任務」會讓人以為現場沒人需要幫忙。
+      // 一律叫人檢查網路會讓人找錯方向，所以權限問題要分開說。
+      TaskListError.denied => '你的帳號目前沒有權限查看互救任務清單',
+      TaskListError.failed => '任務清單載入失敗，請稍後重新進入此頁',
+      null => null,
+    };
+    if (error != null) {
       return Column(
         children: [
           const Icon(Icons.cloud_off_rounded, color: _textSecondary, size: 28),
           const SizedBox(height: 10),
           Text(
-            _tasksError!,
+            error,
             textAlign: TextAlign.center,
             style: const TextStyle(color: _textSecondary),
           ),
         ],
       );
     }
-    if (!_tasksLoaded) {
+    if (!(_taskList?.loaded ?? false)) {
       return const Column(
         children: [
           SizedBox(
@@ -1189,6 +1053,9 @@ class _TaskDetailSheet extends StatelessWidget {
   /// 電話、血型、病史、緊急聯絡人那一區怎麼呈現（ADR-0005）。
   final SensitiveAccess sensitiveAccess;
 
+  /// 讀 Reporter 的 Sensitive Tier（[MutualAidTaskBoard.readSensitive]）。
+  final Future<Map<String, dynamic>?> Function(String reporterUid) readSensitive;
+
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
@@ -1205,6 +1072,7 @@ class _TaskDetailSheet extends StatelessWidget {
     required this.onRelease,
     required this.onNavigate,
     required this.sensitiveAccess,
+    required this.readSensitive,
   });
 
   @override
@@ -1345,7 +1213,7 @@ class _TaskDetailSheet extends StatelessWidget {
 
           if (sensitiveAccess != SensitiveAccess.none) ...[
             const SizedBox(height: 12),
-            _SensitiveTierSection(reporterUid: task.userId, access: sensitiveAccess),
+            _SensitiveTierSection(reporterUid: task.userId, access: sensitiveAccess, read: readSensitive),
           ],
 
           const SizedBox(height: 20),
@@ -1451,8 +1319,9 @@ class _TaskDetailSheet extends StatelessWidget {
 class _SensitiveTierSection extends StatefulWidget {
   final String reporterUid;
   final SensitiveAccess access;
+  final Future<Map<String, dynamic>?> Function(String reporterUid) read;
 
-  const _SensitiveTierSection({required this.reporterUid, required this.access});
+  const _SensitiveTierSection({required this.reporterUid, required this.access, required this.read});
 
   @override
   State<_SensitiveTierSection> createState() => _SensitiveTierSectionState();
@@ -1463,16 +1332,13 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
   static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
 
-  Future<DocumentSnapshot<Map<String, dynamic>>>? _sensitive;
+  Future<Map<String, dynamic>?>? _sensitive;
 
   @override
   void initState() {
     super.initState();
     if (widget.access == SensitiveAccess.granted) {
-      _sensitive = FirebaseFirestore.instance
-          .collection('health_report_sensitive')
-          .doc(widget.reporterUid)
-          .get();
+      _sensitive = widget.read(widget.reporterUid);
     }
   }
 
@@ -1513,13 +1379,12 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
     );
   }
 
-  Widget _granted() => FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+  Widget _granted() => FutureBuilder<Map<String, dynamic>?>(
         future: _sensitive,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             final error = snapshot.error;
-            final denied = error is FirebaseException && error.code == 'permission-denied';
-            return _note(denied
+            return _note(error is TaskAccessDenied
                 ? '讀不到：你的救援者認證或這筆任務的狀態可能已經改變。'
                 : '讀取失敗，請稍後再試。');
           }
@@ -1532,7 +1397,7 @@ class _SensitiveTierSectionState extends State<_SensitiveTierSection> {
               ),
             );
           }
-          final data = snapshot.data?.data();
+          final data = snapshot.data;
           if (data == null) return _note('對方沒有提供聯絡與醫療資訊。');
 
           return Column(

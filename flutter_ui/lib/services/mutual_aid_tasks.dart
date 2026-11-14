@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:geolocator/geolocator.dart';
 
-import '../models/health_report.dart' show statusUndeclared;
+import '../models/health_report.dart' show BroadcastHealthReport, statusUndeclared;
 
 /// 互救任務的進度。Firestore 上以 [TaskStatus.name] 存放（waiting / accepted / done）。
 enum TaskStatus { waiting, accepted, done }
@@ -260,23 +260,40 @@ DateTime? _reportTime(ReportEntry report) {
   return raw is String ? DateTime.tryParse(raw) : null;
 }
 
-/// 一筆 BLE 廣播任務，連同它所依據的 Health Report 的 reportTime。
-typedef BleTaskEntry = ({MutualAidTask task, DateTime reportTime});
-
 /// 把收到的一份 BLE 廣播回報併入清單：同一 Reporter Handle 只留 reportTime 最新的一份。
 ///
 /// 抵達順序不等於回報順序：封包會經不同路徑晚到，anti-entropy 同步也會在重新連上後
 /// 補送斷線期間的回報（#91）。reportTime 較舊的直接忽略並回傳原本那份清單（identical），
 /// 呼叫端可據此略過重繪。時間相同時以後到的為準——線路上只到秒，分不出先後。
-List<BleTaskEntry> mergeBleReport(
-  List<BleTaskEntry> current,
-  BleTaskEntry incoming,
+List<BroadcastHealthReport> mergeBleReport(
+  List<BroadcastHealthReport> current,
+  BroadcastHealthReport incoming,
 ) {
-  final index =
-      current.indexWhere((r) => r.task.userId == incoming.task.userId);
+  final index = current.indexWhere((r) => r.reporterHandle == incoming.reporterHandle);
   if (index < 0) return [...current, incoming];
   if (incoming.reportTime.isBefore(current[index].reportTime)) return current;
   return [...current]..[index] = incoming;
+}
+
+/// 一份 BLE 收到的回報在清單上的樣子。只有 Broadcast Tier：沒有名字、聯絡方式，位置是 geohash
+/// 還原的概略中心（ADR-0003）。距離用 [myLat]／[myLng] 現算，所以會跟著自己的位置更新。
+MutualAidTask bleTaskFrom(BroadcastHealthReport report, {required double? myLat, required double? myLng}) {
+  final hasLocation = report.approxLat != null && report.approxLng != null;
+  return MutualAidTask(
+    id: 'ble_${report.reporterHandle}',
+    name: '匿名回報 ${report.reporterHandle.substring(0, 4)}',
+    userId: report.reporterHandle,
+    injury: report.status,
+    location: hasLocation
+        ? '概略位置 ${report.approxLat!.toStringAsFixed(2)}, ${report.approxLng!.toStringAsFixed(2)}'
+        : '位置未提供',
+    lat: report.approxLat,
+    lng: report.approxLng,
+    distanceKm: distanceKmBetween(myLat, myLng, report.approxLat, report.approxLng),
+    note: '來自 BLE 廣播・聯絡資訊需另行請求',
+    isBle: true,
+    sos: report.sos,
+  );
 }
 
 /// 兩點間距離（公里）。任一端缺座標就回 null。

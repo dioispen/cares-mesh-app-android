@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/health_report.dart';
 import 'package:flutter_ui/services/mutual_aid_tasks.dart';
 
 /// 台北車站附近的三個點，用來驗證「近的排前面」。
@@ -447,52 +448,67 @@ void main() {
   group('mergeBleReport', () {
     final t1 = DateTime.utc(2026, 10, 7, 18, 1);
     final t2 = DateTime.utc(2026, 10, 7, 18, 6);
+    BroadcastHealthReport ble(String handle, DateTime at, {String status = '重傷'}) =>
+        BroadcastHealthReport(reporterHandle: handle, status: status, reportTime: at);
 
     test('較新的回報取代同一 Reporter Handle 的舊回報', () {
-      final merged = mergeBleReport(
-        [(task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1)],
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t2),
-      );
+      final merged = mergeBleReport([ble('aaaaaaaaaaaa', t1, status: '輕傷')], ble('aaaaaaaaaaaa', t2));
 
-      expect(
-        [for (final r in merged) (r.task.injury, r.reportTime)],
-        [('重傷', t2)],
-      );
+      expect([for (final r in merged) (r.status, r.reportTime)], [('重傷', t2)]);
     });
 
     test('較舊的回報晚到（同步補送、繞路）時忽略，回傳原本那份', () {
-      final current = [
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t2),
-      ];
+      final current = [ble('aaaaaaaaaaaa', t2)];
 
-      final merged = mergeBleReport(
-        current,
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1),
-      );
+      final merged = mergeBleReport(current, ble('aaaaaaaaaaaa', t1, status: '輕傷'));
 
       expect(identical(merged, current), isTrue);
-      expect(merged.single.task.injury, '重傷');
+      expect(merged.single.status, '重傷');
     });
 
     test('reportTime 相同時以後到的為準', () {
-      final merged = mergeBleReport(
-        [(task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '輕傷'), reportTime: t1)],
-        (task: _bleTask(handle: 'aaaaaaaaaaaa', injury: '重傷'), reportTime: t1),
-      );
+      final merged = mergeBleReport([ble('aaaaaaaaaaaa', t1, status: '輕傷')], ble('aaaaaaaaaaaa', t1));
 
-      expect(merged.single.task.injury, '重傷');
+      expect(merged.single.status, '重傷');
     });
 
     test('不同 Reporter Handle 各留一筆，新來的排在後面', () {
-      final merged = mergeBleReport(
-        [(task: _bleTask(handle: 'bbbbbbbbbbbb'), reportTime: t2)],
-        (task: _bleTask(handle: 'aaaaaaaaaaaa'), reportTime: t1),
+      final merged = mergeBleReport([ble('bbbbbbbbbbbb', t2)], ble('aaaaaaaaaaaa', t1));
+
+      expect([for (final r in merged) r.reporterHandle], ['bbbbbbbbbbbb', 'aaaaaaaaaaaa']);
+    });
+  });
+
+  group('bleTaskFrom', () {
+    test('只有 Broadcast Tier：匿名、概略位置，距離隨自己的位置現算', () {
+      final report = BroadcastHealthReport(
+        reporterHandle: 'abcdef012345',
+        status: '重傷',
+        sos: true,
+        approxLat: 25.0478,
+        approxLng: 121.5170,
+        reportTime: DateTime.utc(2026, 11, 14),
       );
 
-      expect(
-        [for (final r in merged) r.task.userId],
-        ['bbbbbbbbbbbb', 'aaaaaaaaaaaa'],
-      );
+      final near = bleTaskFrom(report, myLat: _about1km.lat, myLng: _about1km.lng);
+      final far = bleTaskFrom(report, myLat: _about5km.lat, myLng: _about5km.lng);
+
+      expect(near.name, '匿名回報 abcd');
+      expect(near.isBle, isTrue);
+      expect(near.sos, isTrue);
+      expect(near.location, '概略位置 25.05, 121.52');
+      expect(near.distanceKm, lessThan(far.distanceKm!));
+      expect(bleTaskFrom(report, myLat: null, myLng: null).distanceKm, isNull);
+    });
+
+    test('沒有位置的回報不編座標', () {
+      final report = BroadcastHealthReport(reporterHandle: 'abcdef012345', status: '輕傷', reportTime: DateTime.utc(2026, 11, 14));
+
+      final task = bleTaskFrom(report, myLat: 25.0, myLng: 121.5);
+
+      expect(task.location, '位置未提供');
+      expect(task.lat, isNull);
+      expect(task.distanceKm, isNull);
     });
   });
 
