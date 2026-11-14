@@ -39,7 +39,7 @@ An account the project has listed on the backend to run the management dashboard
 _Avoid_: admin user, 管理中心 (the organisation, not the account), Verified Rescuer
 
 **Mutual-aid Task**:
-A Health Report whose Status calls for help (輕傷 or 重傷) or that carries an SOS, offered to Rescuers to take on; those carrying an SOS come first. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it.
+A Health Report whose Status calls for help (輕傷 or 重傷) or that carries an SOS, offered to Rescuers to take on; those carrying an SOS come first. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it. One Reporter can appear as two tasks, one from the backend and one heard over the mesh: the system deliberately cannot tell that a Reporter Handle belongs to an account, so it never merges them.
 _Avoid_: rescue request, ticket, job
 
 **Helper**:
