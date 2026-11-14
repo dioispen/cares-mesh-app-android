@@ -522,6 +522,62 @@ void main() {
     });
   });
 
+  group('reportAgeLabel：回報是多久以前的', () {
+    final now = DateTime.utc(2026, 11, 14, 12, 0);
+
+    test('一分鐘內是剛剛', () {
+      expect(reportAgeLabel(now.subtract(const Duration(seconds: 59)), now: now), '剛剛');
+    });
+
+    test('一小時內說幾分鐘前', () {
+      expect(reportAgeLabel(now.subtract(const Duration(minutes: 1)), now: now), '1 分鐘前');
+      expect(reportAgeLabel(now.subtract(const Duration(minutes: 59, seconds: 59)), now: now), '59 分鐘前');
+    });
+
+    test('一天內說幾小時前，再久說幾天前', () {
+      expect(reportAgeLabel(now.subtract(const Duration(hours: 5, minutes: 40)), now: now), '5 小時前');
+      expect(reportAgeLabel(now.subtract(const Duration(days: 2, hours: 3)), now: now), '2 天前');
+    });
+
+    test('對方的時鐘比較快、回報時間在未來時說剛剛，不顯示負數', () {
+      expect(reportAgeLabel(now.add(const Duration(minutes: 3)), now: now), '剛剛');
+    });
+
+    test('不知道回報時間時不編', () {
+      expect(reportAgeLabel(null, now: now), isNull);
+    });
+  });
+
+  group('任務帶著回報時間', () {
+    test('Firestore 讀 reportTime，舊文件沒有 Z 的本地時間也讀得懂；讀不出來時是 null', () {
+      final tasks = buildMutualAidTasks(
+        reports: [
+          _report(id: 'a', reporterId: 'a', status: '重傷', reportTime: '2026-11-14T08:00:00Z'),
+          _report(id: 'b', reporterId: 'b', status: '重傷', reportTime: 'not a time'),
+        ],
+        bleTasks: const [],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(tasks.firstWhere((t) => t.userId == 'a').reportTime, DateTime.utc(2026, 11, 14, 8));
+      expect(tasks.firstWhere((t) => t.userId == 'b').reportTime, isNull);
+    });
+
+    test('BLE 用 Broadcast Tier 裡的 reportTime，套用本機進度後也還在', () {
+      final at = DateTime.utc(2026, 11, 14, 8);
+      final task = bleTaskFrom(
+        BroadcastHealthReport(reporterHandle: 'abcdef012345', status: '重傷', reportTime: at),
+        myLat: null,
+        myLng: null,
+      );
+
+      expect(task.reportTime, at);
+      expect(task.copyWith(status: TaskStatus.accepted).reportTime, at);
+    });
+  });
+
   group('navigationUris', () {
     test('iOS 先開原生地圖，再退到 Google Maps 網頁', () {
       final uris = navigationUris(

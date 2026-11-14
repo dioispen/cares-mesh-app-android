@@ -955,6 +955,8 @@ class _HealthScreenState extends State<HealthScreen>
                                 color: isDone ? _textSecondary : _textPrimary,
                               ),
                             ),
+                            if (reportAgeLabel(task.reportTime, now: DateTime.now()) case final age?)
+                              Text(age, style: const TextStyle(fontSize: 11, color: _textSecondary)),
                             if (!isDone)
                               Padding(
                                 padding: const EdgeInsets.only(top: 4),
@@ -1162,6 +1164,10 @@ class _TaskDetailSheet extends StatelessWidget {
                 _infoRow(Icons.location_on_rounded, '位置', task.location),
                 const Divider(height: 18, color: Color(0xFFE8E0D5)),
                 _infoRow(Icons.near_me_rounded, '距離', task.distanceLabel),
+                if (reportAgeLabel(task.reportTime, now: DateTime.now()) case final age?) ...[
+                  const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                  _infoRow(Icons.schedule_rounded, '回報時間', age),
+                ],
                 if (!task.isBle) ...[
                   const Divider(height: 18, color: Color(0xFFE8E0D5)),
                   _infoRow(Icons.healing_rounded, '傷勢細項', task.note),

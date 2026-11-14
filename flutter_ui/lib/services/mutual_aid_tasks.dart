@@ -44,6 +44,10 @@ class MutualAidTask {
   /// Reporter 正舉著 SOS。[injury] 此時可能是「未宣告」。
   final bool sos;
 
+  /// 這份回報是 Reporter 什麼時候發出的；讀不出來時為 null。BLE 任務不按時間移除，Rescuer 要看得出
+  /// 回報有多舊，才不會把幾小時前的狀況當成現況。
+  final DateTime? reportTime;
+
   const MutualAidTask({
     required this.id,
     required this.name,
@@ -59,6 +63,7 @@ class MutualAidTask {
     this.helperId,
     this.isBle = false,
     this.sos = false,
+    this.reportTime,
   });
 
   MutualAidTask copyWith({TaskStatus? status, double? distanceKm}) =>
@@ -77,6 +82,7 @@ class MutualAidTask {
         helperId: helperId,
         isBle: isBle,
         sos: sos,
+        reportTime: reportTime,
       );
 
   /// 距離未知時不編故事：顯示「距離未知」而不是 0 公里。
@@ -189,6 +195,7 @@ List<MutualAidTask> buildMutualAidTasks({
         status: taskStatusFromRaw(data['taskStatus']),
         helperId: data['helperId'] as String?,
         sos: sos,
+        reportTime: _reportTime(report),
       ));
     }
   }
@@ -304,7 +311,20 @@ MutualAidTask bleTaskFrom(BroadcastHealthReport report, {required double? myLat,
     note: '來自 BLE 廣播・聯絡資訊需另行請求',
     isBle: true,
     sos: report.sos,
+    reportTime: report.reportTime,
   );
+}
+
+/// 回報是多久以前的：「剛剛」、「5 分鐘前」、「3 小時前」、「2 天前」。不知道時間時回傳 null。
+///
+/// 回報時間由對方裝置的時鐘決定，比自己的晚（在未來）時說「剛剛」，不顯示負數。
+String? reportAgeLabel(DateTime? reportTime, {required DateTime now}) {
+  if (reportTime == null) return null;
+  final age = now.difference(reportTime);
+  if (age.inMinutes < 1) return '剛剛';
+  if (age.inHours < 1) return '${age.inMinutes} 分鐘前';
+  if (age.inDays < 1) return '${age.inHours} 小時前';
+  return '${age.inDays} 天前';
 }
 
 /// 兩點間距離（公里）。任一端缺座標就回 null。

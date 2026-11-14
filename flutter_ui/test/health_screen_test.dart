@@ -94,7 +94,7 @@ void main() {
     await openMutualAidTab(tester);
 
     tasks.pushReports([
-      (id: 'alice', data: {'reporterId': 'alice', 'name': '陳小美', 'status': '重傷', 'reportTime': '2026-11-14T08:00:00Z'}),
+      (id: 'alice', data: {'reporterId': 'alice', 'name': '陳小美', 'status': '重傷', 'reportTime': '2026-01-01T00:00:00Z'}),
     ]);
     events.add({
       'type': 'packet',
@@ -105,6 +105,8 @@ void main() {
 
     expect(find.text('陳小美'), findsOneWidget);
     expect(find.text('匿名回報 bbbb'), findsOneWidget);
+    // 兩筆都看得出回報有多舊。
+    expect(find.textContaining('天前'), findsNWidgets(2));
   });
 
   testWidgets('接下 BLE 任務後切到進行中', (tester) async {
