@@ -50,6 +50,9 @@ class _HealthScreenState extends State<HealthScreen>
   Position? _currentPosition;
   String? _currentUserId;
 
+  /// 自己是不是 Verified Rescuer，只用來決定詳情畫面怎麼說明，真正的把關在 firestore.rules。
+  bool _isVerifiedRescuer = false;
+
   /// 互救任務清單；第一次收到之前為 null。
   MutualAidTaskList? _taskList;
   StreamSubscription<MutualAidTaskList>? _tasksSubscription;
@@ -97,6 +100,7 @@ class _HealthScreenState extends State<HealthScreen>
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _loadUserAndPosition();
+    _watchTasks();
   }
 
   @override
@@ -161,7 +165,6 @@ class _HealthScreenState extends State<HealthScreen>
     // 少了個人資料不該連自己回報過什麼都看不到。
     final uid = user?.id ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid != null && mounted) setState(() => _currentUserId = uid);
-    if (mounted) _watchTasks(uid);
 
     if (uid != null) {
       final saved = await _publisher.lastStatus(uid);
@@ -174,6 +177,7 @@ class _HealthScreenState extends State<HealthScreen>
       // 監聽只是掛上去、不等網路，所以搶在定位之前接好：位置權限對話框停在
       // 那裡的時候，「我的狀態」不該跟著卡住。
       _subscribeToOwnReport(uid);
+      unawaited(_loadVerifiedRescuer(uid));
       unawaited(_loadSosState(uid));
     }
 
@@ -240,15 +244,25 @@ class _HealthScreenState extends State<HealthScreen>
     );
   }
 
-  void _watchTasks(String? uid) {
-    _tasksSubscription?.cancel();
-    _tasksSubscription = _board.watch(currentUserId: uid).listen((list) {
+  /// 任務清單與「我是誰」分開開始：讀本機帳號失敗時，清單照樣要載入。
+  void _watchTasks() {
+    _tasksSubscription = _board.watch().listen((list) {
       if (mounted) setState(() => _taskList = list);
     });
   }
 
+  Future<void> _loadVerifiedRescuer(String uid) async {
+    final verified = await _board.isVerifiedRescuer(uid);
+    if (mounted) setState(() => _isVerifiedRescuer = verified);
+  }
+
   List<MutualAidTask> _buildTaskList() =>
-      _taskList?.tasksNear(lat: _currentPosition?.latitude, lng: _currentPosition?.longitude) ?? const [];
+      _taskList?.tasksNear(
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
+        currentUserId: _currentUserId,
+      ) ??
+      const [];
 
   Color _statusColor() {
     if (_selectedStatus == statusUndeclared) return _red;
@@ -415,7 +429,7 @@ class _HealthScreenState extends State<HealthScreen>
         sensitiveAccess: sensitiveAccessFor(
           task,
           currentUserId: _currentUserId,
-          isVerifiedRescuer: _taskList?.isVerifiedRescuer ?? false,
+          isVerifiedRescuer: _isVerifiedRescuer,
         ),
         readSensitive: _board.readSensitive,
         // 沒有座標就沒得導航，按鈕不該出現在那裡讓人白按。

@@ -69,9 +69,9 @@ void main() {
   tearDown(() => events.close());
 
   /// 開著清單，回傳最近一次的內容。
-  Future<MutualAidTaskList Function()> watch({String? uid = 'me'}) async {
+  Future<MutualAidTaskList Function()> watch() async {
     MutualAidTaskList? latest;
-    final subscription = board.watch(currentUserId: uid).listen((list) => latest = list);
+    final subscription = board.watch().listen((list) => latest = list);
     addTearDown(subscription.cancel);
     await pumpEventQueue();
     return () => latest!;
@@ -91,7 +91,7 @@ void main() {
       await pumpEventQueue();
 
       expect(list().loaded, isTrue);
-      expect(list().tasksNear().map((t) => t.userId), ['alice']);
+      expect(list().tasksNear(currentUserId: 'me').map((t) => t.userId), ['alice']);
     });
 
     test('讀取被規則擋下時說是權限問題，其他錯誤說載入失敗', () async {
@@ -111,16 +111,23 @@ void main() {
       expect(list().error, isNull);
     });
 
-    test('rescuers 名單上的帳號是 Verified Rescuer；沒有帳號時不是', () async {
+    test('還不知道自己是誰時不列任何 Firestore 任務，免得閃出自己那筆', () async {
+      final list = await watch();
+      store.pushReports([_report('alice'), _report('me')]);
+      await pumpEventQueue();
+
+      expect(list().tasksNear(currentUserId: null), isEmpty);
+    });
+
+    test('rescuers 名單上的帳號是 Verified Rescuer', () async {
       store.rescuers = {'me'};
 
-      expect((await watch(uid: 'me'))().isVerifiedRescuer, isTrue);
-      expect((await watch(uid: 'someone'))().isVerifiedRescuer, isFalse);
-      expect((await watch(uid: null))().isVerifiedRescuer, isFalse);
+      expect(await board.isVerifiedRescuer('me'), isTrue);
+      expect(await board.isVerifiedRescuer('someone'), isFalse);
     });
 
     test('關掉清單之後不再監聽 Firestore', () async {
-      final subscription = board.watch(currentUserId: 'me').listen((_) {});
+      final subscription = board.watch().listen((_) {});
       await pumpEventQueue();
       expect(store.watchingReports, isTrue);
 
@@ -187,7 +194,7 @@ void main() {
       final list = await watch();
       store.pushReports([_report('alice')]);
       await pumpEventQueue();
-      final task = list().tasksNear().single;
+      final task = list().tasksNear(currentUserId: 'me').single;
 
       expect(await board.updateStatus(task, TaskStatus.accepted, currentUserId: 'me'), TaskUpdate.updated);
       expect(await board.updateStatus(task, TaskStatus.waiting, currentUserId: 'me'), TaskUpdate.updated);
@@ -203,7 +210,11 @@ void main() {
       store.pushReports([_report('alice')]);
       await pumpEventQueue();
 
-      final result = await board.updateStatus(list().tasksNear().single, TaskStatus.accepted, currentUserId: null);
+      final result = await board.updateStatus(
+        list().tasksNear(currentUserId: 'me').single,
+        TaskStatus.accepted,
+        currentUserId: null,
+      );
 
       expect(result, TaskUpdate.signInRequired);
       expect(store.updates, isEmpty);
@@ -216,7 +227,11 @@ void main() {
       store.updateError = StateError('denied');
 
       expect(
-        await board.updateStatus(list().tasksNear().single, TaskStatus.accepted, currentUserId: 'me'),
+        await board.updateStatus(
+          list().tasksNear(currentUserId: 'me').single,
+          TaskStatus.accepted,
+          currentUserId: 'me',
+        ),
         TaskUpdate.failed,
       );
     });
@@ -302,7 +317,7 @@ void main() {
   group('BLE 回報從 app 啟動就開始收，不必開著清單', () {
     test('關掉清單時照樣收，再打開時看得到', () async {
       board.startCollecting();
-      final first = board.watch(currentUserId: 'me').listen((_) {});
+      final first = board.watch().listen((_) {});
       await pumpEventQueue();
       await first.cancel();
 

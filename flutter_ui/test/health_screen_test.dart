@@ -150,4 +150,28 @@ void main() {
     expect(find.text('匿名回報 bbbb'), findsOneWidget);
     expect(find.text('匿名回報 cccc'), findsOneWidget);
   });
+
+  testWidgets('讀本機帳號失敗時，任務清單照樣載入', (tester) async {
+    SharedPreferences.setMockInitialValues({'app_user': 'not json'});
+    // 解析失敗本身沒有被畫面接住（既有行為）；這裡要確認的是清單不會因此卡在載入中。
+    final errors = <Object>[];
+    await runZonedGuarded(
+      () => tester.pumpWidget(
+        MaterialApp(
+          home: HealthScreen(publisher: publisher, taskBoard: board),
+        ),
+      ),
+      (error, _) => errors.add(error),
+    );
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump();
+    await tester.tap(find.textContaining('互救任務'));
+    await animate(tester);
+    expect(errors, [isFormatException]);
+
+    tasks.pushReports([]);
+    await settle(tester);
+
+    expect(find.text('附近目前無求助任務'), findsOneWidget);
+  });
 }

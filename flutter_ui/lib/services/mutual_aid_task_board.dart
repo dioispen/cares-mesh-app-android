@@ -100,19 +100,15 @@ class MutualAidTaskList {
     required List<ReportEntry> reports,
     required List<BroadcastHealthReport> bleReports,
     required Map<String, TaskStatus> bleProgress,
-    required String? currentUserId,
     required this.loaded,
     required this.error,
-    required this.isVerifiedRescuer,
   }) : _reports = reports,
        _bleReports = bleReports,
-       _bleProgress = bleProgress,
-       _currentUserId = currentUserId;
+       _bleProgress = bleProgress;
 
   final List<ReportEntry> _reports;
   final List<BroadcastHealthReport> _bleReports;
   final Map<String, TaskStatus> _bleProgress;
-  final String? _currentUserId;
 
   /// 第一批 Firestore 文件到了（或讀取失敗）。還沒到時清單是空的不代表沒有人需要協助。
   final bool loaded;
@@ -120,14 +116,12 @@ class MutualAidTaskList {
   /// Firestore 那一路讀不到的原因；讀得到時為 null。BLE 收到的任務照樣列出。
   final TaskListError? error;
 
-  /// 自己是不是 Verified Rescuer，只用來決定詳情畫面怎麼說明，真正的把關在 firestore.rules。
-  final bool isVerifiedRescuer;
-
-  /// 依自己目前的位置（[lat]／[lng]）排好的任務；沒有定位時距離未知。
-  List<MutualAidTask> tasksNear({double? lat, double? lng}) => buildMutualAidTasks(
+  /// 依自己目前的位置（[lat]／[lng]）排好的任務；沒有定位時距離未知。[currentUserId] 還不知道時不列
+  /// 任何 Firestore 任務，免得閃出自己那筆。
+  List<MutualAidTask> tasksNear({double? lat, double? lng, String? currentUserId}) => buildMutualAidTasks(
     reports: _reports,
     bleTasks: [for (final report in _bleReports) bleTaskFrom(report, myLat: lat, myLng: lng)],
-    currentUserId: _currentUserId,
+    currentUserId: currentUserId,
     myLat: lat,
     myLng: lng,
     bleStatusOverrides: _bleProgress,
@@ -242,13 +236,11 @@ class MutualAidTaskBoard {
   }
 
   /// 監聽任務清單。Firestore 只在有人監聽時讀：頁面關著時不必在背景持續讀整個 collection。
-  /// [currentUserId] 還不知道時不列任何 Firestore 任務，免得閃出自己那筆。
-  Stream<MutualAidTaskList> watch({required String? currentUserId}) {
+  Stream<MutualAidTaskList> watch() {
     StreamSubscription<List<ReportEntry>>? reportsSubscription;
     var reports = const <ReportEntry>[];
     var loaded = false;
     TaskListError? error;
-    var isVerifiedRescuer = false;
     late final StreamController<MutualAidTaskList> controller;
 
     void emit() {
@@ -258,10 +250,8 @@ class MutualAidTaskBoard {
           reports: reports,
           bleReports: _bleReports,
           bleProgress: Map.unmodifiable(_bleProgress),
-          currentUserId: currentUserId,
           loaded: loaded,
           error: error,
-          isVerifiedRescuer: isVerifiedRescuer,
         ),
       );
     }
@@ -284,15 +274,6 @@ class MutualAidTaskBoard {
             emit();
           },
         );
-        final uid = currentUserId;
-        if (uid != null) {
-          unawaited(
-            _store.isVerifiedRescuer(uid).then((value) {
-              isVerifiedRescuer = value;
-              emit();
-            }),
-          );
-        }
       },
       onCancel: () async {
         _watchers.remove(emit);
@@ -302,6 +283,10 @@ class MutualAidTaskBoard {
     );
     return controller.stream;
   }
+
+  /// [uid] 是不是 Verified Rescuer，只用來決定詳情畫面怎麼說明，真正的把關在 firestore.rules。
+  /// 讀不到時當作不是。
+  Future<bool> isVerifiedRescuer(String uid) => _store.isVerifiedRescuer(uid);
 
   /// 把 [task] 的進度改成 [next]。Firestore 任務寫回文件，讓 Reporter 與其他協助者看到同一份
   /// 進度；BLE 任務沒有文件，只改本機。
