@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.bitchat.android.experiment.ExperimentTools
+import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshService
 import com.bitchat.android.service.MeshServiceHolder
@@ -68,6 +69,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     private var channels: BitchatFlutterChannels? = null
     private var chatBridge: ChatBridge? = null
     private var settingsBridge: SettingsBridge? = null
+    private var adminNoticeBridge: AdminNoticeBridge? = null
 
     /**
      * The ongoing notification's quit action: AppShutdownCoordinator broadcasts this before it
@@ -153,8 +155,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         // One emitter per engine, shared by the bridges; BitchatFlutterChannels registers the
-        // only method/stream handlers and hands chat and settings methods on to ChatBridge and
-        // SettingsBridge.
+        // only method/stream handlers and hands chat, settings and Admin Notice methods on to
+        // ChatBridge, SettingsBridge and AdminNoticeBridge.
         val events = BridgeEventEmitter()
         val chat = ChatBridge(chatViewModel, events, pendingNavigation = pendingNavigation)
         chatBridge = chat
@@ -164,6 +166,9 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             panicClear = chatViewModel::panicClearAllData
         )
         settingsBridge = settings
+        // The recipient key store is process-wide, so the mesh service can decrypt with the same one.
+        val adminNotice = AdminNoticeBridge(keyStore = { AdminNoticeRecipientKeyStore.getInstance(applicationContext) })
+        adminNoticeBridge = adminNotice
         // 傳遞 activity (this) 給 channels，以便支援權限請求
         channels = BitchatFlutterChannels(
             context = this,
@@ -171,7 +176,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             activity = this,
             events = events,
             // ExperimentTools: debug-only field-experiment methods (#70); none in release.
-            additionalMethodHandlers = listOf(chat, settings) + ExperimentTools.bridgeHandlers(),
+            additionalMethodHandlers = listOf(chat, settings, adminNotice) + ExperimentTools.bridgeHandlers(),
             avatarPhotoPicker = avatarPhotoPicker
         )
     }
@@ -183,6 +188,8 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         chatBridge = null
         settingsBridge?.destroy()
         settingsBridge = null
+        adminNoticeBridge?.destroy()
+        adminNoticeBridge = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }
