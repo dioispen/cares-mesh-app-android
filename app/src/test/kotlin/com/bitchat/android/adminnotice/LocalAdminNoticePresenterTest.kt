@@ -49,7 +49,7 @@ class LocalAdminNoticePresenterTest {
 
     /** What a process start builds: a fresh Inbox (empty dedup table) over the stored notices. */
     private fun startApp(): Pair<AdminNoticeInbox, EncryptedAdminNoticeStore> {
-        val store = EncryptedAdminNoticeStore.open(context)
+        val store = EncryptedAdminNoticeStore.open(context, nowMs = { now })
         val presenter = LocalAdminNoticePresenter(store, notifier, nowMs = { now })
         return AdminNoticeInbox(TestAdminNotices.TEST_KEYS, presenter, nowMs = { now }) to store
     }

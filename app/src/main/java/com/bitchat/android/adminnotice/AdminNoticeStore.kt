@@ -7,10 +7,17 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONException
 import org.json.JSONObject
+import java.util.concurrent.CopyOnWriteArrayList
 
 enum class AdminNoticeStatus {
-    /** Shown as received. Corrected (已更正) and withdrawn (已撤回) arrive with #139. */
-    ACTIVE
+    /** Shown as received. */
+    ACTIVE,
+
+    /** 已更正: a newer notice replaced it ([StoredAdminNotice.replacedBy]); its content is hidden. Set by #139. */
+    CORRECTED,
+
+    /** 已撤回: a pure revoke withdrew it; its content is hidden. Set by #139. */
+    WITHDRAWN
 }
 
 /** A received Admin Notice as this device keeps it for the notice list (#142). */
@@ -24,8 +31,15 @@ data class StoredAdminNotice(
     val content: String,
     val status: AdminNoticeStatus,
     /** This device's clock when the notice was first stored. */
-    val receivedAtMs: Long
-)
+    val receivedAtMs: Long,
+    /** The messageId of the notice that corrected this one ([AdminNoticeStatus.CORRECTED]). */
+    val replacedBy: String? = null,
+    /** This device's clock when the user first read it in the App; null while unread. */
+    val readAtMs: Long? = null
+) {
+    val isRead: Boolean
+        get() = readAtMs != null
+}
 
 /** 收件端的本機儲存: received notices by messageId, kept across App restarts. */
 interface AdminNoticeStore {
@@ -33,6 +47,26 @@ interface AdminNoticeStore {
     fun insertIfAbsent(notice: StoredAdminNotice): Boolean
 
     fun all(): List<StoredAdminNotice>
+
+    /**
+     * Marks [messageId] read now. Returns the notice as it is stored after this first reading;
+     * null when it was already read or is not stored, so a caller acts once per notice.
+     */
+    fun markRead(messageId: String): StoredAdminNotice?
+
+    /** [listener] hears of every notice stored and every change to one, until removed. */
+    fun addChangeListener(listener: AdminNoticeChangeListener)
+
+    fun removeChangeListener(listener: AdminNoticeChangeListener)
+}
+
+/**
+ * Something in the store changed: a notice was stored, read, or (#139) corrected or withdrawn.
+ * Called on the writer's thread (the Inbox's, or the bridge's store thread) after the write is on
+ * disk; it may read the store but should hand any slow work elsewhere.
+ */
+fun interface AdminNoticeChangeListener {
+    fun onAdminNoticesChanged()
 }
 
 /**
@@ -41,29 +75,87 @@ interface AdminNoticeStore {
  * decrypted content (#141) must not sit on disk in the clear. Opening it touches the Android
  * Keystore, so [open] defers that to the first use, off the thread that builds it.
  */
-class EncryptedAdminNoticeStore internal constructor(openPrefs: () -> SharedPreferences) : AdminNoticeStore {
+class EncryptedAdminNoticeStore internal constructor(
+    openPrefs: () -> SharedPreferences,
+    private val nowMs: () -> Long
+) : AdminNoticeStore {
 
     private val prefs by lazy(openPrefs)
 
-    @Synchronized
+    private val lock = Any()
+    private val listeners = CopyOnWriteArrayList<AdminNoticeChangeListener>()
+
     override fun insertIfAbsent(notice: StoredAdminNotice): Boolean {
-        if (prefs.contains(notice.messageId)) return false
-        // commit, not apply: a notice notified now must still be on disk if the process dies next.
-        return prefs.edit().putString(notice.messageId, encode(notice).toString()).commit()
+        val inserted = synchronized(lock) {
+            prune()
+            // commit, not apply: a notice notified now must still be on disk if the process dies next.
+            !prefs.contains(notice.messageId) &&
+                prefs.edit().putString(notice.messageId, encode(notice).toString()).commit()
+        }
+        if (inserted) notifyChanged()
+        return inserted
     }
 
-    @Synchronized
-    override fun all(): List<StoredAdminNotice> = prefs.all.mapNotNull { (messageId, value) ->
-        (value as? String)?.let { decode(messageId, it) }
+    /** Newest first, by issuedAt; a notice past its retention is gone. */
+    override fun all(): List<StoredAdminNotice> = synchronized(lock) { prune() }.sortedWith(NEWEST_FIRST)
+
+    override fun markRead(messageId: String): StoredAdminNotice? {
+        val read = synchronized(lock) {
+            val stored = prune().firstOrNull { it.messageId == messageId }
+            stored?.takeUnless { it.isRead }
+                ?.copy(readAtMs = nowMs())
+                ?.takeIf { prefs.edit().putString(messageId, encode(it).toString()).commit() }
+        }
+        if (read != null) notifyChanged()
+        return read
+    }
+
+    override fun addChangeListener(listener: AdminNoticeChangeListener) {
+        listeners += listener
+    }
+
+    override fun removeChangeListener(listener: AdminNoticeChangeListener) {
+        listeners -= listener
+    }
+
+    /** Outside [lock], so a listener may read the store. */
+    private fun notifyChanged() {
+        listeners.forEach { it.onAdminNoticesChanged() }
+    }
+
+    /**
+     * Deletes the notices past 本機保留 (expiresAt + [RETENTION_MS]) and returns the rest. Entries
+     * that cannot be read are left alone: they are not listed, and deleting them would lose a
+     * notice whose format a later version may still understand.
+     */
+    private fun prune(): List<StoredAdminNotice> {
+        val now = nowMs()
+        val (gone, kept) = prefs.all
+            .mapNotNull { (messageId, value) -> (value as? String)?.let { decode(messageId, it) } }
+            .partition { now > it.expiresAtMs + RETENTION_MS }
+        if (gone.isNotEmpty()) {
+            val editor = prefs.edit()
+            gone.forEach { editor.remove(it.messageId) }
+            // apply: a notice the user can no longer see costs nothing if it outlives a crash.
+            editor.apply()
+        }
+        return kept
     }
 
     companion object {
         private const val TAG = "AdminNoticeStore"
         internal const val PREFS_NAME = "cares_admin_notices"
 
-        fun open(context: Context): EncryptedAdminNoticeStore {
+        /** 本機保留: a notice stays listed, as 已過期, until this long after its expiresAt. */
+        const val RETENTION_MS = 7 * 24 * 3_600_000L
+
+        private val NEWEST_FIRST = compareByDescending<StoredAdminNotice> { it.issuedAtMs }
+            .thenByDescending { it.receivedAtMs }
+            .thenBy { it.messageId }
+
+        fun open(context: Context, nowMs: () -> Long = System::currentTimeMillis): EncryptedAdminNoticeStore {
             val appContext = context.applicationContext
-            return EncryptedAdminNoticeStore {
+            return EncryptedAdminNoticeStore(nowMs = nowMs, openPrefs = {
                 val masterKey = MasterKey.Builder(appContext, MasterKey.DEFAULT_MASTER_KEY_ALIAS)
                     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                     .build()
@@ -74,7 +166,7 @@ class EncryptedAdminNoticeStore internal constructor(openPrefs: () -> SharedPref
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
                 )
-            }
+            })
         }
 
         private fun encode(notice: StoredAdminNotice) = JSONObject()
@@ -86,6 +178,8 @@ class EncryptedAdminNoticeStore internal constructor(openPrefs: () -> SharedPref
             .put("content", notice.content)
             .put("status", notice.status.name)
             .put("receivedAt", notice.receivedAtMs)
+            .put("replacedBy", notice.replacedBy ?: JSONObject.NULL)
+            .put("readAt", notice.readAtMs ?: JSONObject.NULL)
 
         private fun decode(messageId: String, json: String): StoredAdminNotice? = try {
             val o = JSONObject(json)
@@ -98,7 +192,10 @@ class EncryptedAdminNoticeStore internal constructor(openPrefs: () -> SharedPref
                 replaces = if (o.isNull("replaces")) null else o.getString("replaces"),
                 content = o.getString("content"),
                 status = AdminNoticeStatus.valueOf(o.getString("status")),
-                receivedAtMs = o.getLong("receivedAt")
+                receivedAtMs = o.getLong("receivedAt"),
+                // Absent in notices stored before #142 (isNull is true for a missing key): unread.
+                replacedBy = if (o.isNull("replacedBy")) null else o.getString("replacedBy"),
+                readAtMs = if (o.isNull("readAt")) null else o.getLong("readAt")
             )
         } catch (e: JSONException) {
             Log.w(TAG, "Unreadable stored notice $messageId: ${e.message}")
