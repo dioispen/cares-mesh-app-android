@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135），App 端尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 注入與收件、sync、取代與撤回、定向解密、列表與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -169,7 +169,7 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 
 適用於所有新版節點，Gateway 也一樣。`SecurityManager.validatePacket` 照既有流程處理封包層級的去重；0x31 不加進 `verifyPacketSignature` 的強制驗簽名單。接著 `PacketProcessor` 交給 0x31 的 handler，依序檢查，任何一步不通過就回傳 `validPacket = false`（不轉送、不呈現）：
 
-1. payload 長度合法：至少 100 bytes；定向 body 的長度與 recipientCount 相符；內容不超過 300 bytes。
+1. payload 長度合法：至少 100 bytes；定向 body 的長度與 recipientCount（1–5）相符；內容不超過 300 bytes；廣播 body 只有 replaces 不為 0 時才可以是空的；messageId 不全為 0（全為 0 保留給「沒有 replaces」）。
 2. version 為 `0x01`，kind、level 是已定義的值，keyId 在 App 內建的對照表裡。
 3. 外層 senderID 等於 messageId，外層 timestamp 等於 issuedAt。
 4. 管理端簽章驗證通過。
@@ -227,17 +227,21 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 
 - listener 放在 `MeshForegroundService`，與送出方向的 `MeshGatewayRuntime` 同一個生命週期（`onCreate` 建立、`onDestroy` 停止），並沿用它的做法：以 `FirebaseAuth.AuthStateListener` 跟著登入狀態，`currentUser` 不為 null 才掛上、登入狀態改變時重新掛上；行程裡沒有初始化 Firebase 時不建立，mesh 照常運作。Kotlin 與 Flutter 共用同一個登入身分，`MeshGatewayRuntime` 已經證實。
 - 使用者關閉「背景執行」時前景服務不會啟動，也就沒有 listener（見已知限制）。
-- Firebase 程式碼不進 `mesh/`：去重表、撤回紀錄與待注入放在 `mesh/` 這一側，listener 透過類似 `VerifiedHealthReportBridge`、方向相反的 hook 把 `wire` 交進去。
+- Firebase 程式碼不進 `mesh/`：去重表、撤回紀錄與待注入放在不依賴 Firebase 的 `adminnotice/` 套件（`AdminNoticeInbox`），listener 透過 `AdminNoticeBridge`（類似 `VerifiedHealthReportBridge`、方向相反的 hook）把 `wire` 交進去。Inbox 由 `BitchatApplication.onCreate` 建立並裝進 `AdminNoticeBridge`，與行程同壽：去重表要撐過 mesh service 換新的實例，mesh 收件在前景服務沒跑時（關閉背景執行）也要用到它。listener 只跟著前景服務。
 - 查詢：`admin_notices` 中 `expiresAt > 掛上 listener 的時間`。
 - 收到新文件時，對 `wire` 執行「收到 0x31」的第 1、2、4–7 步。不相信文件的其他欄位，例如到期時間以 `wire` 裡簽過的為準。外層封包是 Gateway 自己組的，第 3 步不適用。
   - messageId 已在去重表裡、且已在 mesh 裡 → 什麼都不做，已經有人注入了。
+  - messageId 已在去重表裡、只從 Firestore 收過（例如登入狀態改變後重新掛上，listener 又送來同一份）→ 什麼都不做，呈現與注入在第一次就排好了。
   - 否則寫入去重表，標記為「只從 Firestore 收過」；呈現在本機，是收件者就寫回條（via=firestore）；排一個 0–15 秒均勻隨機的注入。
 - 注入時間到時，如果還沒有標記為已在 mesh 裡，就依「外層封包」組出封包，廣播出去、加入 sync 集合，並標記為已在 mesh 裡。
 - mesh 服務停止時取消所有待注入。重開後 listener 會重新送來所有未到期的公告，Gateway 會再注入一次；封包和之前一模一樣，既有的去重會處理。
 - 來自 Firestore 本機快取的文件（`isFromCache`），例如重開時還沒有網路，照樣處理與注入：安全性由簽章保證，不靠文件從哪裡來。App 重開後只放記憶體的 sync 集合已經清空，也能靠快取補回來。
 - listener 出錯就會終止，要重新掛上：
-  - `RESOURCE_EXHAUSTED`（Spark 額度用完）、`UNAVAILABLE`：從 1 分鐘開始指數退避，最長 30 分鐘。**不可以立即重試**，否則會把剩下的額度燒光，連 Health Report 都讀不到。
+  - `RESOURCE_EXHAUSTED`（Spark 額度用完）、`UNAVAILABLE`：從 1 分鐘開始指數退避，最長 30 分鐘。**不可以立即重試**，否則會把剩下的額度燒光，連 Health Report 都讀不到。其他錯誤碼也照這樣退避。
   - `PERMISSION_DENIED`：停止，等登入狀態改變再掛上。
+  - 從伺服器（不是本機快取）收到 snapshot，代表 Firestore 又連得上，等待時間才歸回 1 分鐘。listener 因此開啟 metadata 變化（`MetadataChanges.INCLUDE`），從快取切到伺服器的那一刻才看得到；這不多花讀取。
+  - 換成另一個帳號登入、或登出後再登入，都立即重新掛上，等待時間從 1 分鐘重新算；同一個帳號重複回報不算改變。
+  - 退避與登入狀態的判斷在不依賴 Firebase 的 `AdminNoticeSubscription`（排程與時鐘都是注入的），Firestore 的部分只有 `FirestoreAdminNoticeFeed`。
 - Firestore 的離線快取保持開啟（Android 預設就是開的）。它也不能關：Flutter 與 Kotlin 共用同一個 Firestore 實例（ADR-0009）。
 
 ## Firestore
@@ -354,6 +358,9 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 ## 收件端呈現
 
 - 收到的公告存在 Kotlin 端的本機儲存，以 messageId 去重，只在第一次寫入時發通知。定向公告解密後的內容要加密儲存。保留到 `expiresAt` 後 7 天，期間標示為「已過期」。
+  - 實作是 EncryptedSharedPreferences（與身分金鑰相同的做法），廣播也一起加密，不另分兩種儲存。寫入用 `commit`，通知發出後行程立刻被殺也不會漏記。
+  - 寫不進本機儲存時照樣通知：撤離令比重開後重複一次重要，同一個行程內仍有去重表擋著。
+  - 純撤回沒有內容，不呈現也不通知；被撤回的公告怎麼標示見「撤回與取代」。
 - 通知由 Kotlin 端發出，每個 level 一個 notification channel：
 
   | level | channel 重要度 | 行為 |
@@ -361,6 +368,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
   | 緊急 | 高 | 聲音與震動；不繞過勿擾模式 |
   | 重要 | 預設 | |
   | 資訊 | 低 | 不出聲 |
+
+  通知不設 category：勿擾模式對鬧鐘、活動或訊息的例外會把它放行。每則通知以 messageId 當 tag，撤回或取代時才找得到它來更新或取消。廣播的通知在鎖定畫面顯示內容，定向公告不顯示。
 
 - `POST_NOTIFICATIONS` 是選用權限。沒有權限時，首頁要放一張醒目的公告卡片代替通知。
 - Flutter 端新增「管理端公告」列表畫面，首頁顯示未讀數量，資料經 bridge 從 Kotlin 取得。建議的介面：EventChannel 推送 `type: "admin_notice"`；MethodChannel 照 `chat_`、`settings_` 的慣例命名，提供 `adminNotice_getAll` 與 `adminNotice_markRead(messageId)`，後者同時寫入 `readAt` 回條。收件者金鑰用的 `adminNotice_getPublicKey(uid)`、`adminNotice_clearKey` 見「收件者加密金鑰」。

@@ -26,6 +26,8 @@ The application follows a clean architecture pattern, heavily modularized by fea
 | `service/` | **Core Service**: Contains `MeshForegroundService`, managing persistent background connectivity. |
 | `mesh/` | **Mesh Networking**: Logic for peer discovery, advertising, and message routing. |
 | `protocol/` | **Wire Protocol**: Definitions of messages exchanged between peers. |
+| `adminnotice/` | **Admin Notice** (`docs/ADMIN_NOTICE_V1.md`): `AdminNoticeInbox` runs every received notice through the processing rules; Firebase-free. Also the local store and notifications. |
+| `gateway/` | **Gateway** (ADR-0009, ADR-0011): the only Kotlin code using Firebase; uploads to `mesh_reports`, listens to `admin_notices`. |
 | `crypto/` | **Security**: Cryptographic primitives and key management. |
 | `noise/` | **Encryption**: Implementation of the Noise Protocol Framework for secure channels. |
 | `identity/` | **User Identity**: Management of user profiles and public/private keys. |
@@ -49,7 +51,7 @@ The application follows a clean architecture pattern, heavily modularized by fea
 ### Authentication & Data Management
 - **Firestore Integration**: Used for user registration/login and health information packet storage. Provides secure cloud-based authentication and data persistence.
 - **Health Data Upload**: Integrated with Firestore for secure transmission and storage of health information packets from Flutter UI.
-- **Mesh Gateway** (`gateway/`, ADR-0009): the only Kotlin code that uses Firebase. It runs inside `MeshForegroundService`, reads the FirebaseAuth sign-in state shared with Flutter, and writes other people's verified Health Reports (Broadcast Tier only) to `mesh_reports`. Keep Firebase out of `mesh/`: the protocol layer hands reports over through `VerifiedHealthReportBridge`.
+- **Mesh Gateway** (`gateway/`, ADR-0009, ADR-0011): the only Kotlin code that uses Firebase, in both directions of the Gateway. It runs inside `MeshForegroundService` and reads the FirebaseAuth sign-in state shared with Flutter. Outbound, it writes other people's verified Health Reports (Broadcast Tier only) to `mesh_reports`; inbound, it listens to `admin_notices` and hands each Admin Notice's `wire` to the Inbox. Keep Firebase out of `mesh/` and `adminnotice/`: the protocol layer hands reports over through `VerifiedHealthReportBridge`, and the Gateway hands notices in through `AdminNoticeBridge` to `AdminNoticeInbox`, which trusts only the Administrators' signature.
 
 ## 4. Development Standards
 
