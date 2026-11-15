@@ -67,7 +67,17 @@ class AdminNoticeInbox(
         val now = nowMs()
         untrustedReason(payload, now)?.let { return AdminNoticeOutcome.Rejected(it) }
         // Only now, with the signature verified, may the notice claim its messageId.
-        if (presenceOf(payload.messageId, now) != null) return AdminNoticeOutcome.Duplicate
+        when (presenceOf(payload.messageId, now)) {
+            // Somebody, maybe this Gateway, has already put it on the mesh.
+            Presence.IN_MESH -> return AdminNoticeOutcome.Duplicate
+            // Read again, e.g. after the listener re-attached: presented the first time, and its
+            // injection still pending unless the mesh service stopped or was missing meanwhile.
+            Presence.BACKEND_ONLY -> {
+                if (payload.messageId !in pendingInjections) scheduleInjection(payload)
+                return AdminNoticeOutcome.Duplicate
+            }
+            null -> Unit
+        }
         remember(payload, Presence.BACKEND_ONLY)
         present(payload)
         scheduleInjection(payload)

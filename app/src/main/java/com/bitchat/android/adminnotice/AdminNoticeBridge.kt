@@ -1,13 +1,15 @@
 package com.bitchat.android.adminnotice
 
 import android.util.Log
+import com.bitchat.android.protocol.BitchatPacket
 
 /**
  * Process-wide hook handing Admin Notices to the [AdminNoticeInbox]: `VerifiedHealthReportBridge`
  * in the opposite direction. There the protocol layer publishes and the Gateway listens; here the
- * Gateway's Firestore listener (`gateway/`, the only side that touches Firebase) publishes `wire`
- * and the Inbox receives it, so neither the Inbox nor `mesh/` depends on Firebase. #137 hands the
- * mesh's 0x31 packets to the same Inbox through here.
+ * Gateway's Firestore listener (`gateway/`, the only side that touches Firebase) publishes `wire`,
+ * the mesh publishes the 0x31 packets it hears, and the Inbox receives both, so neither the Inbox
+ * nor `mesh/` depends on Firebase. The running mesh service also attaches itself here as the
+ * Inbox's injector.
  *
  * One Inbox per process, installed by [AdminNotices.install] when the App starts: its dedup table
  * must outlive any one mesh service instance and serve the mesh whether or not the foreground
@@ -42,5 +44,29 @@ object AdminNoticeBridge {
             Log.w(TAG, "Admin Notice from the backend not processed: ${e.message}")
             null
         }
+    }
+
+    /**
+     * Called by the mesh's packet processor with a 0x31 packet; returns its `validPacket`, whether
+     * to relay it. False without an Inbox or when it failed: what nothing verified is not relayed.
+     */
+    fun deliverFromMesh(packet: BitchatPacket): Boolean {
+        val current = inbox ?: return false
+        return try {
+            current.onMeshPacket(packet).relay
+        } catch (e: Exception) {
+            Log.w(TAG, "Admin Notice from the mesh not processed: ${e.message}")
+            false
+        }
+    }
+
+    /** The mesh service started and can broadcast: this Gateway injects through [injector]. */
+    fun attachMesh(injector: AdminNoticeInjector) {
+        inbox?.attachInjector(injector)
+    }
+
+    /** The mesh service stopped: the Inbox cancels the injections waiting for it. */
+    fun detachMesh(injector: AdminNoticeInjector) {
+        inbox?.detachInjector(injector)
     }
 }
