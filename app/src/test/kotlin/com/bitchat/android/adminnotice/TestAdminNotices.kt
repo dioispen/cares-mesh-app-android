@@ -187,3 +187,21 @@ internal class RecordingInjector(var accepts: Boolean = true) : AdminNoticeInjec
         return accepts
     }
 }
+
+/** A mesh service's sync set that records what the Inbox offers it and takes back. */
+internal class RecordingSyncSet : AdminNoticeSyncSet {
+    /** Each offered packet with its expiresAt, in order. */
+    val added = mutableListOf<Pair<BitchatPacket, Long>>()
+    val removed = mutableListOf<String>()
+
+    override fun add(packet: BitchatPacket, expiresAtMs: Long) {
+        added += packet to expiresAtMs
+    }
+
+    override fun remove(messageId: String) {
+        removed += messageId
+    }
+
+    /** The messageIds offered, in order. */
+    fun messageIds(): List<String> = added.map { (packet, _) -> packet.senderID.joinToString("") { "%02x".format(it) } }
+}

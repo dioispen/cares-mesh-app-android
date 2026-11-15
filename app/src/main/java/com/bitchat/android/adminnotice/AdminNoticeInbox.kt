@@ -1,6 +1,7 @@
 package com.bitchat.android.adminnotice
 
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.util.AppConstants
 import kotlin.random.Random
 
 /**
@@ -9,10 +10,10 @@ import kotlin.random.Random
  * Gateway or backend copy it came through.
  *
  * Inputs: [onBackendNotice] (the Gateway's Firestore listener, #136) and [onMeshPacket] (the mesh's
- * 0x31 packets, #137). Outputs go only to injected ports — [presenter], and the injector the
- * running mesh service attaches ([attachInjector]); the sync set (#138), the recipient key (#141)
- * and receipts (#143) come as further ports — and the clock and the injection delay's scheduler and
- * random source are injected too, so every rule runs in a plain JVM test. Firebase-free.
+ * 0x31 packets, #137). Outputs go only to injected ports — [presenter], and the injector and sync
+ * set the running mesh service attaches ([attachInjector], [attachSyncSet], #138); the recipient key
+ * (#141) and receipts (#143) come as further ports — and the clock and the injection delay's
+ * scheduler and random source are injected too, so every rule runs in a plain JVM test. Firebase-free.
  *
  * Calls are serialised on this object's lock and return a decision at once, so the mesh can decide
  * whether to relay a packet while handling it. The dedup table is memory only: after an App restart
@@ -47,6 +48,20 @@ class AdminNoticeInbox(
 
     /** The running mesh service, through which this Gateway injects; null while none runs. */
     private var injector: AdminNoticeInjector? = null
+
+    /** A notice in the mesh as its sync set is offered it: the normalized outer packet and expiresAt. */
+    private class InMeshNotice(val packet: BitchatPacket, val expiresAtMs: Long)
+
+    /**
+     * messageId → every notice in the mesh that has not expired, at most
+     * [AppConstants.Sync.ADMIN_NOTICE_CAPACITY] (the one expiring first goes, as in the sync set).
+     * This Inbox outlives the mesh service, whose sync set starts empty each time, and a notice
+     * already in the mesh is not injected again: [attachSyncSet] hands these to the new one.
+     */
+    private val inMeshNotices = HashMap<String, InMeshNotice>()
+
+    /** The running mesh service's gossip sync; null while none runs. */
+    private var syncSet: AdminNoticeSyncSet? = null
 
     init {
         require(maxRecords > 0) { "maxRecords must be positive" }
@@ -133,6 +148,24 @@ class AdminNoticeInbox(
     }
 
     /**
+     * The mesh service, once it runs, offers notices to late arrivals through [syncSet]: it is
+     * handed at once every unexpired notice already in the mesh, then each one entering it. A later
+     * call replaces the one attached before.
+     */
+    @Synchronized
+    fun attachSyncSet(syncSet: AdminNoticeSyncSet) {
+        this.syncSet = syncSet
+        forgetExpiredInMesh(nowMs())
+        inMeshNotices.values.forEach { syncSet.add(it.packet, it.expiresAtMs) }
+    }
+
+    /** The mesh service stopped. Ignored unless [syncSet] is the one attached, as for the injector. */
+    @Synchronized
+    fun detachSyncSet(syncSet: AdminNoticeSyncSet) {
+        if (this.syncSet === syncSet) this.syncSet = null
+    }
+
+    /**
      * Steps 2 (keyId), 3 (only for a mesh copy, its [outer] packet), 4, 5 and 6, in that order: the
      * signature before anything else is believed.
      */
@@ -170,12 +203,36 @@ class AdminNoticeInbox(
 
     /**
      * [payload] is in the mesh now, heard (step 8) or injected by this Gateway: nobody needs to
-     * inject it any more. Step 10 belongs here too: #138 adds [AdminNoticePacket.outer] of [payload]
-     * to the gossip sync set until its expiresAt, so injected and heard notices join it alike.
+     * inject it any more, and (step 10) it joins the sync set, so injected and heard notices join it
+     * alike and only ever after the signature was verified.
      */
     private fun markInMesh(payload: AdminNoticePayload) {
         pendingInjections.remove(payload.messageId)?.invoke()
         remember(payload, Presence.IN_MESH)
+        offerToSync(payload)
+    }
+
+    /**
+     * Step 10: [AdminNoticePacket.outer] of [payload] goes to the sync set until its expiresAt. One
+     * accepted within the clock tolerance after its expiresAt has nothing left to offer.
+     */
+    private fun offerToSync(payload: AdminNoticePayload) {
+        val now = nowMs()
+        forgetExpiredInMesh(now)
+        if (payload.expiresAtMs <= now) return
+        val notice = InMeshNotice(AdminNoticePacket.outer(payload), payload.expiresAtMs)
+        inMeshNotices[payload.messageId] = notice
+        if (inMeshNotices.size > AppConstants.Sync.ADMIN_NOTICE_CAPACITY) {
+            val first = inMeshNotices.minByOrNull { it.value.expiresAtMs } ?: return
+            inMeshNotices.remove(first.key)
+            // The sync set drops the same one when full: no need to offer it this one.
+            if (first.key == payload.messageId) return
+        }
+        syncSet?.add(notice.packet, notice.expiresAtMs)
+    }
+
+    private fun forgetExpiredInMesh(now: Long) {
+        inMeshNotices.values.removeAll { it.expiresAtMs <= now }
     }
 
     /** Gateway: inject [payload] after a random delay unless the mesh brings it first. */
