@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 注入與收件、sync、取代與撤回、定向解密、列表與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；sync、取代與撤回、定向解密、列表與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -191,11 +191,26 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 
 **一定要先驗簽，再寫去重表與撤回紀錄。** 理由與 `SecurityManager` 只記錄已驗證封包相同：先記下未驗證的封包，攻擊者就能用假封包先佔住一個合法的 messageId，或撤回一則真的公告。
 
+#137 定下的細節：
+
+- 第 3 步只比對 senderID 與 timestamp。外層其他欄位（recipient、裝置簽章、route、severity、version）Inbox 不看，轉送時一律換成正規化的外層封包（`AdminNoticeTraffic.normalizedForRelay`），TTL 與收到的 payload 編碼不變。這些欄位都不在 `PacketIdUtil` 的封包 ID 裡，`SecurityManager` 又在 Inbox 之前就記下封包 ID：如果帶著它們的副本被擋下，攻擊者先送一份加了 recipient 的真公告就能讓後到的正規副本被當成重複；如果原樣轉送，就能把公告擋在指定的收件者、或用 route 導向指定的路徑。
+- `SecurityManager` 在 Inbox 驗簽之前就記下 0x31 的封包 ID，這不違反「先驗簽才記錄」：管理端簽章在 payload 裡，偽造的副本封包 ID 一定和真的不同，佔不住真公告。
+- 去重表的「只從 Firestore 收過」改為「已在 mesh 裡」時，`Inbox.markInMesh` 一併取消待注入；mesh 聽到的與 Gateway 注入的公告都經過這裡，#138 在這裡加入 sync 集合。
+- `onMeshPacket` 回傳的 `relay` 就是 `validPacket`。沒有安裝 Inbox、或處理時丟出例外，`AdminNoticeBridge.deliverFromMesh` 一律回傳不轉送。BLE mesh 與 Wi-Fi Aware 的 `MeshCore` 交給同一個 Inbox。
+
 **0x31 的 senderID 不是 peer**（ADR-0011）。把 senderID 當成 peer 的地方都要排除 0x31：
 
 - `PacketProcessor` 依 senderID 建立序列化處理的 actor，只在 peer 斷線時清掉。0x31 要改用一個固定的鍵，否則每則公告都會留下一個永遠不會被清掉的 actor。舊版 App 改不了，每則公告會多留一個，數量有限，接受。
 - peer 列表、last-seen、拓撲與除錯畫面。`updatePeerLastSeen` 只更新已存在的 peer，不會因此多出 peer。
 - 實地實驗的 log（`ExperimentRecorder`）不記錄 0x31。實地實驗進行中，管理端也不發公告，以免干擾量測（ADR-0001）；寫進管理端的操作手冊。
+
+實作（#137）：判斷集中在 `mesh/AdminNoticeTraffic.carriesAdminNotice`，0x31 與它的切片（FRAGMENT 的 originalType 是 0x31）都算，因為切片的 senderID 同樣是 messageId。
+
+- actor：兩者都排進同一個固定的 actor（`admin-notice`，不是十六進位，不會撞到 peerID）。
+- last-seen：不呼叫 `updatePeerLastSeen`，`PacketProcessor` 的 verbose 收件 log 也不記。
+- 除錯畫面：`DebugSettingsManager.logIncoming` 照樣算進送來的鏈路，不算成某個 peer 的流量，也不發 `PacketActivity`。拓撲（`MeshGraphService`）只從 ANNOUNCE 更新，本來就不受影響。
+- 實驗 log：插入點照舊原樣交資料，由 debug build 寫 `exp.csv` 的 `ExperimentEventRecorder` 排除 RX、DUP、TX／RELAY、SYNC、QFULL 各列。
+- Flutter：0x31 不經過 `MessageHandler`，不會以 `type: "packet"` 推給 Flutter。
 
 ### 去重表與撤回紀錄
 
@@ -236,6 +251,12 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
   - 否則寫入去重表，標記為「只從 Firestore 收過」；呈現在本機，是收件者就寫回條（via=firestore）；排一個 0–15 秒均勻隨機的注入。
 - 注入時間到時，如果還沒有標記為已在 mesh 裡，就依「外層封包」組出封包，廣播出去、加入 sync 集合，並標記為已在 mesh 裡。
 - mesh 服務停止時取消所有待注入。重開後 listener 會重新送來所有未到期的公告，Gateway 會再注入一次；封包和之前一模一樣，既有的去重會處理。
+- 實作（#137）：
+  - 延遲由行程層級的單一 daemon 執行緒排程（`AdminNotices.install`），延遲與亂數都以 port 注入 Inbox，測試用假的。
+  - `BluetoothMeshService` 啟動成功後經 `AdminNoticeBridge.attachMesh` 成為注入出口；`stopServices` 與關閉 BLE 傳輸時 `detachMesh`，Inbox 隨即取消所有待注入。舊實例較晚才停止時，不會取消新實例的待注入。
+  - 注入的封包不簽章、不加 route，經 `broadcastRoutedPacket` 送出（BLE 與橋接的傳輸）。
+  - 時間到時沒有 mesh 服務、或交不出去，這次注入就放棄，公告仍是「只從 Firestore 收過」：期間從 BLE 聽到，照「收到 0x31」轉送、不再呈現。
+  - Inbox 與行程同壽（#136），去重表會撐過 mesh 服務重開，所以上一段的「再注入一次」只適用於還沒進 mesh 的公告：「只從 Firestore 收過」、待注入已被取消或放棄的公告，再從 Firestore 收到時重新排注入，不再呈現。已在 mesh 裡的公告不會重新注入；mesh 服務換新的實例後，sync 集合要怎麼補回這些公告由 #138 決定。
 - 來自 Firestore 本機快取的文件（`isFromCache`），例如重開時還沒有網路，照樣處理與注入：安全性由簽章保證，不靠文件從哪裡來。App 重開後只放記憶體的 sync 集合已經清空，也能靠快取補回來。
 - listener 出錯就會終止，要重新掛上：
   - `RESOURCE_EXHAUSTED`（Spark 額度用完）、`UNAVAILABLE`：從 1 分鐘開始指數退避，最長 30 分鐘。**不可以立即重試**，否則會把剩下的額度燒光，連 Health Report 都讀不到。其他錯誤碼也照這樣退避。
@@ -419,7 +440,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 - 「收到 0x31」的每一步各自擋得住；先驗簽才寫去重表與撤回紀錄；去重表的三種情況。
 - 撤回與取代：先收到原公告再收到取代，以及反過來，兩種順序都對。
 - sync 集合：上限、到期、被取代就移除；超過 512 bytes 的公告經 sync 切片後完整送達（待驗證 1）。
-- Gateway 注入：等待期間從 BLE 聽到同一則就不注入；來自快取的文件照樣注入。
+- Gateway 注入：等待期間從 BLE 聽到同一則就不注入；來自快取的文件照樣注入；服務停止時取消待注入；兩支 Gateway 注入同一則，封包 ID 相同。
 - 0x31 不建立 peer、不留下 actor、不進實驗 log。
 - 收件者金鑰：uid 改變時重新產生；清除後解不開。
 
