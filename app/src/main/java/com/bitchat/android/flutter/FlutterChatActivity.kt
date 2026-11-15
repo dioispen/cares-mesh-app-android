@@ -13,6 +13,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bitchat.android.adminnotice.AdminNotices
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.mesh.BluetoothMeshService
@@ -166,8 +167,13 @@ class FlutterChatActivity : FlutterFragmentActivity() {
             panicClear = chatViewModel::panicClearAllData
         )
         settingsBridge = settings
-        // The recipient key store is process-wide, so the mesh service can decrypt with the same one.
-        val adminNotice = AdminNoticeBridge(keyStore = { AdminNoticeRecipientKeyStore.getInstance(applicationContext) })
+        // Both stores are process-wide: the mesh service decrypts with the same recipient key, and
+        // the Inbox's presenter writes the notices this engine lists.
+        val adminNotice = AdminNoticeBridge(
+            keyStore = { AdminNoticeRecipientKeyStore.getInstance(applicationContext) },
+            notices = AdminNotices.store(applicationContext),
+            events = events
+        )
         adminNoticeBridge = adminNotice
         // 傳遞 activity (this) 給 channels，以便支援權限請求
         channels = BitchatFlutterChannels(

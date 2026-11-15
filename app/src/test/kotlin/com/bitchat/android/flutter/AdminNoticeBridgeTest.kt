@@ -2,6 +2,7 @@ package com.bitchat.android.flutter
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.bitchat.android.adminnotice.EncryptedAdminNoticeStore
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.testsupport.RecordingResult
 import io.flutter.plugin.common.MethodCall
@@ -30,8 +31,20 @@ class AdminNoticeBridgeTest {
     private val storage: SharedPreferences = RuntimeEnvironment.getApplication()
         .getSharedPreferences("admin-notice-bridge-${UUID.randomUUID()}", Context.MODE_PRIVATE)
     private val store = AdminNoticeRecipientKeyStore(storage)
+
+    /** The notice list (#142) is [AdminNoticeBridgeNoticeListTest]'s; here it only has to exist. */
+    private val notices = EncryptedAdminNoticeStore(
+        openPrefs = {
+            RuntimeEnvironment.getApplication()
+                .getSharedPreferences("admin-notice-list-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+        },
+        nowMs = System::currentTimeMillis
+    )
+    private val events = BridgeEventEmitter(postToMain = {}, logDropped = {})
     private val bridge = AdminNoticeBridge(
         keyStore = { store },
+        notices = notices,
+        events = events,
         scope = CoroutineScope(dispatcher + Job()),
         storeDispatcher = dispatcher
     )
@@ -111,6 +124,8 @@ class AdminNoticeBridgeTest {
     fun `a key store that cannot be opened is KEY_STORE_UNAVAILABLE`() {
         val broken = AdminNoticeBridge(
             keyStore = { throw GeneralSecurityException("keystore is gone") },
+            notices = notices,
+            events = events,
             scope = CoroutineScope(dispatcher + Job()),
             storeDispatcher = dispatcher
         )

@@ -102,10 +102,12 @@ abstract final class SettingsErrors {
 }
 
 /// Admin Notice 的 method 名稱，對應 Kotlin `AdminNoticeBridge` 的 companion 常數（命名規則
-/// `adminNotice_<動詞><受詞>`，#140）。
+/// `adminNotice_<動詞><受詞>`）：收件金鑰（#140）與公告列表（#142）。
 abstract final class AdminNoticeMethods {
   static const getPublicKey = 'adminNotice_getPublicKey';
   static const clearKey = 'adminNotice_clearKey';
+  static const getAll = 'adminNotice_getAll';
+  static const markRead = 'adminNotice_markRead';
 }
 
 /// Admin Notice method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `AdminNoticeBridge` 的
@@ -113,6 +115,17 @@ abstract final class AdminNoticeMethods {
 abstract final class AdminNoticeErrors {
   /// 原生的加密儲存開不了、讀不到或寫不進去；沒有交出任何公鑰，可以之後再試。
   static const keyStoreUnavailable = 'KEY_STORE_UNAVAILABLE';
+
+  /// 原生存公告的加密儲存開不了、讀不到或寫不進去；可以之後再試。
+  static const noticeStoreUnavailable = 'NOTICE_STORE_UNAVAILABLE';
+}
+
+/// Admin Notice 事件的 `type`，對應 Kotlin `AdminNoticeBridge.EVENT_ADMIN_NOTICE`。
+abstract final class AdminNoticeEvents {
+  /// 原生存進新公告、或公告有變（已讀，以及 #139 的已更正、已撤回）時推來整份列表，
+  /// `notices` 與 [BitchatBridge.getAdminNotices] 回傳的相同（見 `models/admin_notice.dart`）。
+  /// 只在 Flutter engine 接著時推；沒接時收到的公告，下次讀列表就會出現。
+  static const notices = 'admin_notice';
 }
 
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
@@ -408,6 +421,25 @@ class BitchatBridge {
   /// 定向公告，直到下次登入產生新的一把。正常完成就表示私鑰已從磁碟刪除；錯誤同
   /// [getAdminNoticePublicKey]，往上拋。
   static Future<void> clearAdminNoticeKey() => _method.invokeMethod<void>(AdminNoticeMethods.clearKey);
+
+  /// 這支手機收到、還在保留期（expiresAt 後 7 天）內的所有 Admin Notice，新的在前（#142）。每一則是
+  /// `{messageId, kind, level, content, issuedAt, expiresAt, status, replacedBy, read}`，解析見
+  /// `models/admin_notice.dart`；之後的變化經 [AdminNoticeEvents.notices] 推來。
+  /// 原生的儲存出錯時丟 [PlatformException]（[AdminNoticeErrors.noticeStoreUnavailable]）；沒有原生的
+  /// 平台丟 [MissingPluginException]。兩者都往上拋。
+  static Future<List<Object?>> getAdminNotices() async {
+    final List<dynamic>? notices = await _method.invokeMethod<List>(AdminNoticeMethods.getAll);
+    if (notices == null) {
+      throw PlatformException(code: 'NO_NOTICES', message: '${AdminNoticeMethods.getAll} answered null');
+    }
+    return notices;
+  }
+
+  /// 使用者在 App 裡讀了這則公告（#142）。已讀過或已不在保留期內也正常完成。新的列表經
+  /// [AdminNoticeEvents.notices] 推來；第一次讀到的定向公告，原生之後會寫 readAt 回條（#143）。
+  /// 錯誤同 [getAdminNotices]，往上拋。
+  static Future<void> markAdminNoticeRead(String messageId) =>
+      _method.invokeMethod<void>(AdminNoticeMethods.markRead, <String, dynamic>{'messageId': messageId});
 
   /// 實驗畫面（#70，debug 限定）讀取現場即時狀態，回傳：
   ///
