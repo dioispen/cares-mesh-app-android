@@ -441,18 +441,9 @@ open class EncryptionService(private val context: Context) {
      * Verify Ed25519 signature against data using a public key
      */
     open fun verifyEd25519Signature(signature: ByteArray, data: ByteArray, publicKeyBytes: ByteArray): Boolean {
-        return try {
-            val publicKey = Ed25519PublicKeyParameters(publicKeyBytes, 0)
-            val verifier = Ed25519Signer()
-            verifier.init(false, publicKey)
-            verifier.update(data, 0, data.size)
-            val isValid = verifier.verifySignature(signature)
-            Log.d(TAG, "✅ Ed25519 signature verification: $isValid")
-            isValid
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to verify Ed25519 signature: ${e.message}")
-            false
-        }
+        val isValid = Ed25519Verification.verify(signature, data, publicKeyBytes)
+        Log.d(TAG, "✅ Ed25519 signature verification: $isValid")
+        return isValid
     }
     
     // MARK: - Private Key Management
