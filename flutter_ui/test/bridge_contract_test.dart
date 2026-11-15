@@ -351,7 +351,7 @@ void main() {
     });
   });
 
-  group('the Admin Notice bridge (#140)', () {
+  group('the Admin Notice bridge (#140, #142)', () {
     const kotlinBridge = '$_kotlinBridgeDir/AdminNoticeBridge.kt';
     Map<String, String> kotlinConstants(String prefix) => {
           for (final m in RegExp('const val (${prefix}_\\w+) = "(\\w+)"').allMatches(_read(kotlinBridge)))
@@ -377,6 +377,24 @@ void main() {
 
       expect(kotlinConstants('ERROR').values, isNotEmpty);
       expect(dartCodes, kotlinConstants('ERROR').values.toSet());
+    });
+
+    test('the notice list methods (#142) are on both sides', () {
+      const methods = ['adminNotice_getAll', 'adminNotice_markRead'];
+      expect(_nativeMethods(), containsAll(methods));
+      expect(_dartInvokedMethods(), containsAll(methods));
+    });
+
+    test('the two sides name the notice list event the same', () {
+      final kotlin = kotlinConstants('EVENT').values.toSet();
+      final dartBlock = RegExp(r'abstract final class AdminNoticeEvents \{(.*?)\n\}', dotAll: true)
+              .firstMatch(_read(_dartBridge))
+              ?.group(1) ??
+          fail('AdminNoticeEvents not found in $_dartBridge');
+      final dart = {for (final m in RegExp(r"static const \w+ = '([^']+)';").allMatches(dartBlock)) m.group(1)!};
+
+      expect(kotlin, {'admin_notice'});
+      expect(dart, kotlin);
     });
   });
 

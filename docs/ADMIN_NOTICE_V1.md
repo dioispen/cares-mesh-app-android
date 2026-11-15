@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 注入與收件、sync、取代與撤回、定向解密、列表與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136），以及 App 內的公告列表與首頁未讀數（#142）；mesh 注入與收件、sync、取代與撤回、定向解密與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -362,6 +362,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
   - 實作是 EncryptedSharedPreferences（與身分金鑰相同的做法），廣播也一起加密，不另分兩種儲存。寫入用 `commit`，通知發出後行程立刻被殺也不會漏記。
   - 寫不進本機儲存時照樣通知：撤離令比重開後重複一次重要，同一個行程內仍有去重表擋著。
   - 純撤回沒有內容，不呈現也不通知；被撤回的公告怎麼標示見「撤回與取代」。
+  - 每筆另記 `readAt`（第一次在 App 裡讀到的手機時間）與 `replacedBy`（更正它的那則，#139 寫入）。寫入、列出與標記已讀時，順手刪掉已過保留期的那幾筆（#142）。
 - 通知由 Kotlin 端發出，每個 level 一個 notification channel：
 
   | level | channel 重要度 | 行為 |
@@ -373,7 +374,12 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
   通知不設 category：勿擾模式對鬧鐘、活動或訊息的例外會把它放行。每則通知以 messageId 當 tag，撤回或取代時才找得到它來更新或取消。廣播的通知在鎖定畫面顯示內容，定向公告不顯示。
 
 - `POST_NOTIFICATIONS` 是選用權限。沒有權限時，首頁要放一張醒目的公告卡片代替通知。
+  - 「沒有權限」看 `system_status` 的 `notificationGranted`，判斷與 notifier 相同：App 的通知沒被關掉，Android 13 起再加上權限。權限是在系統設定裡改的，原生不推事件，首頁出現與回到前景時重讀。
+  - 卡片放最新一則未讀、未過期、沒被更正或撤回的公告，點了開列表（#142）。
 - Flutter 端新增「管理端公告」列表畫面，首頁顯示未讀數量，資料經 bridge 從 Kotlin 取得。建議的介面：EventChannel 推送 `type: "admin_notice"`；MethodChannel 照 `chat_`、`settings_` 的慣例命名，提供 `adminNotice_getAll` 與 `adminNotice_markRead(messageId)`，後者同時寫入 `readAt` 回條。收件者金鑰用的 `adminNotice_getPublicKey(uid)`、`adminNotice_clearKey` 見「收件者加密金鑰」。
+  - bridge（#142 定案）：`adminNotice_getAll` 回傳保留期內所有公告，新的在前，每則是 `{messageId, kind: broadcast|targeted, level: info|important|urgent, content, issuedAt, expiresAt（毫秒）, status: active|corrected|withdrawn, replacedBy, read}`。「已過期」不在裡面，由 Dart 以 `expiresAt` 與自己的時鐘判斷，畫面開著時也會變。`admin_notice` 事件是 `{type, notices}`，`notices` 與 `getAll` 的回傳相同；儲存有變（新公告、第一次讀到、#139 的更正與撤回）就推，只在 Flutter engine 接著時。`adminNotice_markRead({messageId})` 對已讀或已刪除的公告也正常回 null。儲存讀不到時回 `NOTICE_STORE_UNAVAILABLE`，messageId 缺少或為空時回 `INVALID_ARGUMENT`。
+  - readAt 回條的接點：Kotlin `flutter/AdminNoticeBridge` 建構子的 `onFirstRead`，只在一則公告第一次被讀到時呼叫一次，帶著已寫入 `readAtMs` 的那筆；廣播也會呼叫，由回條那一側只對定向公告寫回條（#143）。
+  - 什麼算「讀了」：列表沒有詳情頁，攤開就是全文，所以列表畫面在前景、在最上面時，列出的未讀公告都標成已讀（畫面開著時新到的也是）；這次開著期間它們仍標「未讀」。未讀數包含已過期、已更正、已撤回的未讀公告。已更正、已撤回的不顯示原內容；已更正的若新公告也在列表上，可以捲過去。
 
 ## 參數
 

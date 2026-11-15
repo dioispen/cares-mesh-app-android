@@ -1,5 +1,6 @@
 package com.bitchat.android.flutter
 
+import android.app.NotificationManager
 import android.os.Build
 import com.bitchat.android.testsupport.FakeAndroidKeyStore
 import com.bitchat.android.testsupport.RecordingResult
@@ -20,6 +21,7 @@ import org.junit.runner.RunWith
 import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import kotlin.coroutines.CoroutineContext
 
@@ -84,6 +86,27 @@ class BitchatFlutterChannelsTest {
         assertTrue(channels.handle(MethodCall("getSigningPublicKey", null), result))
 
         assertEquals(listOf("error:SERVICE_NOT_READY"), result.calls)
+    }
+
+    /**
+     * `notificationGranted` decides whether the home screen shows the Admin Notice card in place of
+     * notifications (#142), so it must say whether a notification can be posted at all: on this
+     * Android version there is no POST_NOTIFICATIONS, but the App's notifications can be off.
+     */
+    @Test
+    fun `notificationGranted is false while the App's notifications are switched off`() {
+        val notifications = shadowOf(RuntimeEnvironment.getApplication().getSystemService(NotificationManager::class.java))
+        val channels = newChannels().also { channels = it }
+        fun notificationGranted(): Any? {
+            val result = RecordingResult()
+            channels.handle(MethodCall("getSystemStatus", null), result)
+            return (result.values.single() as Map<*, *>)["notificationGranted"]
+        }
+
+        notifications.setNotificationsEnabled(false)
+        assertEquals(false, notificationGranted())
+        notifications.setNotificationsEnabled(true)
+        assertEquals(true, notificationGranted())
     }
 
     private fun newChannels(signingPublicKey: () -> ByteArray? = { null }) = BitchatFlutterChannels(

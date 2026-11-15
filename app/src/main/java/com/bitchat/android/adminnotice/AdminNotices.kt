@@ -12,10 +12,23 @@ import android.content.Context
  * listener's own thread.
  */
 object AdminNotices {
+    @Volatile
+    private var store: AdminNoticeStore? = null
+
+    /**
+     * The one notice store of this process: the Inbox's presenter writes it, the Flutter bridge
+     * lists it and hears of its changes. Cheap to call; the file opens on first use.
+     */
+    fun store(context: Context): AdminNoticeStore =
+        store ?: synchronized(this) {
+            store ?: EncryptedAdminNoticeStore.open(context.applicationContext, nowMs = System::currentTimeMillis)
+                .also { store = it }
+        }
+
     fun install(context: Context) {
         val appContext = context.applicationContext
         val presenter = LocalAdminNoticePresenter(
-            store = EncryptedAdminNoticeStore.open(appContext),
+            store = store(appContext),
             notifier = SystemAdminNoticeNotifier(appContext),
             nowMs = System::currentTimeMillis
         )
