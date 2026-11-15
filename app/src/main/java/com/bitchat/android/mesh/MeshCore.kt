@@ -2,6 +2,7 @@ package com.bitchat.android.mesh
 
 import android.content.Context
 import android.util.Log
+import com.bitchat.android.adminnotice.AdminNoticeBridge
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.model.BitchatFilePacket
@@ -497,6 +498,10 @@ class MeshCore(
 
             override fun handleVoiceFrame(routed: RoutedPacket): Boolean =
                 messageHandler.handlePublicVoiceFrame(routed)
+
+            // The same process-wide Inbox as the BLE mesh: a notice heard on both is one notice.
+            override fun handleAdminNotice(routed: RoutedPacket): Boolean =
+                AdminNoticeBridge.deliverFromMesh(routed.packet)
 
             override fun handleLeave(routed: RoutedPacket) {
                 scope.launch { messageHandler.handleLeave(routed) }

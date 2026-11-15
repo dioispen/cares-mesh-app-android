@@ -546,15 +546,22 @@ class DebugSettingsManager private constructor() {
         val packetVersion = packet.version
         val route = packet.route
         val routeInfo = if (!route.isNullOrEmpty()) "routed: ${route.size} hops" else null
+        // An Admin Notice's senderID is its messageId (ADR-0011): it counts for the link it came
+        // in on, never as traffic from a peer.
+        val fromPeer = !com.bitchat.android.mesh.AdminNoticeTraffic.carriesAdminNotice(packet)
 
         if (verboseLoggingEnabled.value) {
-            val resolvedNick = fromNickname ?: nicknameResolver?.invoke(fromPeerID) ?: "unknown"
-            val who = if (resolvedNick != "unknown") "$resolvedNick ($fromPeerID)" else fromPeerID
+            val who = if (fromPeer) {
+                val resolvedNick = fromNickname ?: nicknameResolver?.invoke(fromPeerID) ?: "unknown"
+                if (resolvedNick != "unknown") "$resolvedNick ($fromPeerID)" else fromPeerID
+            } else {
+                "Admin Notice $fromPeerID"
+            }
             val routeStr = if (routeInfo != null) " $routeInfo" else ""
             addDebugMessage(DebugMessage.PacketEvent("📥 Incoming v$packetVersion $packetType from $who (${fromDeviceAddress ?: "?"})$routeStr"))
         }
 
-        emitVisualEvent(MeshVisualEvent.PacketActivity(fromPeerID))
+        if (fromPeer) emitVisualEvent(MeshVisualEvent.PacketActivity(fromPeerID))
         
         if (!route.isNullOrEmpty()) {
             val fullRoute = mutableListOf<String>()
@@ -573,9 +580,11 @@ class DebugSettingsManager private constructor() {
             _perDeviceIncomingTotalsFlow.value = deviceIncomingTotalsMap.toMap()
         }
         
-        perPeerIncoming.getOrPut(fromPeerID) { ConcurrentLinkedQueue() }.offer(now)
-        peerIncomingTotalsMap[fromPeerID] = (peerIncomingTotalsMap[fromPeerID] ?: 0L) + 1L
-        _perPeerIncomingTotalsFlow.value = peerIncomingTotalsMap.toMap()
+        if (fromPeer) {
+            perPeerIncoming.getOrPut(fromPeerID) { ConcurrentLinkedQueue() }.offer(now)
+            peerIncomingTotalsMap[fromPeerID] = (peerIncomingTotalsMap[fromPeerID] ?: 0L) + 1L
+            _perPeerIncomingTotalsFlow.value = peerIncomingTotalsMap.toMap()
+        }
         
         // bump totals
         val cur = _relayStats.value

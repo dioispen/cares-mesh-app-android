@@ -20,6 +20,14 @@ class PacketProcessor(private val myPeerID: String) {
     
     companion object {
         private const val TAG = "PacketProcessor"
+
+        /**
+         * The one actor every Admin Notice packet, and every fragment of one, is serialised on.
+         * Their senderID is a messageId, not a peer: an actor per senderID would only be cleaned up
+         * when that "peer" leaves, which it never does (ADR-0011). Not hex, so it never collides
+         * with a peerID.
+         */
+        private const val ADMIN_NOTICE_ACTOR = "admin-notice"
     }
     
     // Delegate for callbacks
@@ -72,7 +80,8 @@ class PacketProcessor(private val myPeerID: String) {
         }
         
         // Get or create actor for this peer
-        val actor = actors.getOrPut(peerID) { getOrCreateActorForPeer(peerID) }
+        val actorKey = if (AdminNoticeTraffic.carriesAdminNotice(routed.packet)) ADMIN_NOTICE_ACTOR else peerID
+        val actor = actors.getOrPut(actorKey) { getOrCreateActorForPeer(actorKey) }
         
         // Send packet to peer's dedicated actor for serialized processing
         processorScope.launch {
@@ -96,6 +105,9 @@ class PacketProcessor(private val myPeerID: String) {
             Log.d(TAG, "🎭 Cleaned up packet actor for departed peer $peerID")
         }
     }
+
+    /** Packet actors alive now: one per peer that sent something, plus at most one for Admin Notices. */
+    internal fun activeActorCount(): Int = actors.size
 
     /**
      * Set up the packet relay manager with its delegate
@@ -133,8 +145,10 @@ class PacketProcessor(private val myPeerID: String) {
 
         var validPacket = true
         val messageType = MessageType.fromValue(packet.type)
+        // An Admin Notice's senderID is its messageId: nobody to log, or mark as seen, as its sender.
+        val senderIsPeer = !AdminNoticeTraffic.carriesAdminNotice(packet)
         // Verbose logging to debug manager (and chat via ChatViewModel observer)
-        try {
+        if (senderIsPeer) try {
             val mt = messageType?.name ?: packet.type.toString()
             val routeDevice = routed.relayAddress
             val nick = delegate?.getPeerNickname(peerID)
@@ -152,6 +166,8 @@ class PacketProcessor(private val myPeerID: String) {
             MessageType.FRAGMENT -> handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
             MessageType.HEALTH_REPORT -> handleMessage(routed)
+            // Relayed only when the Inbox verified the Administrators' signature (ADR-0011).
+            MessageType.ADMIN_NOTICE -> validPacket = delegate?.handleAdminNotice(routed) ?: false
             else -> {
                 // Handle private packet types (address check required)
                 if (packetRelayManager.isPacketAddressedToMe(packet)) {
@@ -172,10 +188,16 @@ class PacketProcessor(private val myPeerID: String) {
         
         // Update last seen timestamp
         if (validPacket) {
-            delegate?.updatePeerLastSeen(peerID)
+            if (senderIsPeer) delegate?.updatePeerLastSeen(peerID)
             
             // CENTRALIZED RELAY LOGIC: Handle relay decisions for all packets not addressed to us
-            packetRelayManager.handlePacketRelay(routed)
+            packetRelayManager.handlePacketRelay(
+                if (messageType == MessageType.ADMIN_NOTICE) {
+                    routed.copy(packet = AdminNoticeTraffic.normalizedForRelay(packet))
+                } else {
+                    routed
+                }
+            )
         }
     }
     
@@ -310,6 +332,8 @@ interface PacketProcessorDelegate {
     suspend fun handleAnnounce(routed: RoutedPacket): Boolean
     fun handleMessage(routed: RoutedPacket)
     fun handleVoiceFrame(routed: RoutedPacket): Boolean = false
+    /** ADMIN_NOTICE (0x31): true when the Inbox accepted it and it should be relayed (validPacket). */
+    fun handleAdminNotice(routed: RoutedPacket): Boolean = false
     fun handleLeave(routed: RoutedPacket)
     fun handleFragment(packet: BitchatPacket): BitchatPacket?
     fun handleRequestSync(routed: RoutedPacket)
