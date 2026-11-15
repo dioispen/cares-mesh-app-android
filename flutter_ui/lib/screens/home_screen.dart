@@ -449,7 +449,6 @@ class _AdminNoticeHomeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = adminNoticeLevelColor(notice.level);
-    final textScale = MediaQuery.textScalerOf(context);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -485,8 +484,8 @@ class _AdminNoticeHomeCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               notice.content,
-              // 最長 300 bytes，大約 100 個字：小螢幕放大字體時也盡量整則顯示。
-              maxLines: textScale.scale(1) > 1.2 ? 10 : 8,
+              // 最長 300 bytes，大約 100 個字：小螢幕放大字體時也幾乎整則顯示，全文在列表裡。
+              maxLines: 10,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700, height: 1.4),
             ),
