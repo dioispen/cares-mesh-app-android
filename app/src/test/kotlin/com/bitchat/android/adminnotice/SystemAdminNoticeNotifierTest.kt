@@ -114,7 +114,8 @@ class SystemAdminNoticeNotifierTest {
         issuedAtMs = TestAdminNotices.VECTOR_ISSUED_AT,
         expiresAtMs = TestAdminNotices.V1_EXPIRES_AT,
         replaces = null,
-        content = TestAdminNotices.V1_CONTENT
+        content = TestAdminNotices.V1_CONTENT,
+        source = AdminNoticeSource.BACKEND
     )
 
     private object FakeTexts : AdminNoticeTexts {

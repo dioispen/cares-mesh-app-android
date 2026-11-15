@@ -4,7 +4,12 @@ import com.bitchat.android.adminnotice.TestAdminNotices.V1
 import com.bitchat.android.adminnotice.TestAdminNotices.V1_CONTENT
 import com.bitchat.android.adminnotice.TestAdminNotices.V1_EXPIRES_AT
 import com.bitchat.android.adminnotice.TestAdminNotices.V1_MESSAGE_ID
+import com.bitchat.android.adminnotice.TestAdminNotices.OUTSIDER_PRIVATE_HEX
+import com.bitchat.android.adminnotice.TestAdminNotices.RECIPIENT_1_PRIVATE_HEX
+import com.bitchat.android.adminnotice.TestAdminNotices.RECIPIENT_2_PRIVATE_HEX
 import com.bitchat.android.adminnotice.TestAdminNotices.V2
+import com.bitchat.android.adminnotice.TestAdminNotices.V2_CONTENT
+import com.bitchat.android.adminnotice.TestAdminNotices.V2_EXPIRES_AT
 import com.bitchat.android.adminnotice.TestAdminNotices.V2_MESSAGE_ID
 import com.bitchat.android.adminnotice.TestAdminNotices.V3
 import com.bitchat.android.adminnotice.TestAdminNotices.V3_MESSAGE_ID
@@ -26,8 +31,16 @@ class AdminNoticeInboxTest {
     private var now = VECTOR_ISSUED_AT + 60_000L
     private val presenter = RecordingPresenter()
 
-    private fun inbox(keys: AdminKeyTable = TestAdminNotices.TEST_KEYS) =
-        AdminNoticeInbox(adminKeys = keys, presenter = presenter, nowMs = { now }, injectionScheduler = ManualScheduler())
+    private fun inbox(
+        keys: AdminKeyTable = TestAdminNotices.TEST_KEYS,
+        recipientKey: AdminNoticeRecipientKey = AdminNoticeRecipientKey.NONE
+    ) = AdminNoticeInbox(
+        adminKeys = keys,
+        presenter = presenter,
+        nowMs = { now },
+        injectionScheduler = ManualScheduler(),
+        recipientKey = recipientKey
+    )
 
     // ── 附錄的 test vectors ─────────────────────────────────────────────────
 
@@ -207,10 +220,143 @@ class AdminNoticeInboxTest {
         assertEquals(AdminNoticeOutcome.Accepted::class, inbox.onBackendNotice(expiringFirst)::class)
     }
 
-    // ── 這張票還不呈現的公告 ─────────────────────────────────────────────────
+    // ── 定向公告（#141）──────────────────────────────────────────────────────
 
     @Test
-    fun `V2, a targeted notice, is verified and recorded but not presented before decryption exists`() {
+    fun `recipient-1 opens V2 from the backend, and it is presented with its decrypted content`() {
+        val outcome = inbox(recipientKey = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX)).onBackendNotice(V2)
+
+        assertEquals(AdminNoticeOutcome.Accepted::class, outcome::class)
+        val shown = presenter.shown.single()
+        assertEquals(V2_MESSAGE_ID, shown.messageId)
+        assertEquals(AdminNoticeKind.TARGETED, shown.kind)
+        assertEquals(AdminNoticeLevel.IMPORTANT, shown.level)
+        assertEquals(V2_CONTENT, shown.content)
+        assertEquals(VECTOR_ISSUED_AT, shown.issuedAtMs)
+        assertEquals(V2_EXPIRES_AT, shown.expiresAtMs)
+        assertEquals(AdminNoticeSource.BACKEND, shown.source)
+    }
+
+    @Test
+    fun `recipient-2 opens V2 heard over the mesh, presents it and relays it`() {
+        val outcome = inbox(recipientKey = FakeRecipientKey(RECIPIENT_2_PRIVATE_HEX)).onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(outcome.relay)
+        val shown = presenter.shown.single()
+        assertEquals(V2_MESSAGE_ID, shown.messageId)
+        assertEquals(V2_CONTENT, shown.content)
+        assertEquals(AdminNoticeSource.MESH, shown.source)
+    }
+
+    @Test
+    fun `the outsider cannot open V2, so heard over the mesh it is relayed but not presented`() {
+        val outcome = inbox(recipientKey = FakeRecipientKey(OUTSIDER_PRIVATE_HEX)).onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `the outsider cannot open V2 from the backend either, and the Gateway still injects it`() {
+        val scheduler = ManualScheduler()
+        val injector = RecordingInjector()
+        val inbox = AdminNoticeInbox(
+            adminKeys = TestAdminNotices.TEST_KEYS,
+            presenter = presenter,
+            nowMs = { now },
+            injectionScheduler = scheduler,
+            injectionDelayMs = { 0L },
+            recipientKey = FakeRecipientKey(OUTSIDER_PRIVATE_HEX)
+        ).also { it.attachInjector(injector) }
+
+        assertEquals(AdminNoticeOutcome.Accepted::class, inbox.onBackendNotice(V2)::class)
+        scheduler.advance(0L)
+
+        assertTrue(presenter.shown.isEmpty())
+        assertArrayEquals(V2, injector.injected.single().payload)
+    }
+
+    @Test
+    fun `a tampered ciphertext fails AES-GCM, so recipient-1 does not present it, and it is still relayed`() {
+        // The tag still matches (it comes from ECDH alone); only the GCM check can catch this.
+        val tampered = TestAdminNotices.resigned(V2) { unsigned -> unsigned[unsigned.size - 20] = (unsigned[unsigned.size - 20].toInt() xor 0x01).toByte() }
+
+        val outcome = inbox(recipientKey = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX)).onMeshPacket(TestAdminNotices.meshPacket(tampered))
+
+        assertTrue(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `a header changed after encryption fails AES-GCM, since the header is its aad`() {
+        // V2 re-signed as urgent: same messageId, so the tag still matches.
+        val tampered = TestAdminNotices.resigned(V2) { unsigned -> unsigned[3] = 0x03 }
+
+        val outcome = inbox(recipientKey = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX)).onBackendNotice(tampered)
+
+        assertEquals(AdminNoticeOutcome.Accepted::class, outcome::class)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `after a sign-out clears the recipient key, V2 is no longer presented`() {
+        val key = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX)
+        val inbox = inbox(recipientKey = key)
+
+        key.clear()
+        val outcome = inbox.onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `V2 read from the backend and then heard over the mesh is presented once, as from the backend`() {
+        val inbox = inbox(recipientKey = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX))
+
+        inbox.onBackendNotice(V2)
+        val heard = inbox.onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(heard.relay)
+        assertEquals(listOf(AdminNoticeSource.BACKEND), presenter.shown.map { it.source })
+    }
+
+    @Test
+    fun `V2 heard over the mesh and then read from the backend is presented once, as from the mesh`() {
+        val inbox = inbox(recipientKey = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX))
+
+        inbox.onMeshPacket(TestAdminNotices.meshPacket(V2))
+        val read = inbox.onBackendNotice(V2)
+
+        assertEquals(AdminNoticeOutcome.Duplicate, read)
+        assertEquals(listOf(AdminNoticeSource.MESH), presenter.shown.map { it.source })
+    }
+
+    @Test
+    fun `a broadcast carries the source it arrived from`() {
+        inbox().onBackendNotice(V1)
+        inbox().onMeshPacket(TestAdminNotices.meshPacket(V1))
+
+        assertEquals(listOf(AdminNoticeSource.BACKEND, AdminNoticeSource.MESH), presenter.shown.map { it.source })
+    }
+
+    @Test
+    fun `a recipient key that cannot be read only costs the presentation, never the relay`() {
+        val unreadable = object : AdminNoticeRecipientKey {
+            override fun publicKey(): ByteArray? = throw IllegalStateException("keystore unavailable")
+            override fun agree(ephemeralPublicKey: ByteArray): ByteArray? = throw IllegalStateException("keystore unavailable")
+        }
+        val inbox = inbox(recipientKey = unreadable)
+
+        val outcome = inbox.onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+        assertEquals(AdminNoticeOutcome.Duplicate, inbox.onMeshPacket(TestAdminNotices.meshPacket(V2, ttl = 3u)))
+    }
+
+    @Test
+    fun `V2, a targeted notice, is verified and recorded but not presented on a device without a recipient key`() {
         val inbox = inbox()
 
         val outcome = inbox.onBackendNotice(V2)
@@ -288,7 +434,7 @@ class AdminNoticeInboxTest {
     }
 
     @Test
-    fun `V2, a targeted notice heard over the mesh, is verified and relayed but not presented`() {
+    fun `V2, a targeted notice heard over the mesh, is verified and relayed but not presented without a recipient key`() {
         val outcome = inbox().onMeshPacket(TestAdminNotices.meshPacket(V2))
 
         assertEquals(V2_MESSAGE_ID, (outcome as AdminNoticeOutcome.Accepted).payload.messageId)

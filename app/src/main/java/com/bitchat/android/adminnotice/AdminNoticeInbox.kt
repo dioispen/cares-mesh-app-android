@@ -10,9 +10,10 @@ import kotlin.random.Random
  *
  * Inputs: [onBackendNotice] (the Gateway's Firestore listener, #136) and [onMeshPacket] (the mesh's
  * 0x31 packets, #137). Outputs go only to injected ports — [presenter], and the injector the
- * running mesh service attaches ([attachInjector]); the sync set (#138), the recipient key (#141)
- * and receipts (#143) come as further ports — and the clock and the injection delay's scheduler and
- * random source are injected too, so every rule runs in a plain JVM test. Firebase-free.
+ * running mesh service attaches ([attachInjector]); the sync set (#138) and receipts (#143) come as
+ * further ports — and so do the clock, the injection delay's scheduler and random source, and this
+ * device's [recipientKey] for targeted notices (#141), so every rule runs in a plain JVM test.
+ * Firebase-free.
  *
  * Calls are serialised on this object's lock and return a decision at once, so the mesh can decide
  * whether to relay a packet while handling it. The dedup table is memory only: after an App restart
@@ -26,7 +27,9 @@ class AdminNoticeInbox(
     private val injectionScheduler: AdminNoticeScheduler,
     /** Gateway 注入延遲: uniform over 0–15 s, so that Gateways reading the same notice rarely all inject. */
     private val injectionDelayMs: () -> Long = { Random.nextLong(MAX_INJECTION_DELAY_MS + 1) },
-    private val maxRecords: Int = MAX_DEDUP_RECORDS
+    private val maxRecords: Int = MAX_DEDUP_RECORDS,
+    /** Opens targeted notices; a device without one presents only broadcasts. */
+    private val recipientKey: AdminNoticeRecipientKey = AdminNoticeRecipientKey.NONE
 ) {
     /** Where a recorded notice has been seen (去重表). */
     private enum class Presence {
@@ -79,7 +82,7 @@ class AdminNoticeInbox(
             null -> Unit
         }
         remember(payload, Presence.BACKEND_ONLY)
-        present(payload)
+        present(payload, AdminNoticeSource.BACKEND)
         scheduleInjection(payload)
         return AdminNoticeOutcome.Accepted(payload)
     }
@@ -104,7 +107,7 @@ class AdminNoticeInbox(
             Presence.BACKEND_ONLY -> markInMesh(payload)
             null -> {
                 markInMesh(payload)
-                present(payload)
+                present(payload, AdminNoticeSource.MESH)
             }
         }
         return AdminNoticeOutcome.Accepted(payload)
@@ -198,12 +201,19 @@ class AdminNoticeInbox(
     }
 
     /**
-     * Step 11, as far as this ticket goes: a broadcast with text is shown. A pure revoke has nothing
-     * to show (marking what it withdraws is #139), and a targeted notice waits for decryption (#141).
+     * Step 11 (本機呈現), once per notice, for the first copy that arrived ([source]): a broadcast with
+     * text is shown, a targeted notice only when this device opens it (#141). A pure revoke has
+     * nothing to show (marking what it withdraws is #139).
+     *
+     * Runs after the notice is recorded, and its outcome is already decided: whether this device
+     * can read a notice never changes whether it is relayed or injected.
      */
-    private fun present(payload: AdminNoticePayload) {
-        val body = payload.body as? AdminNoticeBody.Broadcast ?: return
-        if (body.content.isEmpty()) return
+    private fun present(payload: AdminNoticePayload, source: AdminNoticeSource) {
+        val content = when (val body = payload.body) {
+            is AdminNoticeBody.Broadcast -> body.content
+            is AdminNoticeBody.Targeted -> openForThisDevice(payload, body) ?: return
+        }
+        if (content.isEmpty()) return
         presenter.present(
             ReceivedAdminNotice(
                 messageId = payload.messageId,
@@ -212,9 +222,21 @@ class AdminNoticeInbox(
                 issuedAtMs = payload.issuedAtMs,
                 expiresAtMs = payload.expiresAtMs,
                 replaces = payload.replaces,
-                content = body.content
+                content = content,
+                source = source
             )
         )
+    }
+
+    /**
+     * The content of a targeted notice for this device; null when it is not a recipient. A key that
+     * cannot be read counts as none: an exception here would reach the mesh as "do not relay", for
+     * a notice already recorded as in the mesh, so no later copy would be relayed either.
+     */
+    private fun openForThisDevice(payload: AdminNoticePayload, body: AdminNoticeBody.Targeted): String? = try {
+        TargetedAdminNotice.open(payload, body, recipientKey)
+    } catch (e: RuntimeException) {
+        null
     }
 
     companion object {
