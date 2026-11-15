@@ -61,6 +61,15 @@ class BitchatApplication : Application() {
         // Initialize mesh service preferences
         try { com.bitchat.android.service.MeshServicePreferences.init(this) } catch (_: Exception) { }
 
+        // The Admin Notice Inbox (#136) lives as long as the process: the Gateway's Firestore
+        // listener in MeshForegroundService, and later the mesh itself (#137), reach it through
+        // AdminNoticeBridge. Installed before the service starts so no notice finds it missing.
+        try {
+            com.bitchat.android.adminnotice.AdminNotices.install(this)
+        } catch (e: Exception) {
+            android.util.Log.w("BitchatApplication", "Admin Notices unavailable: ${e.message}")
+        }
+
         // Proactively start the foreground service to keep mesh alive
         try { com.bitchat.android.service.MeshForegroundService.start(this) } catch (_: Exception) { }
     }
