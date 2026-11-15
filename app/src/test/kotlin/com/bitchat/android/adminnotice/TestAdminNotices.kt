@@ -84,6 +84,39 @@ internal object TestAdminNotices {
         """
     )
 
+    const val V5_MESSAGE_ID = "7a5b3c1d9e8f6a42"
+    const val V5_EXPIRES_AT = 1_792_641_600_000L
+
+    /**
+     * V5 targeted, urgent, five recipients and 300 bytes of content: a 661-byte payload, so its
+     * 683-byte outer packet is split into two fragments on the mesh (實作前待驗證 1).
+     */
+    val V5 = hex(
+        """
+        010201037a5b3c1d9e8f6a42000001a160e85000000001a161c40a0000000000
+        000000007ff2642665620d4564fdd4296d74d00b6d4345dbccce0804f17e97af
+        da62b34c05d37191cc72eaab65dfb1ea60c9df00f27fd9be3fed2f4020b73319
+        d86fe072243fa78dc224df5610a325be078784b61a875f8c9eadd66ff7242bc2
+        f0d8f72d719c9b432e16acee746355242df5c99ade024b1a23ea7ee3c959ed79
+        28d5a71177e828485ed2ffb645c469f863470df1a7e28d1b4d1b259b07c7cc64
+        6682afe82ea810feb8d7441eea132d5c91a18f3d2c7f2d656d66f3f4b1f04521
+        0a7fdebc099bee11ce396fb1f83f2e40b91fe3d64810f48e25dd53ecb32aa001
+        935fb612ae83901c57df3e683c31aebc49d7fa19563d19c990a5ee2f217ec3fa
+        bd86123a4e2ab0670e2afc48bed789652f5f766dffcda8969a562fbf772e9911
+        39aa48514c42aa89dd2386e95f274d475910d598c78d213c674e9b50c2f5ae34
+        da90b8e886dc49b7b5bd1b1b012b665f9cf4eaf3e6406855b065be62bab22a2f
+        61292a78cc5b489c3be265d0b8f42e128ec985884202b5330f8fbdfe172ac1e6
+        65b962cb3c475d453f1f634a679ec4be933d0c5b48c47aa878ca317cda590976
+        9be4071579300e257f398cd3712c6a3c9c9a69290701caaf7d704383f2b2c0e2
+        dea612f4cbf416ae9b6fef1ce95815fe96056f75e05e38007c22241bd8c8ea52
+        82c37d4c17726c03c5bb8b042600c07aeb13c457148338286f45dc4394981196
+        6a288361b0c7a7a233f103b42530816b9ec3ca9bbddc3986039adf1a1acb1f40
+        f4f0f2bb51277bafd1c05d900469009d842249b19c512059f4288e4025e37b7d
+        fe94ce27999fabcb74e189fda4d2544150001524ed1f3097a37cd57767258701
+        3e722fa3b40b06ac612d5b8f0765d42af609796906
+        """
+    )
+
     /**
      * A notice laid out as in the spec's 線路格式 and signed with the test key, so a test can reach
      * the checks that come after the signature. Every field can be bent out of shape.

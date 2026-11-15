@@ -230,6 +230,20 @@ class AdminNoticeInboxTest {
     }
 
     @Test
+    fun `V5, a targeted notice to five recipients with 300 bytes of content, is verified`() {
+        val outcome = inbox().onBackendNotice(TestAdminNotices.V5)
+
+        val payload = (outcome as AdminNoticeOutcome.Accepted).payload
+        assertEquals(TestAdminNotices.V5_MESSAGE_ID, payload.messageId)
+        assertEquals(TestAdminNotices.V5_EXPIRES_AT, payload.expiresAtMs)
+        val body = payload.body as AdminNoticeBody.Targeted
+        assertEquals(5, body.recipients.size)
+        assertArrayEquals(hex("d37191cc72eaab65"), body.recipients[0].tag) // recipient-4, listed first
+        assertEquals(300 + 16, body.ciphertext.size)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
     fun `V3, a pure revoke, is verified and recorded but has nothing to present`() {
         val inbox = inbox()
 
