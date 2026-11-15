@@ -1,6 +1,9 @@
 package com.bitchat.android.adminnotice
 
 import android.content.Context
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Builds this process's [AdminNoticeInbox] and installs it in [AdminNoticeBridge]. Called once from
@@ -36,8 +39,19 @@ object AdminNotices {
             AdminNoticeInbox(
                 adminKeys = AdminKeyTable.PRODUCTION,
                 presenter = presenter,
-                nowMs = System::currentTimeMillis
+                nowMs = System::currentTimeMillis,
+                injectionScheduler = scheduledOn(
+                    // Lives with the process, like the Inbox; idle but for a Gateway's injections.
+                    Executors.newSingleThreadScheduledExecutor { runnable ->
+                        Thread(runnable, "AdminNoticeInjection").apply { isDaemon = true }
+                    }
+                )
             )
         )
+    }
+
+    private fun scheduledOn(executor: ScheduledExecutorService) = AdminNoticeScheduler { delayMs, action ->
+        val future = executor.schedule(action, delayMs, TimeUnit.MILLISECONDS)
+        return@AdminNoticeScheduler { future.cancel(false) }
     }
 }

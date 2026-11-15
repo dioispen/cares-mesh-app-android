@@ -20,7 +20,10 @@ enum class MessageType(val value: UByte) {
     REQUEST_SYNC(0x21u), // GCS-based sync request
     FILE_TRANSFER(0x22u), // New: File transfer packet (BLE voice notes, etc.)
     VOICE_FRAME(0x29u), // Ephemeral live push-to-talk frame; never added to gossip sync
-    HEALTH_REPORT(0x30u); // Renamed from DISASTER_REPORT
+    HEALTH_REPORT(0x30u), // Renamed from DISASTER_REPORT
+    // Trusted only by the Administrators' signature in its payload, never by a device signature;
+    // its senderID is the notice's messageId, not a peer (ADR-0011, docs/ADMIN_NOTICE_V1.md).
+    ADMIN_NOTICE(0x31u);
 
     companion object {
         fun fromValue(value: UByte): MessageType? {

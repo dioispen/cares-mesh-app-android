@@ -283,6 +283,10 @@ class SecurityManager(
             // Public packets that mutate identity, presence, or user-visible state must prove the
             // signing key learned from a verified announcement. LEAVE is included so an attacker
             // cannot evict a claimed peer or amplify a forged departure through relay.
+            // ADMIN_NOTICE is left out on purpose (ADR-0011): it carries no device signature and is
+            // trusted only by the Administrators' signature, which the Inbox checks before it is
+            // relayed. Recording it as processed first is safe: that signature is in the payload,
+            // so a forgery never has the genuine notice's packet ID.
             if (MessageType.fromValue(packet.type) !in setOf(
                     MessageType.ANNOUNCE,
                     MessageType.MESSAGE,
