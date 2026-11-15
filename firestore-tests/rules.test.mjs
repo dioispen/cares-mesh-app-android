@@ -27,6 +27,13 @@
 //   issue #111
 //   - mesh_reports：Gateway 代傳的 Broadcast Tier，任何登入帳號都能寫，只有 Administrator 能讀
 //   最關鍵的兩條是「gatewayUid 必須是寫入者自己」與「update 的 reportTime 必須嚴格遞增」。
+//
+//   issue #135
+//   - admin_notices：Administrator 簽好章的 Admin Notice，只有 Administrator 能建立與刪除，
+//     所有登入帳號都讀得到，建立後不能修改
+//   - admin_notice_records：管理端留存的明文與操作者，只有 Administrator 能讀與建立
+//   最關鍵的兩條是「非 Administrator 不能建立」與「createdBy 必須是寫入者自己」——共用私鑰之下，
+//   createdBy 是唯一能追查操作者的依據。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -1244,6 +1251,212 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
       if (snap.data().sos !== false || snap.data().status !== '安全') {
         throw new Error(`沒有更新成撤回 SOS：${JSON.stringify(snap.data())}`);
       }
+    });
+  });
+});
+
+// admin_notices/{messageId}（#135、docs/ADMIN_NOTICE_V1.md「Firestore」）：Administrator 簽好章的
+// Admin Notice，所有 Gateway 都讀得到。情境：Administrator 發一則廣播，Carol（Gateway）讀取後注入 mesh。
+describe('admin_notices（#135：只有 Administrator 能發 Admin Notice，所有登入帳號都讀得到）', () => {
+  const MESSAGE_ID = 'a1b2c3d4e5f60718';
+  const hoursFromNow = (h) => Timestamp.fromMillis(Date.now() + h * 3_600_000);
+  const notice = (extra = {}) => ({
+    wire: bytesOf(157),
+    expiresAt: hoursFromNow(6),
+    createdAt: serverTimestamp(),
+    createdBy: ADMIN,
+    ...extra,
+  });
+  const noticeRef = (db, id = MESSAGE_ID) => doc(db, `admin_notices/${id}`);
+  const publish = (data, uid = ADMIN, id = MESSAGE_ID) => setDoc(noticeRef(dbFor(uid), id), data);
+  const publishFails = (extra) => assertFails(publish(notice(extra)));
+
+  describe('建立', () => {
+    it('★ Administrator 可以建立格式正確的公告（createdAt 用伺服器時間）', async () => {
+      await assertSucceeds(publish(notice()));
+    });
+
+    it('★ 非 Administrator 不能建立，Verified Rescuer 也一樣', async () => {
+      for (const uid of [ALICE, CAROL, RESCUER]) {
+        await assertFails(publish(notice({ createdBy: uid }), uid));
+      }
+      await assertFails(setDoc(noticeRef(anonDb()), notice({ createdBy: null })));
+    });
+
+    // 所有 Gateway 都讀得到這份文件，明文內容或收件者 uid 一旦寫進來，定向加密就白做了。
+    it('★ 多餘欄位被擋（例如明文內容、收件者 uid）', async () => {
+      await publishFails({ content: '土石流警戒：請立即撤離' });
+      await publishFails({ recipients: [ALICE] });
+    });
+
+    it('★ 缺欄位被擋', async () => {
+      for (const field of ['wire', 'expiresAt', 'createdAt', 'createdBy']) {
+        const { [field]: _, ...rest } = notice();
+        await assertFails(publish(rest));
+      }
+    });
+
+    it('★ wire 超過 1 KB 被擋，剛好 1 KB 可以', async () => {
+      await publishFails({ wire: bytesOf(1025) });
+      await assertSucceeds(publish(notice({ wire: bytesOf(1024) })));
+    });
+
+    it('wire 必須是 bytes', async () => {
+      await publishFails({ wire: 'deadbeef' });
+      await publishFails({ wire: Array(157).fill(7) });
+      await publishFails({ wire: null });
+    });
+
+    // Admin Notice 的有效期最長 24 小時，加上 1 小時給 issuedAt 與伺服器時間的差距。
+    it('★ expiresAt 比伺服器時間晚 25 小時以上被擋，以內可以', async () => {
+      await publishFails({ expiresAt: hoursFromNow(25.1) });
+      await assertSucceeds(publish(notice({ expiresAt: hoursFromNow(24.9) })));
+    });
+
+    it('expiresAt 必須是 timestamp', async () => {
+      await publishFails({ expiresAt: Date.now() + 3_600_000 });
+      await publishFails({ expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+    });
+
+    it('createdAt 必須是伺服器時間', async () => {
+      await publishFails({ createdAt: Timestamp.now() });
+      await publishFails({ createdAt: new Date() });
+    });
+
+    // 所有操作者共用一把私鑰，createdBy 是追查哪位 Administrator 發的唯一依據（ADR-0011）。
+    it('★ createdBy 不是自己被擋', async () => {
+      await publishFails({ createdBy: ALICE });
+      await publishFails({ createdBy: null });
+    });
+
+    it('★ messageId 必須是 16 個小寫十六進位字元', async () => {
+      for (const bad of ['A1B2C3D4E5F60718', 'a1b2c3d4e5f6071', 'a1b2c3d4e5f607189', 'g1b2c3d4e5f60718']) {
+        await assertFails(publish(notice(), ADMIN, bad));
+      }
+    });
+  });
+
+  // 以後台身分鋪底：Administrator 已經發出一則公告
+  const seed = async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(noticeRef(ctx.firestore()), { ...notice(), createdAt: Timestamp.now() });
+    });
+  };
+
+  describe('讀取', () => {
+    it('★ 任何登入帳號都能讀（任何登入帳號都可能是 Gateway），Verified Rescuer 也一樣', async () => {
+      await seed();
+      for (const uid of [CAROL, ALICE, RESCUER, ADMIN]) {
+        await assertSucceeds(getDoc(noticeRef(dbFor(uid))));
+      }
+    });
+
+    it('★ Gateway 的 listener 查詢（expiresAt 晚於掛上的時間）讀得到', async () => {
+      await seed();
+      const snap = await assertSucceeds(getDocs(query(
+        collection(dbFor(CAROL), 'admin_notices'),
+        where('expiresAt', '>', Timestamp.now()),
+      )));
+      if (snap.size !== 1) throw new Error(`查到 ${snap.size} 則，預期 1 則`);
+    });
+
+    it('未登入讀不到', async () => {
+      await seed();
+      await assertFails(getDoc(noticeRef(anonDb())));
+      await assertFails(getDocs(collection(anonDb(), 'admin_notices')));
+    });
+  });
+
+  describe('修改與刪除', () => {
+    // 撤回只能靠撤回公告（docs/ADMIN_NOTICE_V1.md「撤回與取代」），不能改已經進到 mesh 的內容。
+    it('★ 建立後不能修改，Administrator 也不行', async () => {
+      await seed();
+      await assertFails(updateDoc(noticeRef(dbFor(ADMIN)), { expiresAt: hoursFromNow(1) }));
+      await assertFails(updateDoc(noticeRef(dbFor(CAROL)), { wire: bytesOf(157, 9) }));
+    });
+
+    it('★ messageId 撞號時整份覆寫也被擋（set() 變成 update）', async () => {
+      await seed();
+      await assertFails(publish(notice({ wire: bytesOf(157, 9) })));
+    });
+
+    it('★ 只有 Administrator 能刪除', async () => {
+      await seed();
+      for (const db of [dbFor(CAROL), dbFor(ALICE), dbFor(RESCUER), anonDb()]) {
+        await assertFails(deleteDoc(noticeRef(db)));
+      }
+      await assertSucceeds(deleteDoc(noticeRef(dbFor(ADMIN))));
+    });
+  });
+
+  // admin_notice_records/{messageId}：管理端留存的明文與操作者，欄位見 docs/ADMIN_NOTICE_V1.md「Firestore」。
+  describe('admin_notice_records（管理端留存，只給 Administrator）', () => {
+    const record = (extra = {}) => ({
+      kind: 'broadcast',
+      level: 'urgent',
+      content: '土石流警戒：請立即撤離至大同國小避難所',
+      issuedAt: hoursFromNow(0),
+      expiresAt: hoursFromNow(6),
+      replaces: null,
+      batchId: MESSAGE_ID,
+      createdBy: ADMIN,
+      createdAt: serverTimestamp(),
+      ...extra,
+    });
+    const recordRef = (db) => doc(db, `admin_notice_records/${MESSAGE_ID}`);
+    const seedRecord = async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(recordRef(ctx.firestore()), { ...record(), createdAt: Timestamp.now() });
+      });
+    };
+
+    it('★ Administrator 可以建立與讀取', async () => {
+      await assertSucceeds(setDoc(recordRef(dbFor(ADMIN)), record()));
+      await assertSucceeds(getDoc(recordRef(dbFor(ADMIN))));
+      await assertSucceeds(getDocs(collection(dbFor(ADMIN), 'admin_notice_records')));
+    });
+
+    it('★ 非 Administrator 不能建立，Verified Rescuer 也一樣', async () => {
+      for (const uid of [ALICE, CAROL, RESCUER]) {
+        await assertFails(setDoc(recordRef(dbFor(uid)), record({ createdBy: uid })));
+      }
+      await assertFails(setDoc(recordRef(anonDb()), record({ createdBy: null })));
+    });
+
+    it('★ 非 Administrator 讀不到明文（單筆與整個 collection），Verified Rescuer、未登入也一樣', async () => {
+      await seedRecord();
+      for (const db of [dbFor(CAROL), dbFor(ALICE), dbFor(RESCUER), anonDb()]) {
+        await assertFails(getDoc(recordRef(db)));
+        await assertFails(getDocs(collection(db, 'admin_notice_records')));
+      }
+    });
+
+    it('★ 建立後不能修改或刪除，Administrator 也不行', async () => {
+      await seedRecord();
+      await assertFails(updateDoc(recordRef(dbFor(ADMIN)), { content: '改過的內容' }));
+      await assertFails(setDoc(recordRef(dbFor(ADMIN)), record({ content: '改過的內容' })));
+      await assertFails(deleteDoc(recordRef(dbFor(ADMIN))));
+      await assertFails(deleteDoc(recordRef(dbFor(CAROL))));
+    });
+
+    // 發送工具與管理後台都用一次 batch write 寫入兩份文件（docs/ADMIN_NOTICE_V1.md 介面契約第 4 步）。
+    it('★ 實際流程：Administrator 用一次 batch 同時寫入公告與留存', async () => {
+      const db = dbFor(ADMIN);
+      const batch = writeBatch(db);
+      batch.set(noticeRef(db), notice());
+      batch.set(recordRef(db), record());
+      await assertSucceeds(batch.commit());
+      await assertSucceeds(getDoc(noticeRef(dbFor(CAROL))));
+    });
+
+    it('★ 非 Administrator 的 batch 整批被擋，兩份都沒有寫進去', async () => {
+      const db = dbFor(CAROL);
+      const batch = writeBatch(db);
+      batch.set(noticeRef(db), notice({ createdBy: CAROL }));
+      batch.set(recordRef(db), record({ createdBy: CAROL }));
+      await assertFails(batch.commit());
+      const snap = await getDoc(noticeRef(dbFor(ALICE)));
+      if (snap.exists()) throw new Error('被擋的 batch 卻寫進了 admin_notices');
     });
   });
 });

@@ -305,6 +305,61 @@ service cloud.firestore {
                     && request.resource.data.reportTime > resource.data.reportTime;
     }
 
+    // admin_notices/{messageId}：Administrator 發出的 Admin Notice（docs/ADMIN_NOTICE_V1.md、
+    // ADR-0011）。wire 是簽好章的公告 payload，Gateway 讀到後原封不動注入 mesh。文件 ID 是 payload
+    // 裡的 messageId。
+    //
+    // 規則不是 Admin Notice 的信任來源：用戶端只相信 wire 裡的管理端 Ed25519 簽章，連從
+    // Firestore 讀到的副本也要驗。規則看不到簽章對不對，也看不出 expiresAt 欄位和 wire 裡簽過的
+    // 是否一致。兩道防線互相獨立：規則寫錯讓非 Administrator 寫進來，假公告仍過不了簽章；
+    // 私鑰外洩時，規則也擋不住直接從 mesh 注入的偽造公告。規則能做的是：
+    //   - 身分：只有 Administrator 能建立，createdBy 必須是寫入者自己。所有操作者共用一把私鑰，
+    //     mesh 上分不出是誰發的，createdBy 是唯一能追查操作者的依據。
+    //   - 格式：欄位剛好四個。所有 Gateway 都讀得到這份文件，明文內容與收件者 uid 不能放在這裡
+    //     （放在 admin_notice_records），否則定向公告的加密就白做了。
+    //   - 上限：wire 最多 1 KB、expiresAt 最晚是伺服器時間加 25 小時，讓 Gateway 的查詢不會
+    //     撈到一堆永不過期的文件。有效期最長 24 小時，多的 1 小時留給簽章時間與寫入時間的差距。
+    //
+    // 任何登入帳號都能讀：任何登入帳號都可能是 Gateway。
+    match /admin_notices/{messageId} {
+      function validAdminNotice(messageId) {
+        let data = request.resource.data;
+        let fields = ['wire', 'expiresAt', 'createdAt', 'createdBy'];
+        return data.keys().hasAll(fields)
+            && data.keys().hasOnly(fields)
+            // payload 裡的 messageId 是 8 bytes，文件 ID 是它的小寫十六進位。
+            && messageId.matches('^[0-9a-f]{16}$')
+            // 最長的公告（5 個收件裝置、內容 300 bytes）是 661 bytes。
+            && data.wire is bytes
+            && data.wire.size() <= 1024
+            && data.expiresAt is timestamp
+            && data.expiresAt <= request.time + duration.value(25, 'h')
+            && data.createdAt == request.time
+            && data.createdBy == request.auth.uid;
+      }
+
+      allow read: if request.auth != null;
+      allow create: if isAdmin() && validAdminNotice(messageId);
+      // 公告一進到 mesh 就收不回來，改文件也改不到已經在傳的副本；更正與撤回只能發一則新的
+      // Admin Notice（docs/ADMIN_NOTICE_V1.md「撤回與取代」）。messageId 撞號時 set() 會變成
+      // update 而被擋，管理端換一個 messageId 重試。
+      allow update: if false;
+      // 刪除只是清理 Firestore，不算撤回：Gateway 收到刪除事件時什麼都不做。
+      allow delete: if isAdmin();
+    }
+
+    // admin_notice_records/{messageId}：管理端留存每則 Admin Notice 的明文內容、收件對象、kind、
+    // level、replaces、batchId 與操作者（docs/ADMIN_NOTICE_V1.md「Firestore」），讓事後查得出
+    // 是誰發了什麼。與 admin_notices 同一個 messageId，由同一次 batch write 寫入。
+    //
+    // 只有 Administrator 讀得到：裡面有定向公告的明文與收件者 uid。建立後不能修改或刪除，
+    // 連 Administrator 也不行，紀錄才能當稽核依據。欄位名稱見 docs/ADMIN_NOTICE_V1.md「Firestore」；
+    // 規則刻意不檢查欄位：這份文件只給 Administrator 讀寫，不會流到用戶端。
+    match /admin_notice_records/{messageId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
     // supply_items 是所有使用者共用的型錄；套用欄位限制而非擁有者限制，
     // 讓使用者能在任何物資上登記需求或捐贈，但不能竄改描述欄位。
     match /supply_items/{docId} {
