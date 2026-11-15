@@ -95,8 +95,7 @@ void main() {
     await openList(tester);
 
     native.receive(adminNoticeMap('2222222222222222', content: '土石流警戒：請立即撤離', issuedAt: DateTime(2026, 10, 22, 8, 55)));
-    await tester.pump();
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('土石流警戒：請立即撤離'), findsOneWidget);
     expect(native.markedRead, ['2222222222222222']);
