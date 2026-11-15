@@ -58,7 +58,7 @@ Reporter（曾經有網路、已登入）
 
 ## 4. 名詞
 
-- **Gateway**：已登入、有網路且開啟代傳的裝置，把經 mesh 收到的別人的 Health Report（Broadcast Tier）寫進 Firestore。與 Relay 不同：Relay 把封包送往 mesh，Gateway 把它送往後端。
+- **Gateway**：已登入、有網路且開啟代傳的裝置，把經 mesh 收到的別人的 Health Report（Broadcast Tier）寫進 Firestore。與 Relay 不同：Relay 把封包送往 mesh，Gateway 把它送往後端。這是 Gateway 送出 mesh 的方向，也是本文唯一談的方向；Gateway 另外會把 Admin Notice 從 Firestore 注入 mesh，見 [ADMIN_NOTICE_V1.md](ADMIN_NOTICE_V1.md)，那個方向不受代傳開關控制。
 - **Administrator**：`admins/{uid}` 文件存在的帳號，只能由 Firebase console 或 Admin SDK 授予。讀得到 `mesh_reports` 與 `reporter_handles`。與 Verified Rescuer 是兩個獨立的角色。
 
 ## 5. Firestore 資料模型
