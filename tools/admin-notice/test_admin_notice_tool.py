@@ -63,6 +63,20 @@ class KeygenTest(ToolTestCase):
         self.assertEqual("", self.stdout.getvalue())
 
 
+class PublishedPublicKeysTest(unittest.TestCase):
+    """admin_public_keys.json 是 App 內建公鑰表的來源（#136）。"""
+
+    def test_has_a_32_byte_key_for_key_id_0x01(self):
+        keys = tool.load_public_keys(tool.PUBLIC_KEYS_PATH)
+        self.assertEqual(32, len(keys[0x01]))
+        self.assertNotIn(0x00, keys)  # 0x00 保留不用
+
+    def test_never_publishes_the_test_vector_key(self):
+        # 附錄 test vectors 的私鑰人人都算得出來，登記成正式公鑰等於誰都能發公告。
+        keys = tool.load_public_keys(tool.PUBLIC_KEYS_PATH)
+        self.assertNotIn(bytes.fromhex(TEST_PUBLIC_HEX), keys.values())
+
+
 ISSUED_AT = 1792627200000  # 2026-10-22T00:00:00Z
 CONTENT = "土石流警戒：請立即撤離至大同國小避難所"
 ADMIN_UID = "uid-admin"
