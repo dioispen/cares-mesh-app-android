@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.bluetooth.BluetoothAdapter
 import android.location.LocationManager
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.InboundPacketBridge
 import com.bitchat.android.service.HealthReportBroadcast
@@ -116,9 +117,13 @@ class BitchatFlutterChannels(
                              locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
         
         val permissionsGranted = permissionManager.areRequiredPermissionsGranted()
-        val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
-            permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
-        } else true
+        // 能不能真的跳出通知（與 SystemAdminNoticeNotifier 的判斷相同）：沒有時首頁以公告卡片代替
+        // （#142）。Android 13 以前沒有 POST_NOTIFICATIONS，但使用者仍可以在系統設定關掉本 App 的通知。
+        val notificationGranted = NotificationManagerCompat.from(context).areNotificationsEnabled() &&
+            (
+                android.os.Build.VERSION.SDK_INT < 33 ||
+                    permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
+                )
 
         return mapOf(
             "type" to "system_status",
