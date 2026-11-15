@@ -7,11 +7,14 @@ import 'package:flutter_ui/services/reporter_handle_registration.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 final _key = Uint8List.fromList(List<int>.generate(32, (i) => i));
+final _noticeKey = Uint8List.fromList(List<int>.generate(32, (i) => 100 + i));
 
 void main() {
   late List<(String uid, String handle, Map<String, Object> fields)> writes;
   late Future<void> Function() remote;
   late Future<Uint8List?> Function() signingKey;
+  late List<String> noticeKeyAskedFor;
+  late Future<Uint8List?> Function() noticeKey;
   late ReporterHandleRegistration registration;
 
   setUp(() {
@@ -19,17 +22,23 @@ void main() {
     writes = [];
     remote = () async {};
     signingKey = () async => _key;
+    noticeKeyAskedFor = [];
+    noticeKey = () async => _noticeKey;
     registration = ReporterHandleRegistration(
       writeRemote: (uid, handle, fields) {
         writes.add((uid, handle, fields));
         return remote();
       },
       loadSigningPublicKey: () => signingKey(),
+      loadNoticePublicKey: (uid) {
+        noticeKeyAskedFor.add(uid);
+        return noticeKey();
+      },
     );
   });
 
   group('registering the Reporter Handle (#110)', () {
-    test('signed in: this installation\'s Handle and signing key go under the uid', () async {
+    test('signed in: this installation\'s Handle, signing key and notice key go under the uid', () async {
       await registration.register('uid-1');
 
       expect(writes, hasLength(1));
@@ -39,11 +48,13 @@ void main() {
       expect(fields, {
         'reporterHandle': '0a1b2c3d4e5f',
         'signingPublicKey': Blob(_key),
+        'noticePublicKey': Blob(_noticeKey),
         'registeredAt': FieldValue.serverTimestamp(),
       });
+      expect(noticeKeyAskedFor, ['uid-1'], reason: 'the Admin Notice key is bound to the signed-in uid (#140)');
     });
 
-    test('signed out: nothing is written and the key is not even asked for', () async {
+    test('signed out: nothing is written and neither key is even asked for', () async {
       var keyAsked = false;
       signingKey = () async {
         keyAsked = true;
@@ -54,6 +65,25 @@ void main() {
 
       expect(writes, isEmpty);
       expect(keyAsked, isFalse);
+      expect(noticeKeyAskedFor, isEmpty, reason: 'asking would bind a new notice key to nobody');
+    });
+
+    test('each sign-in asks for the notice key bound to that uid', () async {
+      await registration.register('uid-1');
+      await registration.register('uid-2');
+
+      expect(noticeKeyAskedFor, ['uid-1', 'uid-2']);
+      expect(writes.map((w) => w.$1), ['uid-1', 'uid-2']);
+    });
+
+    test('the notice key follows the sign-in even when there is no signing key to register', () async {
+      signingKey = () async =>
+          throw PlatformException(code: 'SERVICE_NOT_READY', message: 'Mesh service is not running');
+
+      await registration.register('uid-2');
+
+      expect(writes, isEmpty);
+      expect(noticeKeyAskedFor, ['uid-2'], reason: 'the previous account\'s private key must not outlive the sign-in');
     });
 
     test('a device without a Handle yet gets one, and it is the one registered', () async {
@@ -100,6 +130,22 @@ void main() {
     for (final MapEntry(key: situation, value: key) in unavailableKeys.entries) {
       test('skipped quietly when $situation', () async {
         signingKey = key;
+
+        await expectLater(registration.register('uid-1'), completes);
+        expect(writes, isEmpty);
+      });
+    }
+
+    // firestore.rules requires noticePublicKey: a document without it would only be refused.
+    final unavailableNoticeKeys = <String, Future<Uint8List?> Function()>{
+      'the encrypted key store fails': () async => throw PlatformException(code: 'KEY_STORE_UNAVAILABLE'),
+      'there is no native key store on this platform': () async => throw MissingPluginException('no native'),
+      'native answers no notice key': () async => null,
+      'native answers a notice key that is not 32 bytes': () async => Uint8List(33),
+    };
+    for (final MapEntry(key: situation, value: key) in unavailableNoticeKeys.entries) {
+      test('skipped quietly when $situation', () async {
+        noticeKey = key;
 
         await expectLater(registration.register('uid-1'), completes);
         expect(writes, isEmpty);

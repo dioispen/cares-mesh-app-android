@@ -45,8 +45,9 @@ Set<String> _dartErrorCodes(String className) {
 }
 
 /// Method names the Kotlin bridge answers. `BitchatFlutterChannels.handle` matches string
-/// literals; `ChatBridge.handle`, `SettingsBridge.handle` and the debug-only `ExperimentBridge.handle`
-/// match `METHOD_*` constants. Everything else ends in `notImplemented` (BridgeMethodDispatcher).
+/// literals; `ChatBridge.handle`, `SettingsBridge.handle`, `AdminNoticeBridge.handle` and the
+/// debug-only `ExperimentBridge.handle` match `METHOD_*` constants. Everything else ends in
+/// `notImplemented` (BridgeMethodDispatcher).
 Set<String> _nativeMethods() {
   final channels = _read('$_kotlinBridgeDir/BitchatFlutterChannels.kt');
 
@@ -58,6 +59,7 @@ Set<String> _nativeMethods() {
     ...literalBranches,
     ..._constantBranches('$_kotlinBridgeDir/ChatBridge.kt'),
     ..._constantBranches('$_kotlinBridgeDir/SettingsBridge.kt'),
+    ..._constantBranches('$_kotlinBridgeDir/AdminNoticeBridge.kt'),
     ..._constantBranches(_kotlinExperimentBridge),
   };
 }
@@ -70,7 +72,7 @@ Map<String, String> _dartConstants(String source, String className) {
 }
 
 /// Method names `BitchatBridge` invokes, with `ChatMethods.x` / `SettingsMethods.x` /
-/// `ExperimentMethods.x` resolved to their values.
+/// `AdminNoticeMethods.x` / `ExperimentMethods.x` resolved to their values.
 Set<String> _dartInvokedMethods() {
   final source = _read(_dartBridge);
 
@@ -81,7 +83,7 @@ Set<String> _dartInvokedMethods() {
         for (final m in RegExp(r"static const (\w+) = '([^']+)';").allMatches(block.group(2)!)) m.group(1)!: m.group(2)!,
       },
   };
-  for (final name in const ['ChatMethods', 'SettingsMethods', 'ExperimentMethods']) {
+  for (final name in const ['ChatMethods', 'SettingsMethods', 'AdminNoticeMethods', 'ExperimentMethods']) {
     if (!methodClasses.containsKey(name)) fail('$name not found in $_dartBridge');
   }
 
@@ -346,6 +348,35 @@ void main() {
 
       expect(kotlin, containsAll(['location', 'batteryOptimization']));
       expect(dart, kotlin);
+    });
+  });
+
+  group('the Admin Notice bridge (#140)', () {
+    const kotlinBridge = '$_kotlinBridgeDir/AdminNoticeBridge.kt';
+    Map<String, String> kotlinConstants(String prefix) => {
+          for (final m in RegExp('const val (${prefix}_\\w+) = "(\\w+)"').allMatches(_read(kotlinBridge)))
+            m.group(1)!: m.group(2)!,
+        };
+
+    test('the recipient key methods are on both sides', () {
+      const methods = ['adminNotice_getPublicKey', 'adminNotice_clearKey'];
+      expect(_nativeMethods(), containsAll(methods));
+      expect(_dartInvokedMethods(), containsAll(methods));
+    });
+
+    test('Dart calls every Admin Notice method the native bridge answers', () {
+      final dartMethods = _dartConstants(_read(_dartBridge), 'AdminNoticeMethods').values.toSet();
+
+      expect(kotlinConstants('METHOD').values, isNotEmpty);
+      expect(dartMethods, kotlinConstants('METHOD').values.toSet());
+      expect(_dartInvokedMethods(), containsAll(dartMethods));
+    });
+
+    test('the two sides list the same error codes', () {
+      final dartCodes = _dartConstants(_read(_dartBridge), 'AdminNoticeErrors').values.toSet();
+
+      expect(kotlinConstants('ERROR').values, isNotEmpty);
+      expect(dartCodes, kotlinConstants('ERROR').values.toSet());
     });
   });
 

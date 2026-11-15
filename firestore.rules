@@ -203,10 +203,13 @@ service cloud.firestore {
     // 哪一把 key。後台遇到多個 uid 宣稱同一個 Handle 時，比對 signingPublicKey 與
     // mesh_reports 原始封包的簽章 key 才分得出來（docs/MESH_GATEWAY.md 第 9 節）。
     // Administrator 可以刪（清理冒領或災後清空），但不能替人登記。
+    //
+    // 同一份文件也登記這支手機的 Admin Notice 收件公鑰 noticePublicKey（#140、
+    // docs/ADMIN_NOTICE_V1.md 收件者加密金鑰），Administrator 用它加密定向公告。
     match /reporter_handles/{uid}/installations/{handle} {
       function validInstallation(handle) {
         let data = request.resource.data;
-        let fields = ['reporterHandle', 'signingPublicKey', 'registeredAt'];
+        let fields = ['reporterHandle', 'signingPublicKey', 'noticePublicKey', 'registeredAt'];
         return data.keys().hasAll(fields)
             && data.keys().hasOnly(fields)
             // 文件 ID 就是 Handle；小寫 12 碼十六進位，與 mesh_reports 的文件 ID 一致，
@@ -216,6 +219,10 @@ service cloud.firestore {
             // ANNOUNCE 裡的那把 Ed25519 簽章公鑰，固定 32 bytes。
             && data.signingPublicKey is bytes
             && data.signingPublicKey.size() == 32
+            // 每次登入換一把的 X25519 收件公鑰，固定 32 bytes。比照 ADR-0008 列為必填，
+            // 實驗期所有裝置一起更新：舊版寫的文件沒有它，下次啟動整份覆寫時補上。
+            && data.noticePublicKey is bytes
+            && data.noticePublicKey.size() == 32
             // 用伺服器時間：後台以最新的 registeredAt 判斷 Handle 目前屬於哪個帳號，
             // 不能讓客戶端填未來的時間搶先。
             && data.registeredAt == request.time;

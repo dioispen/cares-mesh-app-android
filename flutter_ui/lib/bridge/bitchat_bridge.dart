@@ -101,6 +101,20 @@ abstract final class SettingsErrors {
   static const panicFailed = 'PANIC_FAILED';
 }
 
+/// Admin Notice 的 method 名稱，對應 Kotlin `AdminNoticeBridge` 的 companion 常數（命名規則
+/// `adminNotice_<動詞><受詞>`，#140）。
+abstract final class AdminNoticeMethods {
+  static const getPublicKey = 'adminNotice_getPublicKey';
+  static const clearKey = 'adminNotice_clearKey';
+}
+
+/// Admin Notice method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `AdminNoticeBridge` 的
+/// `ERROR_*`。參數不合法時則是共用的 `INVALID_ARGUMENT`。
+abstract final class AdminNoticeErrors {
+  /// 原生的加密儲存開不了、讀不到或寫不進去；沒有交出任何公鑰，可以之後再試。
+  static const keyStoreUnavailable = 'KEY_STORE_UNAVAILABLE';
+}
+
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
@@ -380,6 +394,20 @@ class BitchatBridge {
   /// mesh 服務還不存在時原生回 [PlatformException]（`SERVICE_NOT_READY`）；沒有原生 mesh 的平台
   /// （iOS、測試）丟 [MissingPluginException]。兩者都往上拋。
   static Future<Uint8List?> getSigningPublicKey() => _method.invokeMethod<Uint8List>('getSigningPublicKey');
+
+  /// 這支手機給 [uid] 的 Admin Notice 收件公鑰（X25519，32 bytes，#140）。Reporter Handle 登記把它
+  /// 寫成 `noticePublicKey`，Administrator 用它加密定向公告（docs/ADMIN_NOTICE_V1.md 收件者加密金鑰）。
+  ///
+  /// 同一個 [uid] 再問還是同一把；私鑰綁的是別的帳號（或已經清除）時，原生先刪掉舊私鑰再產生新的。
+  /// 原生的加密儲存出錯時丟 [PlatformException]（[AdminNoticeErrors.keyStoreUnavailable]）；沒有原生
+  /// mesh 的平台（iOS、測試）丟 [MissingPluginException]。兩者都往上拋。
+  static Future<Uint8List?> getAdminNoticePublicKey(String uid) =>
+      _method.invokeMethod<Uint8List>(AdminNoticeMethods.getPublicKey, <String, dynamic>{'uid': uid});
+
+  /// 刪除這支手機的 Admin Notice 收件私鑰（#140）：登出與緊急清除時呼叫，之後這支手機解不開任何
+  /// 定向公告，直到下次登入產生新的一把。正常完成就表示私鑰已從磁碟刪除；錯誤同
+  /// [getAdminNoticePublicKey]，往上拋。
+  static Future<void> clearAdminNoticeKey() => _method.invokeMethod<void>(AdminNoticeMethods.clearKey);
 
   /// 實驗畫面（#70，debug 限定）讀取現場即時狀態，回傳：
   ///
