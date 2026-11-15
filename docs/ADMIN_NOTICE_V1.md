@@ -442,7 +442,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **Kotlin 單元測試**
 
-- 附錄的 test vectors：驗過 V1–V3、拒絕 V4；以 recipient-1、recipient-2 解開 V2，outsider 比對不到任何 tag。
+- 附錄的 test vectors：驗過 V1–V3、V5，拒絕 V4；以 recipient-1、recipient-2 解開 V2，以 recipient-1 到 recipient-5 解開 V5，outsider 比對不到任何 tag。
 - 「收到 0x31」的每一步各自擋得住；先驗簽才寫去重表與撤回紀錄；去重表的三種情況。
 - 撤回與取代：先收到原公告再收到取代，以及反過來，兩種順序都對。
 - sync 集合：上限、到期、被取代就移除；超過 512 bytes 的公告經 sync 切片後完整送達（待驗證 1）。
@@ -452,7 +452,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **Dart 測試（管理後台）**
 
-- 以相同輸入產生逐位元組相同的 V1–V3，在 Web 上執行。
+- 以相同輸入產生逐位元組相同的 V1–V3、V5，在 Web 上執行。
 
 **規則測試**（`firestore-tests/rules.test.mjs`）
 
@@ -484,9 +484,12 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 由 `tools/admin-notice/gen_test_vectors.py` 產生（需要 `pip install cryptography`）。所有金鑰都由固定字串的 SHA-256 推出，**只能用於測試**。Kotlin 與 Dart 的實作都要能：
 
-- 驗過 V1、V2、V3 的簽章，並拒絕 V4。
+- 驗過 V1、V2、V3、V5 的簽章，並拒絕 V4。
 - 用 recipient-1 與 recipient-2 的私鑰解開 V2；用 outsider 的私鑰比對不到任何 tag。
-- 管理端用相同的輸入，產生逐位元組相同的 V1、V2、V3。
+- 用 recipient-1 到 recipient-5 的私鑰都解得開 V5（條目刻意不照編號排）；outsider 比對不到任何 tag。
+- 管理端用相同的輸入，產生逐位元組相同的 V1、V2、V3、V5。
+
+V5 是「大小上限」表的最後一列：5 個收件裝置、內容 300 bytes，外層封包 683 bytes，送上 mesh 會切成 2 片，用來驗證切片後的 sync（實作前待驗證第 1 項）。
 
 ### 共用金鑰
 
@@ -573,4 +576,54 @@ payload:
   92a4e99ba2e887b3e5a4a7e5908ce59c8be5b08fe981bfe99ba3e689805c770d
   5b6d3a8d4165dd74006650f7c96b1fab54ec1340438ad884db367d8a7f2d0288
   9bc878922000ad2616d9dbaa019eeaeeecc4af17d7813bb76eb8a5a60b
+```
+
+### V5 組播（緊急，5 個收件裝置，外層封包超過 512 bytes）
+
+```text
+messageId: 7a5b3c1d9e8f6a42
+issuedAt: 1792627200000
+expiresAt: 1792641600000
+content (UTF-8): 第三救援隊、第五救援隊及醫療組請注意：大同國小避難所東側通道已因土石崩落封閉，請改由北側中山路進入。現場約有四十名民眾，其中六人需要擔架後送，請攜帶擔架與氧氣瓶，抵達後立即向現場指揮官回報抵達的人數。
+content bytes: 300
+recipient-3 X25519 private: 78da96d74d479ba3f82e74d10911557b18591b30c4c7cf840ec00907fc6e61e8
+recipient-3 X25519 public: a329a3497cdaff7178e3242e11ec65c0c65264993b3d0bb181b695538456c760
+recipient-4 X25519 private: c1946f5a8ac3042aedec7f9ce1c2ff032de7d48c4bc6adfe2e97aa49ef43e589
+recipient-4 X25519 public: 67463a97e6852a5fe18f45268bb0abf449be13e17eed36684fbfa2ccf8e37e12
+recipient-5 X25519 private: 3beeb0d9c85e9720e2d67f625525749c2bfd7fe0bdd38ac44db7022da09ff6bb
+recipient-5 X25519 public: 47fb178e09a1c1481b5da4106966c801444320df0d12dccbc15420bc2c43324b
+ephemeral X25519 private: 75dc5e6dbfc486931c91111eb8e23c7bbeaa28a944957b0e3aeeef58a3de2540
+ephemeral X25519 public: 7ff2642665620d4564fdd4296d74d00b6d4345dbccce0804f17e97afda62b34c
+contentKey: 69fada4a6edb29be916232fce2827807b9d7f3bceccd3f31ed421285e0e1bc7b
+nonce: 31aebc49d7fa19563d19c990
+entry order: recipient-4, recipient-1, recipient-5, recipient-3, recipient-2
+recipient-4 tag: d37191cc72eaab65
+recipient-1 tag: a325be078784b61a
+recipient-5 tag: 024b1a23ea7ee3c9
+recipient-3 tag: c7cc646682afe82e
+recipient-2 tag: 9bee11ce396fb1f8
+payload bytes: 661
+outer packet bytes: 683
+payload:
+  010201037a5b3c1d9e8f6a42000001a160e85000000001a161c40a0000000000
+  000000007ff2642665620d4564fdd4296d74d00b6d4345dbccce0804f17e97af
+  da62b34c05d37191cc72eaab65dfb1ea60c9df00f27fd9be3fed2f4020b73319
+  d86fe072243fa78dc224df5610a325be078784b61a875f8c9eadd66ff7242bc2
+  f0d8f72d719c9b432e16acee746355242df5c99ade024b1a23ea7ee3c959ed79
+  28d5a71177e828485ed2ffb645c469f863470df1a7e28d1b4d1b259b07c7cc64
+  6682afe82ea810feb8d7441eea132d5c91a18f3d2c7f2d656d66f3f4b1f04521
+  0a7fdebc099bee11ce396fb1f83f2e40b91fe3d64810f48e25dd53ecb32aa001
+  935fb612ae83901c57df3e683c31aebc49d7fa19563d19c990a5ee2f217ec3fa
+  bd86123a4e2ab0670e2afc48bed789652f5f766dffcda8969a562fbf772e9911
+  39aa48514c42aa89dd2386e95f274d475910d598c78d213c674e9b50c2f5ae34
+  da90b8e886dc49b7b5bd1b1b012b665f9cf4eaf3e6406855b065be62bab22a2f
+  61292a78cc5b489c3be265d0b8f42e128ec985884202b5330f8fbdfe172ac1e6
+  65b962cb3c475d453f1f634a679ec4be933d0c5b48c47aa878ca317cda590976
+  9be4071579300e257f398cd3712c6a3c9c9a69290701caaf7d704383f2b2c0e2
+  dea612f4cbf416ae9b6fef1ce95815fe96056f75e05e38007c22241bd8c8ea52
+  82c37d4c17726c03c5bb8b042600c07aeb13c457148338286f45dc4394981196
+  6a288361b0c7a7a233f103b42530816b9ec3ca9bbddc3986039adf1a1acb1f40
+  f4f0f2bb51277bafd1c05d900469009d842249b19c512059f4288e4025e37b7d
+  fe94ce27999fabcb74e189fda4d2544150001524ed1f3097a37cd57767258701
+  3e722fa3b40b06ac612d5b8f0765d42af609796906
 ```

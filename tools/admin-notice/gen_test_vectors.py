@@ -16,8 +16,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from notice_format import (KIND_TARGETED, LEVEL_IMPORTANT, LEVEL_INFO, LEVEL_URGENT,
-                           NO_REPLACES, build_broadcast, header, open_as_recipient, raw_private,
-                           raw_public, sign, targeted_body, verify)
+                           MAX_CONTENT_BYTES, NO_REPLACES, build_broadcast, header,
+                           open_as_recipient, raw_private, raw_public, sign, targeted_body, verify)
+
+# 「大小上限」：單片封包的上限（FRAGMENT_SIZE_THRESHOLD），以及外層 header 加 senderID 的 bytes。
+FRAGMENT_SIZE_THRESHOLD = 512
+OUTER_OVERHEAD = 22
 
 
 def seed(label: str) -> bytes:
@@ -125,6 +129,48 @@ def main():
         if isinstance(e, AssertionError):
             raise
     section("V4 竄改 V1 的 level（0x03 → 0x01），驗簽必須失敗", {"payload": bytes(tampered)})
+
+    # V5：組播給 5 個收件裝置、內容 300 bytes，外層封包超過 512 bytes，送上 mesh 會切成 2 片
+    # （「大小上限」表的最後一列，實作前待驗證第 1 項）。條目刻意不照編號排。
+    recipients = {1: r1, 2: r2}
+    for n in (3, 4, 5):
+        recipients[n] = X25519PrivateKey.from_private_bytes(seed(f"cares-admin-notice-test/recipient-{n}"))
+    order5 = [4, 1, 5, 3, 2]
+    eph5 = X25519PrivateKey.from_private_bytes(seed("cares-admin-notice-test/v5-ephemeral"))
+    content_key5 = seed("cares-admin-notice-test/v5-content-key")
+    nonce5 = seed("cares-admin-notice-test/v5-nonce")[:12]
+    mid5 = bytes.fromhex("7a5b3c1d9e8f6a42")
+    content5 = ("第三救援隊、第五救援隊及醫療組請注意：大同國小避難所東側通道已因土石崩落封閉，"
+                "請改由北側中山路進入。現場約有四十名民眾，其中六人需要擔架後送，"
+                "請攜帶擔架與氧氣瓶，抵達後立即向現場指揮官回報抵達的人數。").encode()
+    assert len(content5) == MAX_CONTENT_BYTES
+    hdr5 = header(KIND_TARGETED, key_id, LEVEL_URGENT, mid5, issued, issued + 4 * 3600_000, NO_REPLACES)
+    body5, trace5 = targeted_body(hdr5, mid5, eph5, [raw_public(recipients[n]) for n in order5],
+                                  content_key5, nonce5, content5)
+    p5 = sign(admin, hdr5 + body5)
+    verify(admin_pub, p5)
+    for n in order5:
+        assert open_as_recipient(p5, recipients[n]) == content5
+    assert open_as_recipient(p5, outsider) is None
+    outer5 = OUTER_OVERHEAD + len(p5)
+    assert len(p5) > FRAGMENT_SIZE_THRESHOLD - OUTER_OVERHEAD and outer5 > FRAGMENT_SIZE_THRESHOLD
+    fields5 = {
+        "messageId": mid5, "issuedAt": issued, "expiresAt": issued + 4 * 3600_000,
+        "content (UTF-8)": content5.decode(), "content bytes": len(content5),
+    }
+    for n in (3, 4, 5):
+        fields5[f"recipient-{n} X25519 private"] = raw_private(recipients[n])
+        fields5[f"recipient-{n} X25519 public"] = raw_public(recipients[n])
+    fields5.update({
+        "ephemeral X25519 private": raw_private(eph5),
+        "ephemeral X25519 public": raw_public(eph5),
+        "contentKey": content_key5, "nonce": nonce5,
+        "entry order": ", ".join(f"recipient-{n}" for n in order5),
+    })
+    for n, t in zip(order5, trace5):
+        fields5[f"recipient-{n} tag"] = t["tag"]
+    fields5.update({"payload bytes": len(p5), "outer packet bytes": outer5, "payload": p5})
+    section("V5 組播（緊急，5 個收件裝置，外層封包超過 512 bytes）", fields5)
 
 
 if __name__ == "__main__":
