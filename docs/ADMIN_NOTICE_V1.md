@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案，尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135），App 端尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -54,10 +54,11 @@ v1 不做：
 
 - Ed25519。所有操作者共用一把（keyId `0x01`）。私鑰是一個由操作者自己保管的檔案，每次發公告前在管理後台選檔載入，只放在該分頁的記憶體裡，關閉分頁就消失。後台**不得**把它寫進 localStorage、IndexedDB、Firestore 或任何雲端。
 - 管理後台的加解密用純 Dart 實作（例如 `package:cryptography`），不依賴瀏覽器 WebCrypto 對 Ed25519、X25519 的支援程度。編碼 issuedAt 等 64 位元欄位時**不要用 `ByteData.setUint64`**：編譯成 JavaScript 時它會丟 `UnsupportedError`，要拆成兩個 32 位元寫入。
-- App 內建 `keyId → 32 bytes 公鑰` 的對照表。`0x00` 保留不用。
+- 私鑰檔是一行 64 個小寫十六進位字元，即 Ed25519 的 32 bytes seed（RFC 8032 的 private key），由 `tools/admin-notice/admin_notice_tool.py keygen` 產生。管理後台以純 Dart 載入，例如 `package:cryptography` 的 `newKeyPairFromSeed`。
+- App 內建 `keyId → 32 bytes 公鑰` 的對照表，來源是 [`tools/admin-notice/admin_public_keys.json`](../tools/admin-notice/admin_public_keys.json)。`0x00` 保留不用。
 - 換 key：先發一版同時內建新舊兩把的 App，多數使用者更新後管理端改用新 key，再發一版移除舊 key。
 - 私鑰外洩：發一版移除該 key 的 App。使用者更新之前，偽造的公告仍會被接受（見已知限制）。
-- 私鑰檔在操作者之間的分發與備份是手動作業，寫在管理端的操作手冊裡。
+- 私鑰檔在操作者之間的分發與備份是手動作業，寫在管理端的[操作手冊](../tools/admin-notice/README.md)裡。
 
 ### 收件者加密金鑰
 
@@ -248,12 +249,27 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 | `admins/{uid}` | 已存在（ADR-0009）：文件存在就代表是 Administrator | 本人（只能查自己） | 只能從 Console 或 Admin SDK |
 | `admin_notices/{messageId}` | `wire`（Bytes）、`expiresAt`、`createdAt`、`createdBy` | 所有登入帳號 | Administrator 新增；不能修改；Administrator 可刪除 |
 | `admin_notices/{messageId}/receipts/{uid}` | `deliveredAt`、`readAt`、`via` | Administrator | 本人 |
-| `admin_notice_records/{messageId}` | 管理端留存：明文內容、收件者 uid、kind、level、replaces、batchId、操作者 | Administrator | Administrator |
+| `admin_notice_records/{messageId}` | 管理端留存：明文內容、收件者 uid、kind、level、replaces、batchId、操作者（欄位見下） | Administrator | Administrator 新增；不能修改或刪除 |
 | `reporter_handles/{uid}/installations/{reporterHandle}` | 已存在（MESH_GATEWAY.md 5.3）；新增 `noticePublicKey`（Bytes，32） | 本人、Administrator | 本人 |
 
 文件 ID `messageId` 是 16 個小寫十六進位字元。
 
 `admin_notices` 只放要送上 mesh 的東西，**不能有明文內容，也不能有收件者 uid**：所有 Gateway 都讀得到它，否則定向加密就白做了。
+
+`admin_notice_records` 的欄位如下。rules 不檢查這份文件的欄位，但發送工具與管理後台都照這份寫，事後才查得起來：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `kind` | string | `broadcast` 或 `targeted` |
+| `level` | string | `info`、`important` 或 `urgent` |
+| `content` | string | 明文內容；純撤回是空字串 |
+| `issuedAt`、`expiresAt` | timestamp | 與 `wire` 裡簽過的相同 |
+| `replaces` | string 或 null | 被取代的 messageId（16 個小寫十六進位字元）；沒有就是 null |
+| `batchId` | string | 拆成多則的定向公告共用同一個值；沒有拆的公告填自己的 messageId |
+| `createdBy` | string | 操作者的 uid，與 `admin_notices` 的 `createdBy` 相同 |
+| `createdAt` | timestamp | 伺服器時間 |
+
+定向公告另外記錄收件對象（指定的 uid 或 Reporter Handle，以及加密給了哪些收件裝置），欄位由定向公告的票補上。
 
 ### Security rules 草稿
 
@@ -318,7 +334,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **登入**：使用 Administrator 帳號，授予方式同 MESH_GATEWAY.md 第 8 節。
 
-**私鑰**：見「管理端簽章金鑰」。私鑰檔每次發送前載入，後台不得保存；加解密用純 Dart，64 位元欄位不要用 `ByteData.setUint64`。
+**私鑰**：見「管理端簽章金鑰」，包括私鑰檔的格式。私鑰檔每次發送前載入，後台不得保存；加解密用純 Dart，64 位元欄位不要用 `ByteData.setUint64`。
 
 **發一則公告**：
 
@@ -329,7 +345,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
    - 每份有 `noticePublicKey` 的文件是一個收件裝置。找不到任何收件裝置的對象無法送達，要明確提示操作者；`registeredAt` 超過 30 天的顯示警告，但照樣加密。
    - 收件裝置超過 5 個就拆成多則，每則有自己的 messageId，`admin_notice_records` 用同一個 batchId 串起來。
 3. 依「線路格式」組 payload 並簽章，定向公告依「定向 body」加密。實作要先對過附錄的 test vectors。
-4. 用一次 batch write 同時寫入 `admin_notices/{messageId}`（`wire`、`expiresAt`、`createdAt`、`createdBy`，限制見 rules 草稿）與 `admin_notice_records/{messageId}`。
+4. 用一次 batch write 同時寫入 `admin_notices/{messageId}`（`wire`、`expiresAt`、`createdAt`、`createdBy`，限制見 rules 草稿）與 `admin_notice_records/{messageId}`（欄位見「集合」）。`createdAt` 用 `serverTimestamp()`。
 
 **取代與撤回**：見「撤回與取代」。新公告的 expiresAt 至少等於被取代的那則；撤回一個拆成多則的批次，每一則都要各發一則撤回。不要用刪除 `admin_notices` 文件代替撤回。
 
