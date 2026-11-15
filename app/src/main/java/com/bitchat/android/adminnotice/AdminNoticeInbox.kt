@@ -29,7 +29,7 @@ class AdminNoticeInbox(
         IN_MESH
     }
 
-    private class Record(var presence: Presence, val keepUntilMs: Long)
+    private class Record(val presence: Presence, val keepUntilMs: Long)
 
     /** messageId → record, kept until expiresAt + [CLOCK_TOLERANCE_MS], at most [maxRecords]. */
     private val records = HashMap<String, Record>()
