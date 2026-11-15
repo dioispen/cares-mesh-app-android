@@ -98,6 +98,7 @@ Reporter 本人登記「這次安裝的 Handle 屬於我」。一個帳號可以
 |---|---|---|
 | `reporterHandle` | string | 與文件 ID 相同 |
 | `signingPublicKey` | bytes | 本機 Ed25519 簽章公鑰（32 bytes，即 ANNOUNCE 中那一把） |
+| `noticePublicKey` | bytes | 本機 Admin Notice 收件公鑰（X25519，32 bytes），每次登入換一把（#140，[ADMIN_NOTICE_V1.md](ADMIN_NOTICE_V1.md) 收件者加密金鑰） |
 | `registeredAt` | timestamp | 伺服器時間 |
 
 登出時不刪除。
@@ -151,7 +152,7 @@ match /{path=**}/installations/{handle} {
 - `reportTime >= request.time - 2 小時 10 分鐘`（不接受超過保留期限的舊回報）。
 - `rawPacket` 是 bytes 且不超過 1 KB；`announcement` 為 null 或不超過 1 KB 的 bytes。
 
-`validInstallation(handle)`：鍵只能是 5.3 列出的那些；`handle` 符合 `^[0-9a-f]{12}$` 且等於 `reporterHandle`；`signingPublicKey` 為 32 bytes；`registeredAt == request.time`。
+`validInstallation(handle)`：鍵恰好是 5.3 列出的那些（`hasAll` 與 `hasOnly`）；`handle` 符合 `^[0-9a-f]{12}$` 且等於 `reporterHandle`；`signingPublicKey` 與 `noticePublicKey` 都是 32 bytes；`registeredAt == request.time`。
 
 注意：`mesh_reports` 的 update 要求 `reportTime` **嚴格遞增**。同一秒內送出的第二份回報會被拒；這種情況極少見，接受。
 
@@ -224,6 +225,7 @@ match /{path=**}/installations/{handle} {
 - 時機：App 啟動時與登入成功後，只要已登入就 `set` 一次（idempotent）。不等到送出回報，因為最需要這份對應的，正是登記之後就再也沒有網路的人。離線時交給 Firestore 的離線佇列（這是本人的資料，與 Flutter 端其他寫入一致）。
 - Handle：`loadOrCreateReporterHandle`（`own_report_cache.dart`）。
 - 簽章公鑰：新增一個 bridge 方法，從 Kotlin `EncryptionService.getSigningPublicKey()` 取得。
+- 收件公鑰：bridge 方法 `adminNotice_getPublicKey(uid)`（#140）。先取它再取簽章公鑰，這次即使略過，私鑰也已經換成綁定這個 uid 的那一把。兩把公鑰任一把拿不到就整份略過：規則把兩者都列為必填。
 - 失敗不提示使用者，下次啟動再試。
 
 ## 8. 給管理後台的介面契約

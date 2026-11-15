@@ -63,7 +63,8 @@ v1 不做：
 
 - 每次安裝的 App 在每次登入時產生一組 X25519 金鑰，綁定當時登入的 uid。私鑰存在 Kotlin 端的 EncryptedSharedPreferences，解密才能在背景進行。
 - 公鑰登記在 `reporter_handles/{uid}/installations/{reporterHandle}` 的 `noticePublicKey`，與 Reporter Handle、簽章公鑰同一份文件，沿用 [MESH_GATEWAY.md](MESH_GATEWAY.md) 7.7 的登記：App 啟動時與登入成功後由 Flutter 整份 `set` 一次。公鑰經新增的 bridge 方法 `adminNotice_getPublicKey(uid)` 從 Kotlin 取得；傳入的 uid 與私鑰綁定的不同時，Kotlin 先刪除舊私鑰再產生新的。一個帳號登記過幾台裝置，就有幾把公鑰。
-- 登出時 Flutter 呼叫 `adminNotice_clearKey`，要求 Kotlin 刪除私鑰。登記文件照 MESH_GATEWAY.md 5.3 不刪除：同一支手機改登入另一個帳號後，前一個帳號底下那份文件留著的是私鑰已刪除的公鑰，加密給它不會外洩內容，只會佔掉一個收件裝置的名額。
+- bridge 的回傳（#140 定案）：`adminNotice_getPublicKey` 回 32 bytes（Dart 的 `Uint8List`）；`adminNotice_clearKey` 在私鑰已從磁碟刪除後回 null。加密儲存開不了或寫不進去時兩者都回 `KEY_STORE_UNAVAILABLE`，uid 缺少或為空字串時回 `INVALID_ARGUMENT`。Kotlin 端是 `identity/AdminNoticeRecipientKeyStore`，私鑰不離開它：協定層以 `publicKey()` 取得 `R`、以 `agree(ephemeralPublicKey)` 取得 `shared`，沒有金鑰或結果全為 0 時回 null。
+- 登出時 Flutter 呼叫 `adminNotice_clearKey`，要求 Kotlin 刪除私鑰；刪不掉只留 log、照樣登出，下一個帳號登入時 Kotlin 會先刪掉它。緊急清除在原生清除之後也呼叫它，刪不掉就中止，讓使用者再試一次。登記文件照 MESH_GATEWAY.md 5.3 不刪除：同一支手機改登入另一個帳號後，前一個帳號底下那份文件留著的是私鑰已刪除的公鑰，加密給它不會外洩內容，只會佔掉一個收件裝置的名額。
 - **不得重用 Noise 靜態金鑰**，理由是金鑰分離，以及 Noise 靜態金鑰跨帳號不變：同一支手機換帳號登入後，仍解得開前一個帳號的定向公告。登記這把公鑰不會多出新的連結：Administrator 本來就能從 `reporter_handles` 與 `mesh_reports` 把 uid、Reporter Handle、peerID 串在一起（ADR-0009）。
 
 ## 線路格式
