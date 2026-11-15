@@ -9,10 +9,10 @@ import kotlin.random.Random
  * Gateway or backend copy it came through.
  *
  * Inputs: [onBackendNotice] (the Gateway's Firestore listener, #136) and [onMeshPacket] (the mesh's
- * 0x31 packets, #137). Outputs go only to injected ports — [presenter], and the mesh service
- * [attachInjector]ed while it runs; the sync set (#138), the recipient key (#141) and receipts
- * (#143) come as further ports — and the clock and the injection delay's scheduler and random
- * source are injected too, so every rule runs in a JVM test. Firebase-free and Android-free.
+ * 0x31 packets, #137). Outputs go only to injected ports — [presenter], and the injector the
+ * running mesh service attaches ([attachInjector]); the sync set (#138), the recipient key (#141)
+ * and receipts (#143) come as further ports — and the clock and the injection delay's scheduler and
+ * random source are injected too, so every rule runs in a plain JVM test. Firebase-free.
  *
  * Calls are serialised on this object's lock and return a decision at once, so the mesh can decide
  * whether to relay a packet while handling it. The dedup table is memory only: after an App restart
