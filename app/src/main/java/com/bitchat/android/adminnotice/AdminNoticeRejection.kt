@@ -11,6 +11,12 @@ enum class AdminNoticeRejection {
     /** Step 2: the keyId is not in this App's [AdminKeyTable]. */
     UNKNOWN_KEY_ID,
 
+    /**
+     * Step 3, mesh copies only: the packet's senderID is not the notice's messageId, or its
+     * timestamp is not the notice's issuedAt (「外層封包」).
+     */
+    OUTER_MISMATCH,
+
     /** Step 4: no Administrator signed this. */
     BAD_SIGNATURE,
 

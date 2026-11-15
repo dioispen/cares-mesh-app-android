@@ -1,5 +1,7 @@
 package com.bitchat.android.adminnotice
 
+import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.MessageType
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.nio.ByteBuffer
@@ -108,6 +110,26 @@ internal object TestAdminNotices {
         return unsigned + sign("CARES-ADMIN-NOTICE-v1".toByteArray(Charsets.US_ASCII) + unsigned)
     }
 
+    /**
+     * [wire] as a 0x31 packet heard over the mesh. By default the outer fields are what a Gateway
+     * puts there (「外層封包」): senderID = messageId, timestamp = issuedAt; a relay took one hop.
+     */
+    fun meshPacket(
+        wire: ByteArray,
+        senderID: ByteArray = wire.copyOfRange(4, 12),
+        timestamp: Long = ByteBuffer.wrap(wire, 12, 8).getLong(),
+        ttl: UByte = 6u
+    ): BitchatPacket = BitchatPacket(
+        version = 1u,
+        type = MessageType.ADMIN_NOTICE.value,
+        senderID = senderID,
+        recipientID = null,
+        timestamp = timestamp.toULong(),
+        payload = wire,
+        signature = null,
+        ttl = ttl
+    )
+
     /** A targeted body (定向 body) of the right shape; its contents are random-looking filler. */
     fun targetedBody(recipientCount: Int, contentBytes: Int): ByteArray =
         ByteArray(32) { 0x11 } + byteArrayOf(recipientCount.toByte()) +
@@ -118,5 +140,50 @@ internal object TestAdminNotices {
         init(true, Ed25519PrivateKeyParameters(hex(TEST_ADMIN_SEED_HEX), 0))
         update(message, 0, message.size)
         generateSignature()
+    }
+}
+
+/**
+ * The injection delay's scheduler, driven by hand: [advance] runs, in order, what has come due.
+ * Its own time starts at 0; tests move the Inbox clock alongside it.
+ */
+internal class ManualScheduler : AdminNoticeScheduler {
+    private class Task(val dueAtMs: Long, val action: () -> Unit) {
+        var cancelled = false
+    }
+
+    private var timeMs = 0L
+    private val tasks = mutableListOf<Task>()
+
+    /** Every delay asked for, in order. */
+    val delays = mutableListOf<Long>()
+
+    /** Scheduled, not yet run and not cancelled. */
+    val pending: Int get() = tasks.count { !it.cancelled }
+
+    override fun schedule(delayMs: Long, action: () -> Unit): () -> Unit {
+        delays += delayMs
+        val task = Task(timeMs + delayMs, action)
+        tasks += task
+        return { task.cancelled = true }
+    }
+
+    fun advance(ms: Long) {
+        timeMs += ms
+        while (true) {
+            val due = tasks.filter { !it.cancelled && it.dueAtMs <= timeMs }.minByOrNull { it.dueAtMs } ?: return
+            tasks.remove(due)
+            due.action()
+        }
+    }
+}
+
+/** A mesh service that records what a Gateway injects; [accepts] false plays one that cannot send. */
+internal class RecordingInjector(var accepts: Boolean = true) : AdminNoticeInjector {
+    val injected = mutableListOf<BitchatPacket>()
+
+    override fun inject(packet: BitchatPacket): Boolean {
+        if (accepts) injected += packet
+        return accepts
     }
 }

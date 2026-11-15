@@ -51,7 +51,7 @@ class LocalAdminNoticePresenterTest {
     private fun startApp(): Pair<AdminNoticeInbox, EncryptedAdminNoticeStore> {
         val store = EncryptedAdminNoticeStore.open(context)
         val presenter = LocalAdminNoticePresenter(store, notifier, nowMs = { now })
-        return AdminNoticeInbox(TestAdminNotices.TEST_KEYS, presenter, nowMs = { now }) to store
+        return AdminNoticeInbox(TestAdminNotices.TEST_KEYS, presenter, nowMs = { now }, injectionScheduler = ManualScheduler()) to store
     }
 
     @Test

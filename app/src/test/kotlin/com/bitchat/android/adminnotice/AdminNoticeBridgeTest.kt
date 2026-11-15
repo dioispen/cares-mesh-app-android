@@ -20,7 +20,8 @@ class AdminNoticeBridgeTest {
                 shown += notice
             }
         },
-        nowMs = { TestAdminNotices.VECTOR_ISSUED_AT }
+        nowMs = { TestAdminNotices.VECTOR_ISSUED_AT },
+        injectionScheduler = ManualScheduler()
     )
 
     @After
@@ -52,7 +53,8 @@ class AdminNoticeBridgeTest {
             presenter = object : AdminNoticePresenter {
                 override fun present(notice: ReceivedAdminNotice) = Unit
             },
-            nowMs = { 0L }
+            nowMs = { 0L },
+            injectionScheduler = ManualScheduler()
         )
         AdminNoticeBridge.uninstall(replaced)
 
@@ -66,7 +68,8 @@ class AdminNoticeBridgeTest {
             presenter = object : AdminNoticePresenter {
                 override fun present(notice: ReceivedAdminNotice) = throw IllegalStateException("store unavailable")
             },
-            nowMs = { TestAdminNotices.VECTOR_ISSUED_AT }
+            nowMs = { TestAdminNotices.VECTOR_ISSUED_AT },
+            injectionScheduler = ManualScheduler()
         )
         AdminNoticeBridge.install(failing)
         try {

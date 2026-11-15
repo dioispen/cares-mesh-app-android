@@ -12,6 +12,7 @@ import com.bitchat.android.adminnotice.TestAdminNotices.V4
 import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,7 +27,7 @@ class AdminNoticeInboxTest {
     private val presenter = RecordingPresenter()
 
     private fun inbox(keys: AdminKeyTable = TestAdminNotices.TEST_KEYS) =
-        AdminNoticeInbox(adminKeys = keys, presenter = presenter, nowMs = { now })
+        AdminNoticeInbox(adminKeys = keys, presenter = presenter, nowMs = { now }, injectionScheduler = ManualScheduler())
 
     // ── 附錄的 test vectors ─────────────────────────────────────────────────
 
@@ -194,7 +195,7 @@ class AdminNoticeInboxTest {
 
     @Test
     fun `when the dedup table is full the notice expiring first is forgotten`() {
-        val inbox = AdminNoticeInbox(TestAdminNotices.TEST_KEYS, presenter, { now }, maxRecords = 2)
+        val inbox = AdminNoticeInbox(TestAdminNotices.TEST_KEYS, presenter, { now }, ManualScheduler(), maxRecords = 2)
         val expiringFirst = TestAdminNotices.signed(messageId = "0000000000000001", expiresAt = VECTOR_ISSUED_AT + 3_600_000L)
         val expiringLater = TestAdminNotices.signed(messageId = "0000000000000002", expiresAt = VECTOR_ISSUED_AT + 7_200_000L)
         inbox.onBackendNotice(expiringFirst)
@@ -246,6 +247,106 @@ class AdminNoticeInboxTest {
         inbox().onBackendNotice(TestAdminNotices.signed(replaces = V1_MESSAGE_ID))
 
         assertEquals(V1_MESSAGE_ID, presenter.shown.single().replaces)
+    }
+
+    // ── mesh 來源（#137）─────────────────────────────────────────────────────
+
+    @Test
+    fun `V1 heard over the mesh is verified, presented and relayed`() {
+        val outcome = inbox().onMeshPacket(TestAdminNotices.meshPacket(V1))
+
+        assertTrue(outcome.relay)
+        val shown = presenter.shown.single()
+        assertEquals(V1_MESSAGE_ID, shown.messageId)
+        assertEquals(V1_CONTENT, shown.content)
+    }
+
+    @Test
+    fun `V4 heard over the mesh is not relayed`() {
+        val outcome = inbox().onMeshPacket(TestAdminNotices.meshPacket(V4))
+
+        assertEquals(AdminNoticeOutcome.Rejected(AdminNoticeRejection.BAD_SIGNATURE), outcome)
+        assertFalse(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `a packet whose senderID is not the notice's messageId is not relayed`() {
+        val outcome = inbox().onMeshPacket(TestAdminNotices.meshPacket(V1, senderID = hex("aaaabbbbccccdddd")))
+
+        assertEquals(AdminNoticeOutcome.Rejected(AdminNoticeRejection.OUTER_MISMATCH), outcome)
+        assertFalse(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `a packet whose timestamp is not the notice's issuedAt is not relayed`() {
+        val outcome = inbox().onMeshPacket(TestAdminNotices.meshPacket(V1, timestamp = VECTOR_ISSUED_AT + 1))
+
+        assertEquals(AdminNoticeOutcome.Rejected(AdminNoticeRejection.OUTER_MISMATCH), outcome)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `V2, a targeted notice heard over the mesh, is verified and relayed but not presented`() {
+        val outcome = inbox().onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertEquals(V2_MESSAGE_ID, (outcome as AdminNoticeOutcome.Accepted).payload.messageId)
+        assertTrue(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
+    fun `a forged copy heard over the mesh first does not block the genuine one`() {
+        val inbox = inbox()
+
+        assertFalse(inbox.onMeshPacket(TestAdminNotices.meshPacket(V4)).relay) // V1's messageId, bad signature
+
+        assertTrue(inbox.onMeshPacket(TestAdminNotices.meshPacket(V1)).relay)
+        assertEquals(listOf(V1_MESSAGE_ID), presenter.shown.map { it.messageId })
+    }
+
+    @Test
+    fun `a mismatched outer packet does not take the genuine notice's messageId`() {
+        val inbox = inbox()
+        inbox.onMeshPacket(TestAdminNotices.meshPacket(V1, timestamp = VECTOR_ISSUED_AT + 1))
+
+        assertTrue(inbox.onMeshPacket(TestAdminNotices.meshPacket(V1)).relay)
+        assertEquals(listOf(V1_MESSAGE_ID), presenter.shown.map { it.messageId })
+    }
+
+    // ── 去重的三種情況（mesh 來源）──────────────────────────────────────────
+
+    @Test
+    fun `a notice already in the mesh is a duplicate and not relayed again`() {
+        val inbox = inbox()
+        inbox.onMeshPacket(TestAdminNotices.meshPacket(V1, ttl = 6u))
+
+        val again = inbox.onMeshPacket(TestAdminNotices.meshPacket(V1, ttl = 3u))
+
+        assertEquals(AdminNoticeOutcome.Duplicate, again)
+        assertFalse(again.relay)
+        assertEquals(1, presenter.shown.size)
+    }
+
+    @Test
+    fun `a notice only read from the backend is relayed when heard over the mesh, but not presented again`() {
+        val inbox = inbox()
+        inbox.onBackendNotice(V1)
+
+        val heard = inbox.onMeshPacket(TestAdminNotices.meshPacket(V1))
+
+        assertTrue(heard.relay)
+        assertEquals(1, presenter.shown.size)
+        assertFalse(inbox.onMeshPacket(TestAdminNotices.meshPacket(V1, ttl = 2u)).relay)
+    }
+
+    @Test
+    fun `a notice never seen before is recorded and relayed`() {
+        val inbox = inbox()
+
+        assertTrue(inbox.onMeshPacket(TestAdminNotices.meshPacket(V1)).relay)
+        assertEquals(AdminNoticeOutcome.Duplicate, inbox.onBackendNotice(V1))
     }
 
     /** Rejected for [reason] — not for an earlier step — and nothing presented. */
