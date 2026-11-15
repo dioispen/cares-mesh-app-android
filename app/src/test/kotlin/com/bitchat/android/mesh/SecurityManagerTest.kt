@@ -774,4 +774,48 @@ class SecurityManagerTest {
 
         assertEquals(emptyList<String>(), recorder.events)
     }
+
+    // ── ADMIN_NOTICE (0x31, ADR-0011) ───────────────────────────────────────
+
+    /** A Gateway's 0x31: senderID the messageId, no device signature; the payload is opaque here. */
+    private fun adminNotice(payload: ByteArray, ttl: UByte = 6u) = BitchatPacket(
+        version = 1u,
+        type = MessageType.ADMIN_NOTICE.value,
+        senderID = ADMIN_NOTICE_MESSAGE_ID.hexToByteArrayForTest(),
+        recipientID = null,
+        timestamp = 1_792_627_200_000uL,
+        payload = payload,
+        signature = null,
+        ttl = ttl
+    )
+
+    @Test
+    fun `an Admin Notice needs no device signature and its sender need not be a known peer`() {
+        whenever(mockDelegate.getPeerInfo(ADMIN_NOTICE_MESSAGE_ID)).thenReturn(null)
+
+        assertTrue(securityManager.validatePacket(adminNotice(ByteArray(120) { 1 }), ADMIN_NOTICE_MESSAGE_ID))
+    }
+
+    @Test
+    fun `a second copy of the same Admin Notice is a duplicate, whatever its TTL`() {
+        val genuine = ByteArray(120) { 1 }
+
+        assertTrue(securityManager.validatePacket(adminNotice(genuine, ttl = 6u), ADMIN_NOTICE_MESSAGE_ID))
+        assertFalse(securityManager.validatePacket(adminNotice(genuine, ttl = 4u), ADMIN_NOTICE_MESSAGE_ID))
+    }
+
+    @Test
+    fun `a forged Admin Notice heard first does not block the genuine one`() {
+        // Same messageId and issuedAt, but the Administrators' signature sits in the payload: a
+        // forgery differs there, so it is a different packet to the dedup and the Inbox decides.
+        val genuine = ByteArray(120) { 1 }
+        val forged = genuine.copyOf().also { it[it.size - 1] = 0 }
+
+        assertTrue(securityManager.validatePacket(adminNotice(forged), ADMIN_NOTICE_MESSAGE_ID))
+        assertTrue(securityManager.validatePacket(adminNotice(genuine), ADMIN_NOTICE_MESSAGE_ID))
+    }
+
+    private companion object {
+        const val ADMIN_NOTICE_MESSAGE_ID = "a1b2c3d4e5f60718"
+    }
 }
