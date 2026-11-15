@@ -123,6 +123,7 @@
   <string name="admin_notice_title_urgent">緊急公告</string>
   <string name="admin_notice_title_important">重要公告</string>
   <string name="admin_notice_title_info">公告</string>
+  <string name="admin_notice_targeted_hidden">有一則給你的公告，解鎖後查看。</string>
   <string name="cd_add_favorite">加入最愛</string>
   <string name="cd_remove_favorite">從最愛移除</string>
   <string name="cd_add_bookmark">新增書籤</string>
