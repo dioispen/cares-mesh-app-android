@@ -863,6 +863,7 @@ describe('reporter_handles（#110：Reporter Handle 與帳號的對應只給 Adm
   const installation = (handle = HANDLE, extra = {}) => ({
     reporterHandle: handle,
     signingPublicKey: bytesOf(32),
+    noticePublicKey: bytesOf(32, 9),
     registeredAt: serverTimestamp(),
     ...extra,
   });
@@ -874,6 +875,7 @@ describe('reporter_handles（#110：Reporter Handle 與帳號的對應只給 Adm
       await setDoc(doc(ctx.firestore(), pathOf(uid, handle)), {
         reporterHandle: handle,
         signingPublicKey: bytesOf(32),
+        noticePublicKey: bytesOf(32, 9),
         registeredAt: Timestamp.now(),
       });
     });
@@ -931,6 +933,35 @@ describe('reporter_handles（#110：Reporter Handle 與帳號的對應只給 Adm
     it('signingPublicKey 必須是 bytes', async () => {
       await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: 'ab'.repeat(32) })));
       await assertFails(register(ALICE, HANDLE, installation(HANDLE, { signingPublicKey: Array(32).fill(7) })));
+    });
+
+    // Admin Notice 的收件公鑰（#140、docs/ADMIN_NOTICE_V1.md 收件者加密金鑰）：管理後台用它加密定向公告。
+    it('★ 缺少 noticePublicKey 被擋（必填，比照 ADR-0008 所有裝置一起更新）', async () => {
+      const { noticePublicKey, ...withoutNoticeKey } = installation();
+      await assertFails(register(ALICE, HANDLE, withoutNoticeKey));
+    });
+
+    it('★ noticePublicKey 必須剛好 32 bytes', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { noticePublicKey: bytesOf(31) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { noticePublicKey: bytesOf(33) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { noticePublicKey: bytesOf(0) })));
+    });
+
+    it('noticePublicKey 必須是 bytes', async () => {
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { noticePublicKey: 'ab'.repeat(32) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { noticePublicKey: Array(32).fill(9) })));
+      await assertFails(register(ALICE, HANDLE, installation(HANDLE, { noticePublicKey: null })));
+    });
+
+    it('★ 舊版 App 沒有 noticePublicKey 的文件，下次啟動整份覆寫時補上', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), pathOf(ALICE)), {
+          reporterHandle: HANDLE,
+          signingPublicKey: bytesOf(32),
+          registeredAt: Timestamp.now(),
+        });
+      });
+      await assertSucceeds(register(ALICE));
     });
 
     it('Handle 必須是小寫 12 碼十六進位', async () => {
