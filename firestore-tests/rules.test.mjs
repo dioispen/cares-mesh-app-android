@@ -1248,6 +1248,137 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
   });
 });
 
+describe('mesh_supply_packets（Gateway 代傳的物資需求／捐贈，只給 Administrator 讀）', () => {
+  const GATEWAY = CAROL;
+  const OTHER_GATEWAY = BOB;
+  const PACKET_ID = '0123456789abcdef0123456789abcdef';
+  const EXCHANGE_ID = 'fedcba9876543210fedcba9876543210';
+  const minutesFromNow = (m) => Timestamp.fromMillis(Date.now() + m * 60_000);
+  const supplyPacket = (extra = {}) => ({
+    schemaVersion: 1,
+    packetId: PACKET_ID,
+    exchangeId: EXCHANGE_ID,
+    action: 'request',
+    originPeerId: '0123456789abcdef',
+    itemId: 'water',
+    itemName: '礦泉水',
+    quantity: 12,
+    unit: '瓶',
+    createdAt: minutesFromNow(-1),
+    uploadedAt: serverTimestamp(),
+    gatewayUid: GATEWAY,
+    rawPacket: bytesOf(120),
+    ...extra,
+  });
+  const upload = (data, uid = GATEWAY, id = PACKET_ID) =>
+    setDoc(doc(dbFor(uid), `mesh_supply_packets/${id}`), data);
+  const uploadFails = (extra) => assertFails(upload(supplyPacket(extra)));
+  const seed = async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `mesh_supply_packets/${PACKET_ID}`), {
+        ...supplyPacket(),
+        uploadedAt: Timestamp.now(),
+      });
+    });
+  };
+  const ref = (db) => doc(db, `mesh_supply_packets/${PACKET_ID}`);
+
+  describe('讀取與刪除', () => {
+    it('★ 只有 Administrator 讀得到（單筆與整個 collection）', async () => {
+      await seed();
+      await assertSucceeds(getDoc(ref(dbFor(ADMIN))));
+      await assertSucceeds(getDocs(collection(dbFor(ADMIN), 'mesh_supply_packets')));
+    });
+
+    it('★ 寫入的 Gateway、一般登入者、Verified Rescuer、未登入都讀不到', async () => {
+      await seed();
+      await assertFails(getDoc(ref(dbFor(GATEWAY))));
+      await assertFails(getDoc(ref(dbFor(ALICE))));
+      await assertFails(getDoc(ref(dbFor(RESCUER))));
+      await assertFails(getDoc(ref(anonDb())));
+      await assertFails(getDocs(collection(dbFor(ALICE), 'mesh_supply_packets')));
+    });
+
+    it('只有 Administrator 能刪', async () => {
+      await seed();
+      await assertFails(deleteDoc(ref(dbFor(GATEWAY))));
+      await assertFails(deleteDoc(ref(dbFor(ALICE))));
+      await assertSucceeds(deleteDoc(ref(dbFor(ADMIN))));
+    });
+  });
+
+  describe('建立', () => {
+    it('★ 登入的 Gateway 可以建立格式正確的物資封包（request 與 offer）', async () => {
+      await assertSucceeds(upload(supplyPacket()));
+      await assertSucceeds(
+        upload(supplyPacket({ packetId: 'abcdef0123456789abcdef0123456789', action: 'offer' }), GATEWAY, 'abcdef0123456789abcdef0123456789'),
+      );
+    });
+
+    it('★ 同一個 Packet ID 只能建立一次：第二支 Gateway 寫同一份被擋（去重）', async () => {
+      await seed();
+      await assertFails(upload(supplyPacket({ gatewayUid: OTHER_GATEWAY }), OTHER_GATEWAY));
+      await assertFails(upload(supplyPacket()));
+    });
+
+    it('★ 未登入不能建立；gatewayUid 必須是自己', async () => {
+      await assertFails(setDoc(doc(anonDb(), `mesh_supply_packets/${PACKET_ID}`), supplyPacket()));
+      await uploadFails({ gatewayUid: OTHER_GATEWAY });
+    });
+
+    it('文件 ID 必須等於 packetId，且為 32 碼小寫十六進位', async () => {
+      await assertFails(upload(supplyPacket(), GATEWAY, 'ffffffffffffffffffffffffffffffff'));
+      await assertFails(upload(supplyPacket({ packetId: 'not-hex' }), GATEWAY, 'not-hex'));
+      await assertFails(upload(supplyPacket({ packetId: PACKET_ID.toUpperCase() }), GATEWAY, PACKET_ID.toUpperCase()));
+    });
+
+    it('exchangeId、action、originPeerId 格式不對被擋', async () => {
+      await uploadFails({ exchangeId: 'abc' });
+      await uploadFails({ exchangeId: EXCHANGE_ID.toUpperCase() });
+      await uploadFails({ action: 'cancel' });
+      await uploadFails({ originPeerId: '0123' });
+    });
+
+    it('數量必須是 1..4294967295 的整數；字串不可空白或超長', async () => {
+      await uploadFails({ quantity: 0 });
+      await uploadFails({ quantity: -1 });
+      await uploadFails({ quantity: 4294967296 });
+      await uploadFails({ quantity: '12' });
+      await uploadFails({ itemId: '' });
+      await uploadFails({ itemId: 'x'.repeat(65) });
+      await uploadFails({ itemName: 'x'.repeat(97) });
+      await uploadFails({ unit: 'x'.repeat(17) });
+    });
+
+    it('多餘欄位、缺欄位、schemaVersion 不是 1 都被擋', async () => {
+      await uploadFails({ userName: '周名韋' });
+      await uploadFails({ schemaVersion: 2 });
+      const { itemName, ...missing } = supplyPacket();
+      await assertFails(upload(missing));
+    });
+
+    it('createdAt 太新或太舊被擋；uploadedAt 必須是伺服器時間', async () => {
+      await uploadFails({ createdAt: minutesFromNow(11) });
+      await uploadFails({ createdAt: minutesFromNow(-131) });
+      await uploadFails({ uploadedAt: Timestamp.now() });
+    });
+
+    it('rawPacket 必須是 bytes 且不超過 1 KB', async () => {
+      await uploadFails({ rawPacket: 'base64==' });
+      await uploadFails({ rawPacket: bytesOf(1025) });
+    });
+  });
+
+  describe('更新', () => {
+    it('★ 建立後任何人都不能改，連 Administrator 與寫入的 Gateway 也不行', async () => {
+      await seed();
+      await assertFails(updateDoc(ref(dbFor(GATEWAY)), { quantity: 99 }));
+      await assertFails(updateDoc(ref(dbFor(ADMIN)), { quantity: 99 }));
+      await assertFails(upload(supplyPacket({ quantity: 99 })));
+    });
+  });
+});
+
 describe('users（issue #33：個人檔案含 PII，只能讀自己的）', () => {
   it('★ 不可讀取他人的個人檔案', async () => {
     await assertFails(getDoc(doc(dbFor(BOB), `users/${ALICE}`)));

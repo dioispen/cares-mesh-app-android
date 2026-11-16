@@ -14,6 +14,7 @@ class BlePacketType {
   static const int requestSync   = 0x21;
   static const int fileTransfer  = 0x22;
   static const int healthReport  = 0x30;
+  static const int supplyExchange = 0x31;
 }
 
 /// 通用 BLE 封包包裝器（Android Bridge 傳來的統一格式）

@@ -8,6 +8,7 @@ import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
 import 'services/chat_service.dart';
 import 'services/mascot_service.dart';
+import 'services/supply_exchange_feed.dart';
 import 'services/mutual_aid_task_board.dart';
 import 'services/reporter_handle_registration.dart';
 import 'widgets/mascot_assistant.dart';
@@ -88,6 +89,8 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   void _startChat() {
     if (kIsWeb) return;
     unawaited(ChatService.instance.start());
+    // 附近的物資需求／捐贈也從 app 啟動就開始收，物資頁沒開著時不會漏掉。
+    unawaited(SupplyExchangeFeed.instance.start());
   }
 
   /// BLE 收到的互救任務也從 app 啟動就開始收，不必等到打開健康回報頁（[MutualAidTaskBoard]）。

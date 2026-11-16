@@ -16,6 +16,8 @@ import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
 import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.protocol.SupplyExchangePacket
+import com.bitchat.android.service.SupplyExchangeBroadcast
 import com.bitchat.android.util.toHexString
 import com.google.gson.Gson
 import io.flutter.plugin.common.BinaryMessenger
@@ -228,6 +230,34 @@ class BitchatFlutterChannels(
                     
                     val success = sendHealthReportPacket(payload)
                     if (success) {
+                        result.success(true)
+                    } else {
+                        result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
+                    }
+                } catch (e: Exception) {
+                    result.error("SEND_FAILED", e.message, null)
+                }
+            }
+
+            // 物資需求／捐贈（SUPPLY_EXCHANGE，0x31）。錯誤碼與 sendHealthReport 同一組：
+            // INVALID_FORMAT（欄位缺少或不合法）、SERVICE_NOT_READY（mesh 沒在跑）、SEND_FAILED。
+            "sendSupplyExchange" -> {
+                try {
+                    val values = call.arguments as? Map<*, *>
+                    if (values == null) {
+                        result.error("INVALID_FORMAT", "Expected a supply exchange map", null)
+                        return true
+                    }
+                    val payload = try {
+                        SupplyExchangePacket.fromMap(values)?.encode()
+                    } catch (e: IllegalArgumentException) {
+                        null
+                    }
+                    if (payload == null) {
+                        result.error("INVALID_FORMAT", "Invalid supply exchange fields", null)
+                        return true
+                    }
+                    if (SupplyExchangeBroadcast.send(MeshServiceHolder.meshService, payload)) {
                         result.success(true)
                     } else {
                         result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
