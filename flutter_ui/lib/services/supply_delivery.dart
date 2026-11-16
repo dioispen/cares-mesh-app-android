@@ -1,0 +1,35 @@
+/// 一筆物資申請／捐贈送出後，兩條路各自的結果：經 BLE mesh 廣播給附近裝置，以及寫入雲端
+/// （Firestore）。比照 Health Report 的 `SosDelivery`：斷網是災害現場的常態，mesh 已送出而雲端
+/// 只是暫存，要說清楚，不能說成失敗。
+class SupplyDelivery {
+  const SupplyDelivery({
+    this.broadcastFailure,
+    this.uploadFailure,
+    this.uploadQueued = false,
+  });
+
+  /// 附近廣播沒有送出的原因（給使用者看）；null 表示原生已交給 mesh 廣播。
+  final String? broadcastFailure;
+
+  /// 雲端寫入失敗的原因；null 表示已寫入或已暫存（見 [uploadQueued]）。
+  final String? uploadFailure;
+
+  /// 離線：寫入已進本機佇列，恢復連線後會自動送出，但伺服器還沒收到。
+  final bool uploadQueued;
+
+  /// 兩條路都送到。
+  bool get complete => broadcastFailure == null && uploadFailure == null && !uploadQueued;
+
+  /// 兩條路都失敗：這筆誰都沒收到。
+  bool get failed => broadcastFailure != null && uploadFailure != null;
+
+  /// [success] 是成功時的開頭，例如「已送出申請」。
+  String message(String success) => switch ((broadcastFailure, uploadFailure)) {
+        (null, null) when uploadQueued => '$success：附近裝置已收到，雲端尚未上傳，恢復連線後會自動送出。',
+        (final b?, null) when uploadQueued => '目前離線，附近廣播也失敗（$b）。$success已暫存，恢復連線後會自動送出。',
+        (null, null) => '$success：已透過 Mesh 廣播給附近裝置，並記錄到雲端。',
+        (final b?, null) => '$success：已記錄到雲端，但附近廣播失敗（$b）。',
+        (null, final u?) => '$success：附近裝置已收到，但雲端上傳失敗（$u）。',
+        (final b?, final u?) => '送出失敗：附近廣播失敗（$b），雲端上傳也失敗（$u）。請再試一次。',
+      };
+}

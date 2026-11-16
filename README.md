@@ -28,7 +28,7 @@
 
 - `mesh/MessageHandler.kt` — 加入 tagged broadcast 處理路徑（`BroadcastContentTag`）
 - `mesh/BluetoothMeshService.kt`、`mesh/PacketProcessor.kt` — 接上災害回報流程
-- `protocol/BinaryProtocol.kt` — 新增 `HEALTH_REPORT`（`0x30`）等訊息型別
+- `protocol/BinaryProtocol.kt` — 新增 `HEALTH_REPORT`（`0x30`）、`SUPPLY_EXCHANGE`（`0x31`）等訊息型別
 - `service/MeshForegroundService.kt`、`service/MeshServiceHolder.kt` — 前景服務生命週期調整
 - `ui/`、`MainActivity.kt` — 移除或停用不適用於本情境的上游 UI
 - Gradle — 嵌入 `:flutter` 子專案、加入 google-services plugin
@@ -200,6 +200,8 @@ app/.../flutter/BitchatFlutterChannels.kt   Kotlin 端橋接
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 分支策略與 commit 規範 |
 | [AGENTS.md](AGENTS.md) | 架構細節與開發標準 |
 | [docs/adr/](docs/adr/) | 架構決策紀錄 |
+| [docs/MESH_GATEWAY.md](docs/MESH_GATEWAY.md) | Gateway：代傳 Health Report 到後台 |
+| [docs/MESH_SUPPLY_PACKETS.md](docs/MESH_SUPPLY_PACKETS.md) | 物資需求／捐贈的 mesh 封包、接收端顯示與 Gateway 上傳 |
 | [PRIVACY_POLICY.md](PRIVACY_POLICY.md) | 隱私政策 |
 
 ---

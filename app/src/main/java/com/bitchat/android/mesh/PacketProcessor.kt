@@ -152,6 +152,7 @@ class PacketProcessor(private val myPeerID: String) {
             MessageType.FRAGMENT -> handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
             MessageType.HEALTH_REPORT -> handleMessage(routed)
+            MessageType.SUPPLY_EXCHANGE -> handleMessage(routed)
             else -> {
                 // Handle private packet types (address check required)
                 if (packetRelayManager.isPacketAddressedToMe(packet)) {

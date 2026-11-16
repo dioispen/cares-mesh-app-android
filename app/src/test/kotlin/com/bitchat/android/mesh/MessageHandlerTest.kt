@@ -17,6 +17,8 @@ import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
+import com.bitchat.android.protocol.SupplyExchangeAction
+import com.bitchat.android.protocol.SupplyExchangePacket
 import com.bitchat.android.services.meshgraph.MeshGraphService
 import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.runBlocking
@@ -418,6 +420,93 @@ class MessageHandlerTest {
 
         assertTrue(hooked.isEmpty())
     }
+
+    // SUPPLY_EXCHANGE（0x31）：物資需求／捐贈，交給 Flutter 與物資 Gateway 的 hook。
+    @Test
+    fun `verified supply exchange reaches Flutter untouched and the supply gateway hook`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val packet = supplyExchangePacket()
+        val toFlutter = mutableListOf<BitchatPacket>()
+        val flutterListener: (BitchatPacket) -> Unit = { toFlutter += it }
+        InboundPacketBridge.addListener(flutterListener)
+
+        val hooked = collectSupplyHook {
+            handler.handleMessage(RoutedPacket(packet, peerID, "direct-link"))
+        }
+
+        InboundPacketBridge.removeListener(flutterListener)
+        assertSame(packet, toFlutter.single())
+        val verified = hooked.single()
+        assertSame(packet, verified.packet)
+        assertEquals(SupplyExchangeAction.REQUEST, verified.supply.action)
+        assertEquals("water", verified.supply.itemId)
+        assertEquals(12L, verified.supply.quantity)
+        assertEquals(peerID, verified.senderPeerID)
+        // 物資封包不是聊天訊息，也不是 Health Report
+        verify(delegate, never()).onMessageReceived(any())
+    }
+
+    @Test
+    fun `supply exchange from an unverified peer is dropped`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey).copy(isVerifiedNickname = false))
+        val toFlutter = mutableListOf<BitchatPacket>()
+        val flutterListener: (BitchatPacket) -> Unit = { toFlutter += it }
+        InboundPacketBridge.addListener(flutterListener)
+
+        val hooked = collectSupplyHook {
+            handler.handleMessage(RoutedPacket(supplyExchangePacket(), peerID, "direct-link"))
+        }
+
+        InboundPacketBridge.removeListener(flutterListener)
+        assertTrue(toFlutter.isEmpty())
+        assertTrue(hooked.isEmpty())
+    }
+
+    @Test
+    fun `a malformed supply exchange is dropped`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val junk = supplyExchangePacket().copy(payload = byteArrayOf(0x01, 0x01, 0x00))
+        val toFlutter = mutableListOf<BitchatPacket>()
+        val flutterListener: (BitchatPacket) -> Unit = { toFlutter += it }
+        InboundPacketBridge.addListener(flutterListener)
+
+        val hooked = collectSupplyHook {
+            handler.handleMessage(RoutedPacket(junk, peerID, "direct-link"))
+        }
+
+        InboundPacketBridge.removeListener(flutterListener)
+        assertTrue(toFlutter.isEmpty())
+        assertTrue(hooked.isEmpty())
+    }
+
+    private suspend fun collectSupplyHook(block: suspend () -> Unit): List<VerifiedSupplyExchange> {
+        val hooked = mutableListOf<VerifiedSupplyExchange>()
+        val listener: (VerifiedSupplyExchange) -> Unit = { hooked += it }
+        VerifiedSupplyExchangeBridge.addListener(listener)
+        try {
+            block()
+        } finally {
+            VerifiedSupplyExchangeBridge.removeListener(listener)
+        }
+        return hooked
+    }
+
+    private fun supplyExchangePacket(): BitchatPacket = BitchatPacket(
+        version = 1u,
+        type = MessageType.SUPPLY_EXCHANGE.value,
+        senderID = peerID.hexToBytes(),
+        timestamp = System.currentTimeMillis().toULong(),
+        payload = SupplyExchangePacket(
+            action = SupplyExchangeAction.REQUEST,
+            exchangeId = "0123456789abcdef0123456789abcdef",
+            itemId = "water",
+            itemName = "礦泉水",
+            quantity = 12,
+            unit = "瓶"
+        ).encode(),
+        signature = signature,
+        ttl = 3u
+    )
 
     private suspend fun collectGatewayHook(block: suspend () -> Unit): List<VerifiedHealthReport> {
         val hooked = mutableListOf<VerifiedHealthReport>()

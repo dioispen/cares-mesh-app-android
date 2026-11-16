@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Gossip-based synchronization manager using on-demand GCS filters.
- * Tracks seen public packets (ANNOUNCE, broadcast MESSAGE, broadcast HEALTH_REPORT) and
+ * Tracks seen public packets (ANNOUNCE, broadcast MESSAGE, broadcast HEALTH_REPORT, broadcast SUPPLY_EXCHANGE) and
  * periodically requests sync from neighbors. Responds to REQUEST_SYNC by sending missing packets.
  */
 class GossipSyncManager(
@@ -123,10 +123,13 @@ class GossipSyncManager(
     }
 
     fun onPublicPacketSeen(packet: BitchatPacket) {
-        // Only ANNOUNCE, broadcast MESSAGE or broadcast HEALTH_REPORT
+        // Only ANNOUNCE, broadcast MESSAGE, broadcast HEALTH_REPORT or broadcast SUPPLY_EXCHANGE.
+        // SUPPLY_EXCHANGE 比照 broadcast MESSAGE 保存（依容量汰舊）。注意：接收端驗簽只認在線 peer 的
+        // key（ADR-0006 的快取只給 HEALTH_REPORT），發送者離開超過 3 分鐘後補送的物資封包會被丟棄。
         val mt = MessageType.fromValue(packet.type)
         val isBroadcast = (packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST))
-        val isBroadcastMessage = (mt == MessageType.MESSAGE && isBroadcast)
+        val isBroadcastMessage = (mt == MessageType.MESSAGE && isBroadcast) ||
+            (mt == MessageType.SUPPLY_EXCHANGE && isBroadcast)
         val isAnnouncement = (mt == MessageType.ANNOUNCE)
         val isBroadcastHealthReport = (mt == MessageType.HEALTH_REPORT && isBroadcast)
         if (!isBroadcastMessage && !isAnnouncement && !isBroadcastHealthReport) return
