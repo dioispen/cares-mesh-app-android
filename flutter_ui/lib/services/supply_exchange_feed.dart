@@ -57,7 +57,12 @@ class SupplyExchangeFeed extends ChangeNotifier {
   /// 最新收到的在前。
   List<NearbySupplyExchange> get entries {
     _forgetExpired();
-    final list = _byExchangeId.values.toList()..sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    final list = _byExchangeId.values.toList()
+      ..sort((a, b) {
+        final createdAtOrder = b.createdAt.compareTo(a.createdAt);
+        if (createdAtOrder != 0) return createdAtOrder;
+        return b.receivedAt.compareTo(a.receivedAt);
+      });
     return List.unmodifiable(list);
   }
 

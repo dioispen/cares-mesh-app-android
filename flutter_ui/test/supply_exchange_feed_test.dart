@@ -69,6 +69,28 @@ void main() {
     expect(feed.entries.length, 1);
   });
 
+  test('newer packets win even when they arrive at the same receive time', () {
+    final sameReceiveAt = DateTime(2026, 11, 16, 10, 1);
+    final tieFeed = SupplyExchangeFeed(
+      events: () => events.stream,
+      now: () => sameReceiveAt,
+    );
+
+    tieFeed.onEvent(packetEvent(timestamp: DateTime(2026, 11, 16, 10, 0).millisecondsSinceEpoch));
+    tieFeed.onEvent(
+      packetEvent(
+        exchangeId: 'fedcba9876543210fedcba9876543210',
+        action: 'offer',
+        timestamp: DateTime(2026, 11, 16, 10, 1).millisecondsSinceEpoch,
+      ),
+    );
+
+    expect(tieFeed.entries.map((e) => e.exchangeId), [
+      'fedcba9876543210fedcba9876543210',
+      '0123456789abcdef0123456789abcdef',
+    ]);
+  });
+
   test('other packet types, malformed payloads and expired packets are ignored', () {
     feed.onEvent(packetEvent(packetType: 0x30));
     feed.onEvent(packetEvent(payload: [0x01, 0x01, 0x00]));
