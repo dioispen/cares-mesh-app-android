@@ -1549,3 +1549,78 @@ describe('SOS（#83：health_reports 的 sos 欄位，停用 sos_requests）', (
     }));
   });
 });
+
+// announcements：管理端廣播。客戶端只讀，寫入只能走 Firebase 主控台／Admin SDK。
+// 最關鍵的一條是「看不到發給別人的訊息」——指定對象的廣播可能含個人狀況。
+describe('announcements', () => {
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'announcements/all-1'), {
+        body: '今晚 8 點起停水，請預先儲水',
+        audience: 'all',
+        createdAt: new Date(),
+      });
+      await setDoc(doc(db, 'announcements/to-alice'), {
+        body: 'Alice 您好，您申請的輪椅已送達活動中心',
+        audience: 'user',
+        targetUid: ALICE,
+        createdAt: new Date(),
+      });
+    });
+  });
+
+  it('登入用戶可讀發給全體的廣播', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(BOB), 'announcements/all-1')));
+  });
+
+  it('收件人可讀發給自己的廣播', async () => {
+    await assertSucceeds(getDoc(doc(dbFor(ALICE), 'announcements/to-alice')));
+  });
+
+  it('★ 不可讀發給別人的廣播', async () => {
+    await assertFails(getDoc(doc(dbFor(BOB), 'announcements/to-alice')));
+  });
+
+  it('未登入不可讀', async () => {
+    await assertFails(getDoc(doc(anonDb(), 'announcements/all-1')));
+  });
+
+  it('App 的兩個查詢（全體、指定給自己）都能執行', async () => {
+    const db = dbFor(ALICE);
+    const all = await assertSucceeds(
+      getDocs(query(collection(db, 'announcements'), where('audience', '==', 'all'))),
+    );
+    const mine = await assertSucceeds(
+      getDocs(query(
+        collection(db, 'announcements'),
+        where('audience', '==', 'user'),
+        where('targetUid', '==', ALICE),
+      )),
+    );
+    if (all.size !== 1 || mine.size !== 1) throw new Error(`expected 1 + 1, got ${all.size} + ${mine.size}`);
+  });
+
+  it('★ 查別人的指定廣播會被整批拒絕', async () => {
+    await assertFails(getDocs(query(
+      collection(dbFor(BOB), 'announcements'),
+      where('audience', '==', 'user'),
+      where('targetUid', '==', ALICE),
+    )));
+  });
+
+  it('★ 不帶條件列出整個集合會被拒絕', async () => {
+    await assertFails(getDocs(collection(dbFor(BOB), 'announcements')));
+  });
+
+  it('★ 一般使用者不可發廣播（不可冒充管理中心）', async () => {
+    await assertFails(setDoc(doc(dbFor(BOB), 'announcements/fake'), {
+      body: '假消息', audience: 'all', createdAt: new Date(),
+    }));
+  });
+
+  it('不可修改或刪除既有廣播', async () => {
+    await assertFails(updateDoc(doc(dbFor(ALICE), 'announcements/to-alice'), { body: '竄改' }));
+    await assertFails(deleteDoc(doc(dbFor(ALICE), 'announcements/to-alice')));
+  });
+});

@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import '../models/announcement.dart';
 import '../models/user.dart';
+import '../services/announcement_service.dart';
 import '../services/mascot_service.dart';
 import '../services/profile_store.dart';
 import '../widgets/chat_navigation_host.dart';
 import '../widgets/user_avatar.dart';
+import 'announcement_screen.dart';
 import 'knowledge_screen.dart';
 import 'shelter_screen.dart';
 import 'sos_screen.dart';
@@ -31,6 +35,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   AppUser? _user;
 
+  // 用到時才建立：建立時就會取 FirebaseFirestore.instance。
+  late final _announcementService = AnnouncementService();
+  StreamSubscription<List<Announcement>>? _announcementSub;
+  List<Announcement> _announcements = const [];
+  int _unreadAnnouncements = 0;
+
   @override
   void initState() {
     super.initState();
@@ -48,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void dispose() {
+    _announcementSub?.cancel();
     mascotRouteObserver.unsubscribe(this);
     super.dispose();
   }
@@ -60,7 +71,47 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   Future<void> _loadUser() async {
     final user = await ProfileStore().load();
-    if (user != null && mounted) setState(() => _user = user);
+    if (user != null && mounted) {
+      setState(() => _user = user);
+      _watchAnnouncements();
+    }
+  }
+
+  /// 首頁一直監聽廣播，小喇叭上的未讀數才會在管理端發新訊息時即時出現。
+  void _watchAnnouncements() {
+    final uid = _user?.id;
+    if (uid == null || _announcementSub != null) return;
+    // Firebase 沒有初始化（初始化失敗、或在測試裡）時沒有廣播可讀，首頁照常使用。
+    if (Firebase.apps.isEmpty) return;
+    _announcementSub = _announcementService.watch(uid).listen(
+      (items) {
+        _announcements = items;
+        _refreshUnreadAnnouncements();
+      },
+      // 讀不到（離線、規則尚未部署）時只是沒有未讀數，首頁照常使用。
+      onError: (Object e) => debugPrint('announcements unavailable: $e'),
+    );
+  }
+
+  Future<void> _refreshUnreadAnnouncements() async {
+    final uid = _user?.id;
+    if (uid == null) return;
+    final lastRead = await _announcementService.lastRead(uid);
+    if (!mounted) return;
+    setState(() => _unreadAnnouncements = unreadAnnouncementCount(_announcements, lastRead));
+  }
+
+  Future<void> _openAnnouncements() async {
+    final uid = _user?.id;
+    if (uid == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => AnnouncementScreen(uid: uid, service: _announcementService),
+      ),
+    );
+    // 看過之後已讀時間往後推了，回到首頁時重算，紅點才會消失。
+    _refreshUnreadAnnouncements();
   }
 
   /// 點頭像開啟設定頁（#80）。回來時重讀本機的個人資料：設定頁可能改了它。
@@ -174,6 +225,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       ),
                     ),
                     const Spacer(),
+                    _AnnouncementButton(
+                      unread: _unreadAnnouncements,
+                      onTap: _user == null ? null : _openAnnouncements,
+                    ),
+                    const SizedBox(width: 12),
                     GestureDetector(
                       onTap: _openSettings,
                       child: _UserAvatar(user: _user),
@@ -484,6 +540,59 @@ class _FeatureCardWide extends StatelessWidget {
                 size: 22,
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── 右上角小喇叭：管理中心的廣播 ──────────────────────────────
+class _AnnouncementButton extends StatelessWidget {
+  final int unread;
+  final VoidCallback? onTap;
+  const _AnnouncementButton({required this.unread, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    const brown = Color(0xFF5C3D2E);
+    const red = Color(0xFFC4553A);
+    return Semantics(
+      button: true,
+      label: unread > 0 ? '廣播訊息，$unread 則未讀' : '廣播訊息',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: brown.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.campaign_rounded, color: brown, size: 22),
+            ),
+            if (unread > 0)
+              Positioned(
+                right: -2,
+                top: -2,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: red,
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: Text(
+                    unread > 99 ? '99+' : '$unread',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
