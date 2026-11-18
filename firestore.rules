@@ -305,6 +305,23 @@ service cloud.firestore {
                     && request.resource.data.reportTime > resource.data.reportTime;
     }
 
+    // announcements: 管理端對里民的廣播（App 首頁的小喇叭）。
+    //
+    // 一筆文件就是一則廣播：audience 為 'all' 時發給所有登入的使用者，為 'user' 時只發給
+    // targetUid 指定的那一位。客戶端一律不可寫——只能由管理者在 Firebase 主控台（或之後的
+    // 管理工具以 Admin SDK）新增，否則任何人都能冒充管理中心發假訊息。欄位說明見
+    // docs/announcements.md。
+    //
+    // App 端分兩個查詢讀取（audience == 'all'、targetUid == 自己），兩個都能被這條規則證明
+    // 只會回傳自己可讀的文件，所以清單查詢不會被整批拒絕。
+    match /announcements/{docId} {
+      allow read: if request.auth != null
+                  && (resource.data.audience == 'all'
+                      || (resource.data.audience == 'user'
+                          && resource.data.targetUid == request.auth.uid));
+      allow write: if false;
+    }
+
     // supply_items 是所有使用者共用的型錄；套用欄位限制而非擁有者限制，
     // 讓使用者能在任何物資上登記需求或捐贈，但不能竄改描述欄位。
     match /supply_items/{docId} {
