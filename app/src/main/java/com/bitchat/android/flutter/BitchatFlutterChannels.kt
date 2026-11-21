@@ -13,6 +13,7 @@ import com.bitchat.android.mesh.InboundPacketBridge
 import com.bitchat.android.service.HealthReportBroadcast
 import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.service.MeshForegroundService
+import com.bitchat.android.service.MeshBackgroundStatus
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
 import com.bitchat.android.protocol.BitchatPacket
@@ -28,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -105,9 +107,14 @@ class BitchatFlutterChannels(
         context.registerReceiver(statusReceiver, filter)
 
         InboundPacketBridge.addListener(packetListener)
+
+        // 前景服務啟動或停止（背景運作的狀態改變，P1-6）時也推一次；第一個值在開始監聽時已推過。
+        scope.launch {
+            MeshForegroundService.isForegroundActive.drop(1).collect { emitStatusUpdate() }
+        }
     }
 
-    private fun getStatusMap(): Map<String, Any> {
+    private fun getStatusMap(): Map<String, Any?> {
         val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
         val bluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
         
@@ -120,13 +127,28 @@ class BitchatFlutterChannels(
             permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
         } else true
 
+        // 離開 App 後 Mesh 還會不會繼續運作；不會的話，缺的是哪一類權限（P1-6）。
+        val background = MeshForegroundService.backgroundStatus(context)
+
         return mapOf(
             "type" to "system_status",
             "bluetoothEnabled" to bluetoothEnabled,
             "locationEnabled" to locationEnabled,
             "permissionsGranted" to permissionsGranted,
-            "notificationGranted" to notificationGranted
+            "notificationGranted" to notificationGranted,
+            "backgroundOperation" to background.wireName,
+            "backgroundPermission" to backgroundPermissionCategory(background)?.wireName
         )
+    }
+
+    /**
+     * 前景服務需要的權限在設定頁屬於哪一類（`settings_requestPermission` 的 category）：Android 12
+     * 起是 BLUETOOTH_SCAN／ADVERTISE／CONNECT（附近的裝置），之前是位置。只在缺權限時回報。
+     */
+    private fun backgroundPermissionCategory(status: MeshBackgroundStatus): SettingsPermissionCategory? = when {
+        status != MeshBackgroundStatus.PERMISSIONS_MISSING -> null
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S -> SettingsPermissionCategory.NEARBY_DEVICES
+        else -> SettingsPermissionCategory.LOCATION
     }
 
     private fun emitStatusUpdate() {

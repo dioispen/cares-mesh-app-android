@@ -16,7 +16,9 @@ import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.model.RequestSyncPacket
+import com.bitchat.android.sync.EncryptedOwnHealthReportStore
 import com.bitchat.android.sync.GossipSyncManager
+import com.bitchat.android.sync.OwnHealthReportKeeper
 import com.bitchat.android.util.toHexString
 import com.bitchat.android.services.VerificationService
 import com.bitchat.android.service.TransportBridgeService
@@ -116,6 +118,13 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     private data class VoiceFrameRequest(val recipientPeerID: String?, val payload: ByteArray)
     private val voiceFrameQueue = Channel<VoiceFrameRequest>(capacity = 128)
     private lateinit var gossipSyncManager: GossipSyncManager
+    // Our own latest Health Report, kept on disk so sync still has it after a restart (P0-3).
+    // A standing one outlives its sync expiry: MeshForegroundService re-sends it (ADR-0012).
+    internal val ownHealthReport = OwnHealthReportKeeper(
+        myPeerID,
+        EncryptedOwnHealthReportStore(context),
+        keepPastExpiry = com.bitchat.android.service.StandingHealthReport::isStanding
+    )
 
     // Service-level notification manager for background (no-UI) DMs
     private val serviceNotificationManager = com.bitchat.android.ui.NotificationManager(
@@ -177,6 +186,12 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
 
         com.bitchat.android.service.MeshServiceHolder.setGossipManager(gossipSyncManager) { packet ->
             signPacketBeforeBroadcast(packet)
+        }
+        // Sync only repairs reports somebody holds: put our own back, same signed packet and
+        // expiry, so neighbours that connect after a restart still receive it (P0-3)
+        serviceScope.launch {
+            val kept = ownHealthReport.latest() ?: return@launch
+            try { gossipSyncManager.onPublicPacketSeen(kept) } catch (_: Exception) { }
         }
         if (isBleTransportEnabled()) {
             TransportBridgeService.register("BLE", this)
@@ -1251,6 +1266,8 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                 connectionManager.broadcastPacket(RoutedPacket(signedPacket))
                 // 追蹤公開 packet 以進行同步
                 try { gossipSyncManager.onPublicPacketSeen(signedPacket) } catch (_: Exception) { }
+                // 自己的 Health Report 另存一份，app 重啟後放回同步暫存（P0-3）；其他類型不存
+                ownHealthReport.keep(signedPacket)
                 Log.d(TAG, "✅ 廣播 Packet 成功: type=${packet.type}, payload size=${packet.payload.size}")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ 廣播 Packet 失敗: ${e.message}", e)
@@ -1673,6 +1690,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
             peerManager.clearAllPeers()
             peerManager.clearAllFingerprints()
             try { gossipSyncManager.clear() } catch (_: Exception) { }
+            ownHealthReport.clear()
         } catch (e: Exception) {
             Log.e(TAG, "Error clearing mesh service internal data: ${e.message}")
         }
