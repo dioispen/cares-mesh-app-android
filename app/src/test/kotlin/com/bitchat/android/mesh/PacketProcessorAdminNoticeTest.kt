@@ -4,9 +4,10 @@ import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -18,7 +19,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * How PacketProcessor treats ADMIN_NOTICE (0x31, #137): the Inbox behind the delegate decides the
  * relay, and the senderID — a notice's messageId, not a peer (ADR-0011) — never becomes an actor,
- * a last-seen update or a handled message.
+ * a last-seen update or a handled message. The processor's actors run on the test scheduler: each
+ * test runs them to idle, then looks at what they did.
  */
 class PacketProcessorAdminNoticeTest {
     private val processors = mutableListOf<PacketProcessor>()
@@ -29,55 +31,58 @@ class PacketProcessorAdminNoticeTest {
     }
 
     @Test
-    fun `an Admin Notice the handler accepts is relayed`() = runBlocking {
+    fun `an Admin Notice the handler accepts is relayed`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = true)
         val processor = processor(delegate)
 
         processor.processPacket(adminNotice(MESSAGE_ID_1))
 
-        awaitUntil { delegate.relayed.size == 1 }
+        advanceUntilIdle()
+        assertEquals(1, delegate.relayed.size)
         assertEquals(listOf(MESSAGE_ID_1), delegate.adminNotices)
     }
 
     @Test
-    fun `an Admin Notice the handler refuses is not relayed`() = runBlocking {
+    fun `an Admin Notice the handler refuses is not relayed`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = false)
         val processor = processor(delegate)
 
         processor.processPacket(adminNotice(MESSAGE_ID_1))
 
-        awaitUntil { delegate.adminNotices.size == 1 }
-        delay(250)
+        advanceUntilIdle()
+        assertEquals(listOf(MESSAGE_ID_1), delegate.adminNotices)
         assertTrue(delegate.relayed.isEmpty())
     }
 
     @Test
-    fun `an accepted Admin Notice updates no peer's last seen and is not handled as a message`() = runBlocking {
+    fun `an accepted Admin Notice updates no peer's last seen and is not handled as a message`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = true)
         val processor = processor(delegate)
 
         processor.processPacket(adminNotice(MESSAGE_ID_1))
 
-        awaitUntil { delegate.relayed.size == 1 }
+        advanceUntilIdle()
+        assertEquals(1, delegate.relayed.size)
         assertTrue(delegate.lastSeen.isEmpty())
         assertEquals(0, delegate.messagesHandled)
     }
 
     @Test
-    fun `Admin Notices from many messageIds leave one actor, not one per messageId`() = runBlocking {
+    fun `Admin Notices from many messageIds leave one actor, not one per messageId`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = true)
         val processor = processor(delegate)
 
         repeat(20) { i -> processor.processPacket(adminNotice("00000000000000%02x".format(i + 1))) }
         processor.processPacket(announce(PEER_ID))
 
-        awaitUntil { delegate.adminNotices.size == 20 && delegate.lastSeen.isNotEmpty() }
+        advanceUntilIdle()
+        assertEquals(20, delegate.adminNotices.size)
         assertEquals(2, processor.activeActorCount()) // the Admin Notices' one, and the peer's
         assertEquals(listOf(PEER_ID), delegate.lastSeen)
     }
 
     @Test
-    fun `fragments of an Admin Notice share its actor and the reassembled notice reaches the handler`() = runBlocking {
+    fun `fragments of an Admin Notice share its actor and the reassembled notice reaches the handler`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = true)
         val processor = processor(delegate)
         val large = adminNotice(MESSAGE_ID_2, payload = ByteArray(600) { (it % 251).toByte() }).packet
@@ -86,13 +91,14 @@ class PacketProcessorAdminNoticeTest {
 
         fragments.forEach { processor.processPacket(RoutedPacket(it, MESSAGE_ID_2, "direct-link")) }
 
-        awaitUntil { delegate.adminNotices == listOf(MESSAGE_ID_2) }
+        advanceUntilIdle()
+        assertEquals(listOf(MESSAGE_ID_2), delegate.adminNotices)
         assertEquals(1, processor.activeActorCount())
         assertTrue(delegate.lastSeen.isEmpty())
     }
 
     @Test
-    fun `the relayed copy is the normalized packet, whatever a sender added to it`() = runBlocking {
+    fun `the relayed copy is the normalized packet, whatever a sender added to it`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = true)
         val processor = processor(delegate)
         val normalized = adminNotice(MESSAGE_ID_1, ttl = 6u).packet
@@ -106,7 +112,7 @@ class PacketProcessorAdminNoticeTest {
 
         processor.processPacket(RoutedPacket(embellished, MESSAGE_ID_1, "direct-link"))
 
-        awaitUntil { delegate.relayed.size == 1 }
+        advanceUntilIdle()
         val relayed = delegate.relayed.single()
         assertEquals(1, relayed.version.toInt())
         assertNull(relayed.recipientID)
@@ -120,14 +126,8 @@ class PacketProcessorAdminNoticeTest {
         )
     }
 
-    private suspend fun awaitUntil(condition: () -> Boolean) {
-        withTimeout(2_000) {
-            while (!condition()) delay(10)
-        }
-    }
-
-    private fun processor(delegate: RecordingDelegate): PacketProcessor =
-        PacketProcessor(MY_PEER_ID).also {
+    private fun TestScope.processor(delegate: RecordingDelegate): PacketProcessor =
+        PacketProcessor(MY_PEER_ID, StandardTestDispatcher(testScheduler)).also {
             it.delegate = delegate
             processors += it
         }

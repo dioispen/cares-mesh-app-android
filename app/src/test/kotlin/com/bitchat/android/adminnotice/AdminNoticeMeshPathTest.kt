@@ -11,9 +11,7 @@ import com.bitchat.android.mesh.PeerManager
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.SpecialRecipients
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -21,7 +19,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * A relay's whole receive path for 0x31 (#137): PacketProcessor hands every packet to the real
- * Inbox, relays what it accepts, and the peer list and packet actors stay as they were.
+ * Inbox, relays what it accepts, and the peer list and packet actors stay as they were. The
+ * processor's actors run on [actors]: a test runs them to idle, then looks at what they did.
  */
 class AdminNoticeMeshPathTest {
     private val shown = CopyOnWriteArrayList<String>()
@@ -38,7 +37,8 @@ class AdminNoticeMeshPathTest {
     private val peers = PeerManager().also { it.addOrUpdatePeer(PEER_ID, "alice") }
     private val relayed = CopyOnWriteArrayList<String>()
     private val handled = CopyOnWriteArrayList<String>()
-    private val processor = PacketProcessor(MY_PEER_ID).also { it.delegate = RelayDelegate() }
+    private val actors = StandardTestDispatcher()
+    private val processor = PacketProcessor(MY_PEER_ID, actors).also { it.delegate = RelayDelegate() }
 
     @After
     fun tearDown() {
@@ -47,7 +47,7 @@ class AdminNoticeMeshPathTest {
     }
 
     @Test
-    fun `many notices, a forgery and repeats change no peer, leave one actor, and only verified copies are relayed, once each`() = runBlocking {
+    fun `many notices, a forgery and repeats change no peer, leave one actor, and only verified copies are relayed, once each`() {
         val others = (1..5).map { TestAdminNotices.signed(messageId = "00000000000000%02x".format(it)) }
         val heard = listOf(V4, V1, V1, V2, V3) + others + others
 
@@ -56,8 +56,8 @@ class AdminNoticeMeshPathTest {
             processor.processPacket(RoutedPacket(packet, packet.senderID.toHex(), "AA:00:00:00:00:01"))
         }
 
-        withTimeout(2_000) { while (handled.size < heard.size) delay(10) }
-        delay(100)
+        actors.scheduler.advanceUntilIdle()
+        assertEquals(heard.size, handled.size)
         // processPacket hands packets to the actor from separate coroutines: arrival order is not kept.
         val othersIds = (1..5).map { "00000000000000%02x".format(it) }
         val expected = listOf(TestAdminNotices.V1_MESSAGE_ID, TestAdminNotices.V2_MESSAGE_ID, TestAdminNotices.V3_MESSAGE_ID) + othersIds

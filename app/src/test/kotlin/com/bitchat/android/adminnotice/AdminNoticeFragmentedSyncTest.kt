@@ -18,12 +18,9 @@ import com.bitchat.android.sync.GCSFilter
 import com.bitchat.android.sync.GossipSyncManager
 import com.bitchat.android.sync.SyncDefaults
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -38,13 +35,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  * that heard V5 answers a late arrival's REQUEST_SYNC; the reply goes out through the transports'
  * FragmentingPacketSender, crosses "the air" as encoded frames, and the late arrival's
  * PacketProcessor reassembles it and hands it to its Inbox, which verifies the Administrators'
- * signature. The late arrival then holds it in its own sync set, to pass on.
+ * signature. The late arrival then holds it in its own sync set, to pass on. The fragmenting sender
+ * and the late arrival's packet actors run on [dispatcher]: a test runs them to idle, then looks at
+ * what they did.
  */
 @RunWith(RobolectricTestRunner::class)
 class AdminNoticeFragmentedSyncTest {
 
     private val now = VECTOR_ISSUED_AT + 60_000L
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val dispatcher = StandardTestDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val fragmentManagers = mutableListOf<FragmentManager>()
 
     /** Encoded frames the relay's sync reply put on the air, in order. */
@@ -73,7 +73,7 @@ class AdminNoticeFragmentedSyncTest {
     private val lateSync = gossipSync(LATE)
     private val lateInbox = inbox().also { it.attachSyncSet(syncSetOf(lateSync)) }
     private val lateOutcomes = CopyOnWriteArrayList<AdminNoticeOutcome>()
-    private val lateProcessor = PacketProcessor(LATE).also { it.delegate = LateArrival(fragmentManager()) }
+    private val lateProcessor = PacketProcessor(LATE, dispatcher).also { it.delegate = LateArrival(fragmentManager()) }
 
     @After
     fun tearDown() {
@@ -83,7 +83,7 @@ class AdminNoticeFragmentedSyncTest {
     }
 
     @Test
-    fun `V5 sent as a sync reply is fragmented, reassembled by the late arrival and accepted by its Inbox`() = runBlocking {
+    fun `V5 sent as a sync reply is fragmented, reassembled by the late arrival and accepted by its Inbox`() {
         assertTrue(relayInbox.onMeshPacket(TestAdminNotices.meshPacket(V5)).relay)
 
         relaySync.handleRequestSync(LATE, RequestSyncPacket.decode(lateSync.buildGcsPayload())!!)
@@ -91,8 +91,7 @@ class AdminNoticeFragmentedSyncTest {
         val reply = replies.single()
         assertEquals(MessageType.ADMIN_NOTICE.value, reply.type)
         assertEquals(683, reply.toBinaryData(padding = false)!!.size)
-        withTimeout(5_000) { while (onAir.size < 2) delay(10) }
-        delay(100)
+        dispatcher.scheduler.advanceUntilIdle()
         val fragments = onAir.map { BitchatPacket.fromBinaryData(it)!! }
         assertEquals(2, fragments.size)
         fragments.forEach { fragment ->
@@ -103,7 +102,7 @@ class AdminNoticeFragmentedSyncTest {
 
         fragments.forEach { lateProcessor.processPacket(RoutedPacket(it, it.senderID.toHex(), "relay-link")) }
 
-        withTimeout(5_000) { while (lateOutcomes.isEmpty()) delay(10) }
+        dispatcher.scheduler.advanceUntilIdle()
         val accepted = lateOutcomes.single() as AdminNoticeOutcome.Accepted
         assertEquals(V5_MESSAGE_ID, accepted.payload.messageId)
         assertArrayEquals(V5, accepted.payload.wire)
@@ -111,13 +110,14 @@ class AdminNoticeFragmentedSyncTest {
     }
 
     @Test
-    fun `the late arrival then offers V5 to the next one through its own sync set`() = runBlocking {
+    fun `the late arrival then offers V5 to the next one through its own sync set`() {
         relayInbox.onMeshPacket(TestAdminNotices.meshPacket(V5))
         relaySync.handleRequestSync(LATE, emptyRequest())
-        withTimeout(5_000) { while (onAir.size < 2) delay(10) }
+        dispatcher.scheduler.advanceUntilIdle()
         onAir.map { BitchatPacket.fromBinaryData(it)!! }
             .forEach { lateProcessor.processPacket(RoutedPacket(it, it.senderID.toHex(), "relay-link")) }
-        withTimeout(5_000) { while (lateOutcomes.isEmpty()) delay(10) }
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(lateOutcomes.single() is AdminNoticeOutcome.Accepted)
 
         val passedOn = CopyOnWriteArrayList<BitchatPacket>()
         lateSync.delegate = object : GossipSyncManager.Delegate {
