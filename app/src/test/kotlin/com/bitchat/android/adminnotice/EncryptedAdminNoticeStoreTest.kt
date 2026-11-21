@@ -89,6 +89,85 @@ class EncryptedAdminNoticeStoreTest {
         assertEquals(AdminNoticeStatus.WITHDRAWN, restarted.getValue("4444444444444444").status)
     }
 
+    // ── 撤回與取代（#139）───────────────────────────────────────────────────
+
+    @Test
+    fun `a corrected notice stays listed without its content and names the notice that corrected it`() {
+        store.insertIfAbsent(notice("1111111111111111"))
+        var changes = 0
+        store.addChangeListener { changes++ }
+
+        val corrected = store.markCorrected("1111111111111111", correctedBy = "2222222222222222")
+
+        val stored = store.all().single()
+        assertEquals(stored, corrected)
+        assertEquals(AdminNoticeStatus.CORRECTED, stored.status)
+        assertEquals("2222222222222222", stored.replacedBy)
+        assertEquals("", stored.content)
+        assertEquals(1, changes)
+    }
+
+    @Test
+    fun `a withdrawn notice stays listed without its content`() {
+        store.insertIfAbsent(notice("1111111111111111"))
+        var changes = 0
+        store.addChangeListener { changes++ }
+
+        val withdrawn = store.markWithdrawn("1111111111111111")
+
+        val stored = store.all().single()
+        assertEquals(stored, withdrawn)
+        assertEquals(AdminNoticeStatus.WITHDRAWN, stored.status)
+        assertNull(stored.replacedBy)
+        assertEquals("", stored.content)
+        assertEquals(1, changes)
+    }
+
+    @Test
+    fun `only an active notice can be corrected, and anything but a withdrawn one withdrawn`() {
+        store.insertIfAbsent(notice("1111111111111111"))
+        store.markCorrected("1111111111111111", correctedBy = "2222222222222222")
+        var changes = 0
+        store.addChangeListener { changes++ }
+
+        assertNull("a second correction does not move the link", store.markCorrected("1111111111111111", "3333333333333333"))
+        assertEquals(AdminNoticeStatus.WITHDRAWN, store.markWithdrawn("1111111111111111")?.status)
+        assertNull("already withdrawn", store.markWithdrawn("1111111111111111"))
+        assertNull("a withdrawn notice is not corrected", store.markCorrected("1111111111111111", "3333333333333333"))
+
+        val stored = store.all().single()
+        assertEquals(AdminNoticeStatus.WITHDRAWN, stored.status)
+        assertEquals("it was corrected before it was withdrawn", "2222222222222222", stored.replacedBy)
+        assertEquals("one change: the withdrawal", 1, changes)
+    }
+
+    @Test
+    fun `marking a notice that is not stored changes nothing`() {
+        var changes = 0
+        store.addChangeListener { changes++ }
+
+        assertNull(store.markCorrected("1111111111111111", correctedBy = "2222222222222222"))
+        assertNull(store.markWithdrawn("1111111111111111"))
+        assertEquals(emptyList<StoredAdminNotice>(), store.all())
+        assertEquals(0, changes)
+    }
+
+    @Test
+    fun `a withdrawal survives a restart, and storing the notice again does not bring it back`() {
+        store.insertIfAbsent(notice("1111111111111111"))
+        store.markRead("1111111111111111")
+        store.markWithdrawn("1111111111111111")
+
+        val restarted = openStore()
+        val insertedAgain = restarted.insertIfAbsent(notice("1111111111111111"))
+
+        assertFalse(insertedAgain)
+        val stored = restarted.all().single()
+        assertEquals(AdminNoticeStatus.WITHDRAWN, stored.status)
+        assertEquals("", stored.content)
+        assertTrue("read state is kept", stored.isRead)
+    }
+
     @Test
     fun `notices are listed newest first`() {
         store.insertIfAbsent(notice("1111111111111111", issuedAtMs = VECTOR_ISSUED_AT))
