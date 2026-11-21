@@ -4,12 +4,12 @@
 
 這支工具是**開發用**的，也是**管理後台組不接發送頁面時的備案**。後台組接下的話，日常發送改用管理後台，這支工具留給開發與測試。
 
-支援**廣播**與**定向公告**（以 uid 或 Reporter Handle 指定收件對象）。取代與撤回由之後的票（#139）補上。
+支援**廣播**、**定向公告**（以 uid 或 Reporter Handle 指定收件對象），以及已發出公告的**更正**與**撤回**（#139）。
 
 ## 發公告之前
 
 - **實地實驗進行中不發公告。** 公告會在 mesh 上洪泛、經 gossip sync 一路補送到到期為止，會干擾實驗的量測（docs/ADMIN_NOTICE_V1.md「處理規則」）。發之前先向實驗負責人確認現在沒有實驗在跑。
-- **送出後收不回來。** 公告一進到 mesh 就會被一路轉送，刪除 Firestore 文件**不是**撤回。這支工具還不能撤回，寫錯了只能等它過期，所以有效期不要設得比需要的長。
+- **送出後收不回來。** 公告一進到 mesh 就會被一路轉送，刪除 Firestore 文件**不是**撤回。寫錯了只能發更正或撤回（見「更正與撤回」），而沒收到撤回的手機會一直看到原公告到它過期，所以有效期不要設得比需要的長。
 - 定向公告的內容只有收件裝置解得開，但 `admin_notice_records` 留有明文與收件對象，只有 Administrator 讀得到。
 - **內容最多 300 bytes**（UTF-8，大約 100 個中文字）；**有效期最長 24 小時**。超過的話工具會拒絕，不會送出。
 - 寫進 `admin_notices` 的只有簽好章的 `wire`。所有登入帳號都讀得到它，任何 Gateway 都會把它注入 mesh，所以廣播的內容要當成公開的；定向公告的 `wire` 只看得出有幾個收件裝置。
@@ -150,7 +150,7 @@
 
 每則定向公告最多 5 台收件裝置。超過時工具自動拆成最少的幾則，每則的裝置數盡量平均（6 台拆成 3 + 3，不是 5 + 1：收件裝置越少 payload 越小，4 台以內、內容 169 bytes 以內的公告不必切片）。每則有自己的 messageId，`admin_notice_records` 以同一個 `batchId`（第一則的 messageId）串起來，整批在同一次 commit 寫入，不會只送出一半。
 
-撤回一個拆成多則的批次時，每一則都要各發一則撤回。這支工具還不能撤回（#139）；到時以 `batchId` 查出同一批的每一則。
+撤回一個拆成多則的批次時，每一則都要各發一則撤回：用 `revoke --batch <batchId>`（見「更正與撤回」）。
 
 ### 工具做了什麼
 
@@ -170,6 +170,58 @@
 | `recipientCount` | integer | 這一則加密給的收件裝置數，即 `wire` 的 recipientCount |
 | `recipientDevices` | array of map | 這一則加密給的每台收件裝置：`uid`、`reporterHandle`（登記文件的路徑）與 `noticePublicKey`（當時用的公鑰）。順序與 `wire` 裡的條目無關 |
 
+## 更正與撤回
+
+公告送出後就收不回來，只能再發一則**取代**它的公告（docs/ADMIN_NOTICE_V1.md「撤回與取代」）。收到的手機會把原公告標成「已更正」或「已撤回」、清掉它的內容、收回它的通知，中繼也不再補送它。**不要**用刪除 `admin_notices` 文件代替撤回：公告已經在 mesh 上，刪除文件攔不住它。
+
+### 更正：`send --replaces`
+
+在 `send` 加上 `--replaces <messageId>`（被更正那則的 `admin_notices` 文件 ID），其他參數照發新公告：
+
+```bash
+python3 tools/admin-notice/admin_notice_tool.py send --dry-run \
+  --email you@example.org --level urgent --valid-for 6h \
+  --replaces a1b2c3d4e5f60718 \
+  --content "土石流警戒：請改至中山國中避難所"
+```
+
+- 原公告在手機上標成「已更正」，列表可以捲到新公告；新公告照一般公告通知，依它的等級再響一次。
+- **新公告的到期時間不能早於原公告**，否則工具拒絕，並印出最短的 `--valid-for`：撤回紀錄要撐到原公告過期為止。
+- **定向公告只能用定向公告更正**，內容才會加密：加上 `--uid` 或 `--handle`，通常與原公告相同。廣播也可以用定向公告更正，但只有收件裝置看得到新內容，工具會提醒。
+- 原公告屬於拆成多則的批次時，這次只更正那一則，工具會列出同一批的其他則。要整批收回，用 `revoke --batch` 撤回後重發。
+- 更正拆成多則時，每一則都取代同一則原公告。
+- 需要讀 `admin_notice_records`，所以 `--dry-run` 也會登入（廣播的一般發送不會）。
+
+### 撤回：`revoke`
+
+```bash
+# 撤回一則
+python3 tools/admin-notice/admin_notice_tool.py revoke --dry-run --email you@example.org a1b2c3d4e5f60718
+# 撤回一整批（拆成多則的定向公告），每一則各發一則撤回
+python3 tools/admin-notice/admin_notice_tool.py revoke --dry-run --email you@example.org --batch a1b2c3d4e5f60718
+```
+
+- 純撤回一律是**廣播 kind、空 body**，不論原公告是廣播還是定向：沒有內容就不必加密，也不需要收件者的公鑰。等級沿用原公告。
+- 撤回與原公告**同時到期**；原公告已經或快要過期時，撤回至少保留 1 小時，讓列表裡還留著它的手機（保留到過期後 7 天）也收得到。原公告的到期時間超過現在起 24 小時（發它的電腦時鐘快了）時拒絕。
+- `--batch` 以 `batchId` 查出同一批的每一則，整批在同一次 commit 寫入；已經被更正或撤回的那幾則略過並提醒。
+- 參數：`--email`（必填）、`<messageId>` 或 `--batch <batchId>`（擇一）、`--key-id`、`--key`、`--project`、`--yes`、`--dry-run`，意思同 `send`。`--dry-run` 會登入查要撤回的公告，簽好章印出，不寫入。
+
+### 什麼時候拒絕
+
+| 訊息 | 原因與處理 |
+|---|---|
+| 找不到 `admin_notice_records/…` | messageId 打錯了，或不是發到這個專案的公告 |
+| … 已經被 … 更正 | 一則公告只取代一次：要再改，就取代或撤回那則更正 |
+| … 已經撤回過了 | 不必再撤回 |
+| … 本身是一則撤回 | 撤回不能再取代或撤回，被撤回的公告也不會因此回來 |
+| … 是定向公告：更正它的新公告也必須是定向的 | 加上 `--uid` 或 `--handle`，或改用 `revoke` |
+| 新公告 … 到期，早於被取代的 … | 加長 `--valid-for`，訊息裡有最短的值 |
+| batchId … 的公告都已經被取代或撤回 | 整批都處理過了 |
+
+### `admin_notice_records`
+
+更正與撤回的紀錄都填 `replaces`（被取代的 messageId）。純撤回的 `kind` 是 `broadcast`、`content` 是空字串、`batchId` 是它自己的 messageId；工具以 `replaces` 查一則公告是否已被取代過。
+
 ## 測試
 
 - 單元測試，不連任何網路：在本目錄執行 `python3 -m unittest`。Firebase 在 HTTP 邊界換成假的；emulator 整合測試會被略過。
@@ -186,9 +238,9 @@
 
 | 檔案 | 用途 |
 |---|---|
-| `admin_notice_tool.py` | 命令列：`keygen`、`send`（廣播與定向公告） |
+| `admin_notice_tool.py` | 命令列：`keygen`、`send`（廣播、定向公告與更正）、`revoke`（撤回一則或一整批） |
 | `notice_format.py` | payload 的組包、簽章、定向加密與檢查，與產生器共用 |
-| `firebase_rest.py` | Firebase Auth 與 Firestore 的 REST 呼叫（登入、commit、runQuery），只用標準函式庫 |
+| `firebase_rest.py` | Firebase Auth 與 Firestore 的 REST 呼叫（登入、commit、batchGet、runQuery），只用標準函式庫 |
 | `gen_test_vectors.py` | 產生規格書附錄的 test vectors |
 | `admin_public_keys.json` | keyId → 正式公鑰，App 內建公鑰表的來源 |
 | `test_*.py` | 單元測試與 emulator 整合測試 |
