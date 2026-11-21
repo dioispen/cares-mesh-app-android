@@ -14,8 +14,14 @@ import kotlinx.coroutines.channels.actor
  * Per-peer packet serialization using Kotlin coroutine actors
  * Prevents race condition where multiple threads process packets
  * from the same peer simultaneously, causing session management conflicts.
+ *
+ * [dispatcher] runs the actors. Production keeps [Dispatchers.IO]; a test passes a test dispatcher
+ * and runs the actors to idle instead of waiting for them.
  */
-class PacketProcessor(private val myPeerID: String) {
+class PacketProcessor(
+    private val myPeerID: String,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO
+) {
     private val debugManager by lazy { try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (e: Exception) { null } }
     
     companion object {
@@ -43,7 +49,7 @@ class PacketProcessor(private val myPeerID: String) {
     private val packetRelayManager = PacketRelayManager(myPeerID)
     
     // Coroutines
-    private val processorScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val processorScope = CoroutineScope(dispatcher + SupervisorJob())
     
     // Per-peer actors to serialize packet processing
     // Each peer gets its own actor that processes packets sequentially
