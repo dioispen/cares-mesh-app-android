@@ -46,7 +46,8 @@ class BluetoothGattClientManager(
     private val bluetoothManager: BluetoothManager = 
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    private val bleScanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
+    // 每次 start() 重新取得：藍牙關閉時拿到的是 null，重新開啟後舊的 scanner 也可能已失效（P0-1）。
+    @Volatile private var bleScanner: BluetoothLeScanner? = null
 
     private fun isBleTransportEnabled(): Boolean {
         return try {
@@ -124,10 +125,12 @@ class BluetoothGattClientManager(
             return false
         }
         
-        if (bleScanner == null) {
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
+        if (scanner == null) {
             Log.e(TAG, "BLE scanner not available")
             return false
         }
+        bleScanner = scanner
         
         isActive = true
         
@@ -154,18 +157,18 @@ class BluetoothGattClientManager(
 
         isActive = false
         
-        connectionScope.launch {
-            // Disconnect all client connections decisively
-            try {
-                val conns = connectionTracker.getConnectedDevices().values.filter { it.isClient && it.gatt != null }
-                conns.forEach { dc ->
-                    try { dc.gatt?.disconnect() } catch (_: Exception) { }
-                }
-            } catch (_: Exception) { }
-            
-            stopScanning()
-            Log.i(TAG, "GATT client manager stopped")
-        }
+        // 呼叫端都在 connectionScope 的 coroutine 裡。同步做完，藍牙重建時接著呼叫的 start() 才不會
+        // 被晚一步執行的 stopScanning() 停掉新的掃描。
+        // Disconnect all client connections decisively
+        try {
+            val conns = connectionTracker.getConnectedDevices().values.filter { it.isClient && it.gatt != null }
+            conns.forEach { dc ->
+                try { dc.gatt?.disconnect() } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+        
+        stopScanning()
+        Log.i(TAG, "GATT client manager stopped")
     }
     
     /**
@@ -188,7 +191,8 @@ class BluetoothGattClientManager(
     private fun startScanning() {
         // Respect debug setting
         val enabled = isClientRoleEnabled()
-        if (!permissionManager.hasBluetoothPermissions() || bleScanner == null || !isActive || !enabled) return
+        val scanner = bleScanner
+        if (!permissionManager.hasBluetoothPermissions() || scanner == null || !isActive || !enabled) return
         
         // Rate limit scan starts to prevent "scanning too frequently" errors
         val currentTime = System.currentTimeMillis()
@@ -268,7 +272,7 @@ class BluetoothGattClientManager(
             lastScanStartTime = currentTime
             isCurrentlyScanning = true
             
-            bleScanner.startScan(scanFilters, powerManager.getScanSettings(), scanCallback)
+            scanner.startScan(scanFilters, powerManager.getScanSettings(), scanCallback)
             Log.i(TAG, "BLE scan started")
         } catch (e: Exception) {
             Log.e(TAG, "Exception starting scan: ${e.message}")
@@ -281,12 +285,13 @@ class BluetoothGattClientManager(
      */
     @Suppress("DEPRECATION")
     private fun stopScanning() {
-        if (!permissionManager.hasBluetoothPermissions() || bleScanner == null) return
+        val scanner = bleScanner
+        if (!permissionManager.hasBluetoothPermissions() || scanner == null) return
         
         if (isCurrentlyScanning) {
             try {
                 scanCallback?.let {
-                    bleScanner.stopScan(it)
+                    scanner.stopScan(it)
                     Log.i(TAG, "BLE scan stopped")
                 }
             } catch (e: Exception) {
@@ -485,9 +490,11 @@ class BluetoothGattClientManager(
                     } else {
                         Log.i(TAG, "Disconnected from $deviceAddress (client)")
                     }
-                    // Capture the observed peer before cleanup drops the address mapping.
-                    val disconnectedPeerID = connectionTracker.addressPeerMap[deviceAddress]
-                    connectionTracker.cleanupDeviceConnectionIfCurrent(deviceAddress, linkID)
+                    // 只取這一條鏈路自己確認過的 peer。鏈路可能已在本機拆掉（藍牙關閉、閒置過久），
+                    // 同一個位址上的新鏈路的 peer 不能被當成這次斷線。
+                    val disconnectedPeerID = connectionTracker
+                        .removeConnectionIfCurrent(deviceAddress, linkID)
+                        ?.observedPeerID
 
                     // Notify higher layers about device disconnection to update direct flags
                     delegate?.onDeviceDisconnected(gatt.device, linkID, disconnectedPeerID)

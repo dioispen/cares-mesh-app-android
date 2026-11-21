@@ -6,8 +6,6 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.util.Log
 import com.bitchat.android.experiment.ExperimentRecorder
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.UUID
@@ -24,7 +22,6 @@ class BluetoothConnectionTracker(
     
     companion object {
         private const val TAG = "BluetoothConnectionTracker"
-        private const val CLEANUP_DELAY = com.bitchat.android.util.AppConstants.Mesh.CONNECTION_CLEANUP_DELAY_MS
     }
     
     // Connection tracking - reduced memory footprint
@@ -52,14 +49,39 @@ class BluetoothConnectionTracker(
         val linkID: String = UUID.randomUUID().toString()
     )
     
+    /** 從連線表移除的一條鏈路；[observedPeerID] 是移除當下這條鏈路已確認的 peer，沒有則為 null。 */
+    data class RemovedLink(
+        val deviceAddress: String,
+        val connection: DeviceConnection,
+        val observedPeerID: String?
+    )
+
     override fun start() {
         super.start()
     }
     
     override fun stop() {
+        stopAndRemoveAll()
+    }
+
+    /**
+     * 停止追蹤並清空連線表（藍牙關閉、傳輸停用、服務停止）。已確認身分的鏈路記 `LINK_DOWN`，
+     * client 端的 GATT 斷線並關閉。回傳被移除的鏈路，呼叫端據此通知上層每一條斷線：藍牙關閉時
+     * 堆疊不一定會送斷線回呼（試跑中 D 的殘留連線留了 28 分鐘，還擋住了重連）。
+     */
+    fun stopAndRemoveAll(): List<RemovedLink> {
         super.stop()
-        cleanupAllConnections()
-        clearAllConnections()
+        val removed = removeAllConnections()
+        // 之後不會馬上在同一個位址重連，不必等斷線回呼；scope 也可能隨即被取消，所以直接關閉。
+        removed.forEach { link ->
+            link.connection.gatt?.let { gatt ->
+                try { gatt.disconnect() } catch (_: Exception) { }
+                try { gatt.close() } catch (e: Exception) {
+                    Log.w(TAG, "Error closing GATT during cleanup: ${e.message}")
+                }
+            }
+        }
+        return removed
     }
 
     // Abstract implementations
@@ -290,57 +312,52 @@ class BluetoothConnectionTracker(
     fun cleanupDeviceConnectionIfCurrent(
         deviceAddress: String,
         expectedLinkID: String
-    ): Boolean {
-        synchronized(connectionStateLock) {
-            val current = connectedDevices[deviceAddress] ?: return false
+    ): Boolean = removeConnectionIfCurrent(deviceAddress, expectedLinkID) != null
+
+    /**
+     * 和 [cleanupDeviceConnectionIfCurrent] 相同，另外回傳被移除的鏈路與它已確認的 peer。peer 在
+     * 同一個鎖裡取出：先讀 [addressPeerMap] 再清理的話，中間換上的新鏈路的 peer 會被當成斷線。
+     */
+    fun removeConnectionIfCurrent(
+        deviceAddress: String,
+        expectedLinkID: String
+    ): RemovedLink? {
+        val removed = synchronized(connectionStateLock) {
+            val current = connectedDevices[deviceAddress] ?: return null
             if (current.linkID != expectedLinkID) {
-                return false
+                return null
             }
             if (!connectedDevices.remove(deviceAddress, current)) {
-                return false
+                return null
             }
             subscribedDevices.removeAll { it.address == deviceAddress }
-            reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
+            val observedPeerID = addressPeerMap.remove(deviceAddress)
+            reportLinkDown(deviceAddress, observedPeerID)
             firstAnnounceSeen.remove(deviceAddress)
+            RemovedLink(deviceAddress, current, observedPeerID)
         }
         Log.d(TAG, "Cleaned up device connection for $deviceAddress")
-        return true
+        return removed
     }
-    
-    /**
-     * Clean up all connections
-     */
-    private fun cleanupAllConnections() {
-        connectedDevices.values.forEach { deviceConn ->
-            deviceConn.gatt?.disconnect()
-        }
-        
-        connectionScope.launch {
-            delay(CLEANUP_DELAY)
-            
-            connectedDevices.values.forEach { deviceConn ->
-                try {
-                    deviceConn.gatt?.close()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error closing GATT during cleanup: ${e.message}")
-                }
-            }
-        }
-    }
-    
+
     /**
      * Clear all connection tracking
      */
-    private fun clearAllConnections() {
-        synchronized(connectionStateLock) {
+    private fun removeAllConnections(): List<RemovedLink> {
+        val removed = synchronized(connectionStateLock) {
+            val links = connectedDevices.map { (address, connection) ->
+                RemovedLink(address, connection, addressPeerMap[address])
+            }
             addressPeerMap.forEach { (address, peer) -> reportLinkDown(address, peer) }
             connectedDevices.clear()
             subscribedDevices.clear()
             addressPeerMap.clear()
+            links
         }
         pendingConnections.clear()
         scanRSSI.clear()
         firstAnnounceSeen.clear()
+        return removed
     }
 
     /**

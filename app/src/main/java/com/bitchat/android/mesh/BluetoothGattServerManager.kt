@@ -40,7 +40,8 @@ class BluetoothGattServerManager(
     private val bluetoothManager: BluetoothManager = 
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    private val bleAdvertiser: BluetoothLeAdvertiser? = bluetoothAdapter?.bluetoothLeAdvertiser
+    // 每次 start() 重新取得：藍牙關閉時拿到的是 null，重新開啟後舊的 advertiser 也可能已失效（P0-1）。
+    @Volatile private var bleAdvertiser: BluetoothLeAdvertiser? = null
     
     // GATT server for peripheral mode
     private var gattServer: BluetoothGattServer? = null
@@ -75,6 +76,15 @@ class BluetoothGattServerManager(
             Log.w(TAG, "Error disconnecting device ${device.address}: ${e.message}")
         }
     }
+
+    /**
+     * 本機已從連線表拆掉 [linkID] 這條 server 端鏈路，不等堆疊的斷線回呼。先忘掉它的 linkID，
+     * 之後這個位址晚到的寫入會被當成舊連線丟棄，再請堆疊斷線。
+     */
+    fun disconnectLink(device: BluetoothDevice, linkID: String) {
+        serverLinkIDs.remove(device.address, linkID)
+        disconnectDevice(device)
+    }
     
     /**
      * Start GATT server
@@ -99,10 +109,12 @@ class BluetoothGattServerManager(
             return false
         }
         
-        if (bleAdvertiser == null) {
+        val advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+        if (advertiser == null) {
             Log.e(TAG, "BLE advertiser not available")
             return false
         }
+        bleAdvertiser = advertiser
         
         isActive = true
         
@@ -131,25 +143,27 @@ class BluetoothGattServerManager(
 
         isActive = false
 
-        connectionScope.launch {
-            stopAdvertising()
-            
-            // Try to cancel any active connections explicitly before closing
-            try {
-                // Disconnect ALL server connections
-                val servers = connectionTracker.getConnectedDevices().values.filter { !it.isClient }
-                servers.forEach { d ->
-                    try { gattServer?.cancelConnection(d.device) } catch (_: Exception) { }
-                }
-            } catch (_: Exception) { }
-            
-            // Close GATT server
-            gattServer?.close()
-            gattServer = null
-            serverLinkIDs.clear()
-            
-            Log.i(TAG, "GATT server stopped")
+        // 呼叫端都在 connectionScope 的 coroutine 裡。同步做完，藍牙重建時接著呼叫的 start() 建立的
+        // 新 GATT server 才不會被晚一步執行的 close() 關掉。
+        stopAdvertising()
+        
+        // Try to cancel any active connections explicitly before closing
+        try {
+            // Disconnect ALL server connections
+            val servers = connectionTracker.getConnectedDevices().values.filter { !it.isClient }
+            servers.forEach { d ->
+                try { gattServer?.cancelConnection(d.device) } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+        
+        // Close GATT server
+        try { gattServer?.close() } catch (e: Exception) {
+            Log.w(TAG, "Error closing GATT server: ${e.message}")
         }
+        gattServer = null
+        serverLinkIDs.clear()
+        
+        Log.i(TAG, "GATT server stopped")
     }
     
     /**
@@ -203,10 +217,10 @@ class BluetoothGattServerManager(
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         Log.i(TAG, "Disconnected from ${device.address} (server)")
                         val linkID = serverLinkIDs.remove(device.address)
-                        // Capture the observed peer before cleanup drops the address mapping.
-                        val disconnectedPeerID = connectionTracker.addressPeerMap[device.address]
-                        if (linkID != null) {
-                            connectionTracker.cleanupDeviceConnectionIfCurrent(device.address, linkID)
+                        // 只取這一條鏈路自己確認過的 peer。linkID 為 null 表示本機已先拆掉這條鏈路、
+                        // 通知過上層（disconnectLink），這裡不再報一次 peer。
+                        val disconnectedPeerID = linkID?.let {
+                            connectionTracker.removeConnectionIfCurrent(device.address, it)?.observedPeerID
                         }
                         // Notify delegate about device disconnection so higher layers can update direct flags
                         delegate?.onDeviceDisconnected(device, linkID, disconnectedPeerID)
@@ -375,7 +389,8 @@ class BluetoothGattServerManager(
             Log.d(TAG, "Not starting advertising: GATT Server disabled via debug settings")
             return
         }
-        if (bleAdvertiser == null) {
+        val advertiser = bleAdvertiser
+        if (advertiser == null) {
             Log.w(TAG, "Not starting advertising: BLE advertiser not available on this device")
             return
         }
@@ -437,7 +452,7 @@ class BluetoothGattServerManager(
         }
         
         try {
-            bleAdvertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
+            advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
         } catch (se: SecurityException) {
             Log.e(TAG, "SecurityException starting advertising (missing permission?): ${se.message}")
         } catch (e: Exception) {
@@ -450,9 +465,10 @@ class BluetoothGattServerManager(
      */
     @Suppress("DEPRECATION")
     private fun stopAdvertising() {
-        if (!permissionManager.hasBluetoothPermissions() || bleAdvertiser == null) return
+        val advertiser = bleAdvertiser
+        if (!permissionManager.hasBluetoothPermissions() || advertiser == null) return
         try {
-            advertiseCallback?.let { cb -> bleAdvertiser.stopAdvertising(cb) }
+            advertiseCallback?.let { cb -> advertiser.stopAdvertising(cb) }
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping advertising: ${e.message}")
         }
