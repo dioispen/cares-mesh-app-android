@@ -49,7 +49,15 @@ class BluetoothPacketBroadcaster(
     private val fragmentManager: FragmentManager?,
     private val myPeerID: String,
     /** Field-experiment TX / RELAY and QFULL hook (#70): only here is a packet's real fanout known. */
-    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp,
+    /** 藍牙轉接器此刻是否為 `STATE_ON`；寫入被拒時用來分辨「鏈路忙碌」與「藍牙已關閉」（P0-1）。 */
+    private val isAdapterOn: () -> Boolean = { true },
+    /** 一條鏈路長時間一筆都送不出去：佇列已丟掉，交給上層在本機拆掉這條鏈路。 */
+    private val onLinkStalled: (deviceAddress: String, linkID: String) -> Unit = { _, _ -> },
+    /** binder 已失效或藍牙已關閉：所有佇列已丟掉，交給上層走藍牙關閉／重建流程。 */
+    private val onBluetoothFault: (reason: String) -> Unit = { },
+    /** 量測連續失敗多久用；單調時鐘，不受系統時間調整影響。 */
+    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L }
 ) {
     
     companion object {
@@ -151,6 +159,9 @@ class BluetoothPacketBroadcaster(
         var pendingBytes = 0
         var inFlight = false
         var retryScheduled = false
+        /** 連續沒被堆疊接受的次數；有一次被接受就歸零。 */
+        var startFailures = 0
+        var failingSinceMs = 0L
     }
 
     private val sendLock = Any()
@@ -557,6 +568,7 @@ class BluetoothPacketBroadcaster(
     @SuppressLint("MissingPermission", "ObsoleteSdkInt")
     private fun startHead(key: SendKey) {
         val request = synchronized(sendLock) { sendStates[key]?.pending?.peekFirst() } ?: return
+        var failure: Exception? = null
         val accepted = try {
             when (key.direction) {
                 SendDirection.CLIENT_WRITE -> {
@@ -593,10 +605,58 @@ class BluetoothPacketBroadcaster(
                 }
             }
         } catch (error: Exception) {
-            Log.w(TAG, "BLE ${key.direction} failed to start: ${error.message}")
+            failure = error
             false
         }
-        if (!accepted) rejectStart(key)
+        if (accepted) {
+            synchronized(sendLock) { sendStates[key]?.startFailures = 0 }
+        } else {
+            onStartRefused(key, failure)
+        }
+    }
+
+    /**
+     * 寫入沒被接受。以前一律 15 ms 後重試、永不放棄，失效的 GATT 物件因此被呼叫了十幾萬次（P0-1）。
+     * 現在只有鏈路暫時忙碌才重試；見 [LinkSendFailurePolicy]。
+     */
+    private fun onStartRefused(key: SendKey, error: Exception?) {
+        val binderDead = LinkSendFailurePolicy.isDeadBinder(error)
+        // binder 已失效時結果一定是重建，不必再問轉接器；查不到狀態時當作 ON，只照鏈路本身判斷。
+        val adapterOn = if (binderDead) true else try { isAdapterOn() } catch (_: Exception) { true }
+        val now = clockMs()
+        var firstFailure = false
+        val action = synchronized(sendLock) {
+            val state = sendStates[key] ?: return
+            if (state.startFailures == 0) {
+                state.failingSinceMs = now
+                firstFailure = true
+            }
+            state.startFailures++
+            LinkSendFailurePolicy.decide(
+                binderDead = binderDead,
+                adapterOn = adapterOn,
+                consecutiveFailures = state.startFailures,
+                failingForMs = now - state.failingSinceMs
+            )
+        }
+        // 同一串失敗只記第一筆，避免像試跑那樣每 15 ms 一行。
+        if (firstFailure && error != null) {
+            Log.w(TAG, "BLE ${key.direction} failed to start: ${error.message}")
+        }
+        when (action) {
+            LinkSendFailurePolicy.Action.RETRY -> rejectStart(key)
+            LinkSendFailurePolicy.Action.DROP_LINK -> {
+                Log.w(TAG, "BLE ${key.direction} to ${key.deviceAddress} refused for ${LinkSendFailurePolicy.STALL_TIMEOUT_MS / 1000}s; dropping link")
+                onLinkDisconnected(key.deviceAddress, key.linkID)
+                onLinkStalled(key.deviceAddress, key.linkID)
+            }
+            LinkSendFailurePolicy.Action.RESTART_BLUETOOTH -> {
+                val reason = if (binderDead) "dead binder on ${key.direction}" else "${key.direction} refused while adapter is not on"
+                Log.w(TAG, "BLE $reason; dropping all pending sends")
+                clearPendingSends()
+                onBluetoothFault(reason)
+            }
+        }
     }
 
     private fun rejectStart(key: SendKey): Boolean {
@@ -671,6 +731,11 @@ class BluetoothPacketBroadcaster(
                 key.deviceAddress == deviceAddress && (linkID == null || key.linkID == linkID)
             }
         }
+    }
+
+    /** 藍牙關閉或失效：每條鏈路的待送佇列都丟掉，排定中的重試看到狀態不在了就不會再寫入。 */
+    fun clearPendingSends() {
+        synchronized(sendLock) { sendStates.clear() }
     }
     
     /**

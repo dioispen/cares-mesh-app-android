@@ -55,13 +55,15 @@
 
 | 狀態 | 模式 | BLE 掃描 | 廣播模式 / 發射功率 | Announce 間隔 |
 |---|---|---|---|---|
-| 前景、未充電、電量 > 20% | BALANCED | 掃 8 s／停 2 s | BALANCED / MEDIUM | 30 s |
+| 前景、未充電、電量 > 20% | BALANCED | 掃 8 s／停 2 s | BALANCED / MEDIUM<br>無直連鄰居：BALANCED / HIGH | 30 s |
 | 前景、充電中（含接 USB、行動電源） | PERFORMANCE | 連續掃描 | LOW_LATENCY / HIGH | 30 s |
-| 前景、電量 11–20% | POWER_SAVER | 掃 2 s／停 28 s | LOW_POWER / LOW | 60 s |
-| 前景、電量 ≤ 10% | ULTRA_LOW_POWER | 掃 1 s／停 29 s | LOW_POWER / ULTRA_LOW | 120 s |
-| 背景、電量 > 20% | POWER_SAVER | 掃 1 s／停 29 s（有直連鄰居）<br>掃 1 s／停 59 s（無直連鄰居） | LOW_POWER / LOW | 60 s |
-| 背景、電量 11–20% | POWER_SAVER | 同上 | LOW_POWER / LOW | 120 s |
-| 背景、電量 ≤ 10% | ULTRA_LOW_POWER | 同上 | LOW_POWER / ULTRA_LOW | 300 s |
+| 前景、電量 11–20% | POWER_SAVER | 掃 2 s／停 28 s | LOW_POWER / LOW<br>無直連鄰居：BALANCED / HIGH | 60 s |
+| 前景、電量 ≤ 10% | ULTRA_LOW_POWER | 掃 1 s／停 29 s | LOW_POWER / ULTRA_LOW<br>無直連鄰居：LOW_POWER / MEDIUM | 120 s |
+| 背景、電量 > 20% | POWER_SAVER | 掃 1 s／停 29 s（有直連鄰居）<br>掃 4 s／停 26 s，掃描模式 BALANCED（無直連鄰居） | LOW_POWER / LOW<br>無直連鄰居：BALANCED / HIGH | 60 s |
+| 背景、電量 11–20% | POWER_SAVER | 同上 | 同上 | 120 s |
+| 背景、電量 ≤ 10% | ULTRA_LOW_POWER | 同上 | LOW_POWER / ULTRA_LOW<br>無直連鄰居：LOW_POWER / MEDIUM | 300 s |
+
+「無直連鄰居」時的掃描與廣播、以及發起連線的 RSSI 門檻，見 [ADR-0013](../adr/0013-connection-policy-favours-sparse-networks.md)。門檻不再只看模式：直連的 peer 少於 2 個時 −115 dBm（聽得到就連）；連線數 ≥ 上限 − 1 時維持 −95／−85／−75／−65 dBm（PERFORMANCE／BALANCED／POWER_SAVER／ULTRA_LOW_POWER）；其他情況 −115 dBm，ULTRA_LOW_POWER 為 −95 dBm。**斷線後手機變成孤立，廣播會變強**，距離類的 run 要把這點寫進紀錄。
 
 **除了 E4 以外，所有實驗都固定在 BALANCED 模式**：
 
@@ -152,7 +154,7 @@ Debug 限定的畫面，可設定的參數：
 - 發送迴圈跑在 `MeshForegroundService` 的 scope 裡，app 進背景、離開實驗畫面都會繼續送。
 - 只走 mesh，不寫入 Firestore。
 
-**為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 3（[BitchatFlutterChannels.kt](../../app/src/main/java/com/bitchat/android/flutter/BitchatFlutterChannels.kt) 的 `sendHealthReportPacket`），依程式碼推算最遠只到第 4 跳。要量 7 支手機線性鏈（6 跳）的物理極限，必須用 TTL 7。
+**為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 3（[AppConstants.kt](../../app/src/main/java/com/bitchat/android/util/AppConstants.kt) 的 `HEALTH_REPORT_TTL_HOPS`），依程式碼推算最遠只到第 4 跳。要量 7 支手機線性鏈（6 跳）的物理極限，必須用 TTL 7。
 
 **(c) 現場即時計數**
 

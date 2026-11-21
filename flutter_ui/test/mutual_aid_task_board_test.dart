@@ -302,6 +302,18 @@ void main() {
       );
     });
 
+    // ADR-0012：Reporter 的裝置每 30 分鐘重發舉著 SOS 的回報，reportTime 不變。
+    test('已完成，收到同一則舉著 SOS 的回報的重發：維持已完成', () async {
+      expect(
+        await progressAfter(
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, sos: true, secs: 1700000000),
+          TaskStatus.done,
+          _payload(handle: 'bbbbbbbbbbbb', status: 2, sos: true, secs: 1700000000),
+        ),
+        TaskStatus.done,
+      );
+    });
+
     test('較舊的回報晚到時不影響進度', () async {
       expect(
         await progressAfter(

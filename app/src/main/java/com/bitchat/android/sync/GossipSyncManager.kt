@@ -175,6 +175,12 @@ class GossipSyncManager(
                 Log.d(TAG, "Ignoring expired HEALTH_REPORT (age=${age}ms)")
                 return
             }
+            // Aged by our clock: a sender clock running fast would keep it here past retention,
+            // and as the newest per sender it would shadow their real reports until then
+            if (-age > AppConstants.Sync.HEALTH_REPORT_MAX_FUTURE_SKEW_MS) {
+                Log.d(TAG, "Ignoring future-dated HEALTH_REPORT (${-age}ms ahead)")
+                return
+            }
             val sender = packet.senderID.joinToString("") { b -> "%02x".format(b) }
             // A relayed or synced copy can arrive after a newer one: keep the newest only
             latestHealthReportBySender.compute(sender) { _, existing ->

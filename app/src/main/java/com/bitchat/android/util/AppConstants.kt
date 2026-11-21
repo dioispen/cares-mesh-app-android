@@ -10,6 +10,25 @@ object AppConstants {
     val MESSAGE_TTL_HOPS: UByte = 7u     // Default TTL for regular packets
     val SYNC_TTL_HOPS: UByte = 0u        // TTL for neighbor-only sync packets
 
+    /**
+     * Health Report（包括帶 SOS 的）送出時的 TTL：flood 最遠到第 4 跳。刻意低於 [MESSAGE_TTL_HOPS]
+     * （#14），依據是 2026-11-18 四機實地試跑報告的 §11.1 與 §13.3 P1-7：
+     *
+     * - **TTL 只決定快的那條路，不決定到不到。** 每台裝置都把各 Reporter 最新的 Health Report 留在同步
+     *   暫存，anti-entropy 同步（[SYNC_TTL_HOPS]）會一跳一跳把它帶到 TTL 範圍外。flood 每跳約 +50 ms；
+     *   同步在新連線約 1 s 後補送，已連著的鏈路每跳最多 30 s。所以 TTL 決定的是「幾跳內能在約 1 秒內
+     *   收到」。也因此 TTL 不是 Health Report 擴散範圍的上限，拿來當隱私半徑並不成立。
+     * - **TTL ≤ 4 才能讓每一跳都保有轉發衰減。** 轉發前 TTL 先扣 1，扣完若仍 ≥
+     *   [com.bitchat.android.mesh.RelayPolicy.unconditionalRelayTtl]（預設 4），Relay Decision 就跳過依
+     *   網路規模的轉發機率。TTL 3 第一次轉發就降到 2，每一跳都走機率；TTL 7 會讓前 3 代轉發一律送出，
+     *   大型 mesh 的 flood 成本跟著放大。`HealthReportBroadcastTest` 鎖住這個關係，只改一邊就會失敗。
+     * - **SOS 暫不另設 TTL**（ADR-0004）：要不要提高，等 E1-C（7 機比較 TTL 3 與 7）與 policy-level
+     *   模擬（ADR-0001）的結果再決定。
+     *
+     * 只有實驗發送器（#70）經 `HealthReportBroadcast.send(ttl = …)` 覆寫。
+     */
+    val HEALTH_REPORT_TTL_HOPS: UByte = 3u
+
     object Mesh {
         // Peer lifecycle
         const val STALE_PEER_TIMEOUT_MS: Long = 180_000L // 3 minutes
@@ -22,6 +41,15 @@ object AppConstants {
         const val CONNECTION_CLEANUP_DELAY_MS: Long = 500L
         const val CONNECTION_CLEANUP_INTERVAL_MS: Long = 30_000L
         const val BROADCAST_CLEANUP_DELAY_MS: Long = 500L
+
+        // 殭屍連線偵測（P0-2，2026-11-18 四機試跑 12.1：C 掛著 2–3 條連線 20 分鐘，一筆都沒收到）。
+        // 一條鏈路超過這麼久沒收到任何封包，就在本機斷開讓它重連。門檻必須大於鄰居的心跳間隔，
+        // 否則會誤殺安靜但正常的連線：鄰居每 30 s 在每條鏈路送一次 REQUEST_SYNC（它休眠時會拉長
+        // 到約 60 s），背景時 ANNOUNCE 間隔是 60–300 s，不能拿來當心跳。時間以不含深度睡眠的
+        // 單調時鐘計，本機睡著的那段不算閒置。
+        const val LINK_IDLE_TIMEOUT_MS: Long = 90_000L
+        // 多久檢查一次；一條鏈路最晚在門檻後再過一個間隔被斷開。
+        const val LINK_IDLE_CHECK_INTERVAL_MS: Long = 15_000L
 
         object Gatt {
             val SERVICE_UUID: UUID = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
@@ -36,6 +64,18 @@ object AppConstants {
         // packet timestamp. Long enough for a Rescuer to walk into range within tens of minutes,
         // short enough that reports from people who left or changed Status don't linger (#91).
         const val HEALTH_REPORT_RETENTION_MS: Long = 2 * 60 * 60 * 1000L
+        // How far ahead of our clock a Health Report's timestamp may be and still enter the sync
+        // set. Its age is counted by our own clock, so a report from a phone whose clock runs
+        // hours fast would otherwise stay that much longer than the retention period. The
+        // 2026-11-18 trial measured at most 1.3 s between four phones; 10 min matches the ANNOUNCE
+        // skew limit (AnnouncementIdentityValidator) and the mesh_reports rule for reportTime,
+        // and keeps any report at most 2 h 10 min.
+        const val HEALTH_REPORT_MAX_FUTURE_SKEW_MS: Long = 10 * 60 * 1000L
+        // A standing Health Report (SOS raised, or Status 輕傷/重傷) is sent again, newly signed
+        // and timestamped, this long after the last send (ADR-0012). Must stay well below
+        // HEALTH_REPORT_RETENTION_MS: four sends per retention period, so the report outlives a
+        // re-send that reached nobody or a wait that Doze stretched.
+        const val STANDING_REPORT_RESEND_INTERVAL_MS: Long = 30 * 60 * 1000L
         // Upper bound on senders whose signing key is remembered, after they leave, for verifying
         // their synced Health Reports (#95). Well above the sync set's per-sender capacity.
         const val MAX_HEALTH_REPORT_SIGNING_KEYS: Int = 1_000

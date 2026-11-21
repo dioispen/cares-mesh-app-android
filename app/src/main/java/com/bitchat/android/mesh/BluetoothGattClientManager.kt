@@ -46,7 +46,8 @@ class BluetoothGattClientManager(
     private val bluetoothManager: BluetoothManager = 
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    private val bleScanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
+    // 每次 start() 重新取得：藍牙關閉時拿到的是 null，重新開啟後舊的 scanner 也可能已失效（P0-1）。
+    @Volatile private var bleScanner: BluetoothLeScanner? = null
 
     private fun isBleTransportEnabled(): Boolean {
         return try {
@@ -124,10 +125,12 @@ class BluetoothGattClientManager(
             return false
         }
         
-        if (bleScanner == null) {
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
+        if (scanner == null) {
             Log.e(TAG, "BLE scanner not available")
             return false
         }
+        bleScanner = scanner
         
         isActive = true
         
@@ -154,18 +157,18 @@ class BluetoothGattClientManager(
 
         isActive = false
         
-        connectionScope.launch {
-            // Disconnect all client connections decisively
-            try {
-                val conns = connectionTracker.getConnectedDevices().values.filter { it.isClient && it.gatt != null }
-                conns.forEach { dc ->
-                    try { dc.gatt?.disconnect() } catch (_: Exception) { }
-                }
-            } catch (_: Exception) { }
-            
-            stopScanning()
-            Log.i(TAG, "GATT client manager stopped")
-        }
+        // 呼叫端都在 connectionScope 的 coroutine 裡。同步做完，藍牙重建時接著呼叫的 start() 才不會
+        // 被晚一步執行的 stopScanning() 停掉新的掃描。
+        // Disconnect all client connections decisively
+        try {
+            val conns = connectionTracker.getConnectedDevices().values.filter { it.isClient && it.gatt != null }
+            conns.forEach { dc ->
+                try { dc.gatt?.disconnect() } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+        
+        stopScanning()
+        Log.i(TAG, "GATT client manager stopped")
     }
     
     /**
@@ -188,7 +191,8 @@ class BluetoothGattClientManager(
     private fun startScanning() {
         // Respect debug setting
         val enabled = isClientRoleEnabled()
-        if (!permissionManager.hasBluetoothPermissions() || bleScanner == null || !isActive || !enabled) return
+        val scanner = bleScanner
+        if (!permissionManager.hasBluetoothPermissions() || scanner == null || !isActive || !enabled) return
         
         // Rate limit scan starts to prevent "scanning too frequently" errors
         val currentTime = System.currentTimeMillis()
@@ -268,7 +272,7 @@ class BluetoothGattClientManager(
             lastScanStartTime = currentTime
             isCurrentlyScanning = true
             
-            bleScanner.startScan(scanFilters, powerManager.getScanSettings(), scanCallback)
+            scanner.startScan(scanFilters, powerManager.getScanSettings(), scanCallback)
             Log.i(TAG, "BLE scan started")
         } catch (e: Exception) {
             Log.e(TAG, "Exception starting scan: ${e.message}")
@@ -281,12 +285,13 @@ class BluetoothGattClientManager(
      */
     @Suppress("DEPRECATION")
     private fun stopScanning() {
-        if (!permissionManager.hasBluetoothPermissions() || bleScanner == null) return
+        val scanner = bleScanner
+        if (!permissionManager.hasBluetoothPermissions() || scanner == null) return
         
         if (isCurrentlyScanning) {
             try {
                 scanCallback?.let {
-                    bleScanner.stopScan(it)
+                    scanner.stopScan(it)
                     Log.i(TAG, "BLE scan stopped")
                 }
             } catch (e: Exception) {
@@ -397,14 +402,15 @@ class BluetoothGattClientManager(
 
         experimentRecorder.onScanRssi(peerID, deviceAddress, rssi)
 
+        // Store RSSI from scan results for later use: for server connections, and, before the
+        // connected-peer return below, to keep connected peers' strength fresh (P1-5).
+        connectionTracker.updateScanRSSI(deviceAddress, rssi, peerID)
+
         if (peerID != null) {
             if (connectionTracker.isPeerConnected(peerID)) {
                  return
             }
         }
-
-        // Store RSSI from scan results for later use (especially for server connections)
-        connectionTracker.updateScanRSSI(deviceAddress, rssi)
 
         // Publish scan result to debug UI buffer
         try {
@@ -418,8 +424,19 @@ class BluetoothGattClientManager(
             )
         } catch (_: Exception) { }
         
-        // Power-aware RSSI filtering
-        if (rssi < powerManager.getRSSIThreshold()) {
+        // Connection limits: the RSSI threshold depends on how full they are.
+        val dbg = try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (_: Exception) { null }
+        val maxOverall = dbg?.maxConnectionsOverall?.value ?: powerManager.getMaxConnections()
+        val maxClient = dbg?.maxClientConnections?.value ?: maxOverall
+
+        // Situational RSSI filtering (P1-5, ADR-0013)
+        val threshold = powerManager.getRSSIThreshold(
+            directPeerCount = connectionTracker.getDirectPeerCount(),
+            connectionCount = connectionTracker.getConnectedDeviceCount(),
+            maxConnections = maxOverall
+        )
+        logThresholdChange(threshold)
+        if (rssi < threshold.dbm) {
             // Even if we skip connecting, still publish scan result to debug UI
             try {
                 DebugSettingsManager.getInstance().addScanResult(
@@ -444,12 +461,15 @@ class BluetoothGattClientManager(
             return
         }
         
-        // Check if connection limit is reached
-        val dbg = try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (_: Exception) { null }
-        val maxOverall = dbg?.maxConnectionsOverall?.value ?: powerManager.getMaxConnections()
-        val maxClient = dbg?.maxClientConnections?.value ?: maxOverall
+        // No second connectGatt while one is in flight; back off from edge-of-range failures (P1-5)
+        if (!edgeConnectGuard.mayAttempt(deviceAddress, rssi)) {
+            return
+        }
 
+        // Check if connection limit is reached
         if (!connectionTracker.canConnectAsClient(maxOverall, maxClient)) {
+            // Full: a clearly stronger candidate may take the weakest link's place (P1-5)
+            replaceWeakestLinkWith(device, rssi, peerID)
             return
         }
         
@@ -459,6 +479,47 @@ class BluetoothGattClientManager(
         }
     }
     
+    // Connection policy (P1-5, ADR-0013): the threshold logged once per change, not per advertisement.
+    @Volatile private var lastThreshold: ConnectionRssiThreshold.Decision? = null
+    private val weakLinkReplacement = WeakLinkReplacement()
+    private val edgeConnectGuard = EdgeConnectGuard()
+
+    private fun logThresholdChange(decision: ConnectionRssiThreshold.Decision) {
+        if (lastThreshold == decision) return
+        lastThreshold = decision
+        Log.i(TAG, "Connect RSSI threshold: ${decision.dbm} dBm (${decision.reason})")
+    }
+
+    /**
+     * Every slot is taken: if [rssi] is clearly stronger than the weakest outbound link, drop that
+     * link and connect to [device] instead (P1-5). Only an identified peer not linked yet takes a
+     * slot this way, so a second link to a neighbour never pushes a different neighbour out. Only
+     * outbound links are dropped, as enforceStrictLimits also prefers them; if the new link comes
+     * up before the old one is gone, enforceStrictLimits drops the weakest, the same link.
+     */
+    private fun replaceWeakestLinkWith(device: BluetoothDevice, rssi: Int, peerID: String?) {
+        if (peerID == null || connectionTracker.isPeerDirectlyConnected(peerID)) return
+        val (weakest, weakestRssi) = connectionTracker.getWeakestClientLink() ?: return
+        if (!weakLinkReplacement.shouldReplace(rssi, weakestRssi)) return
+        if (!connectionTracker.addPendingConnection(device.address)) return
+        Log.i(TAG, "Replacing weakest link ${weakest.device.address} ($weakestRssi dBm) with ${device.address} ($rssi dBm)")
+        try { weakest.gatt?.disconnect() } catch (_: Exception) { }
+        connectToDevice(device, rssi, peerID)
+    }
+
+    /** Cancels [attempt] if it is still connecting when its timeout elapses ([EdgeConnectGuard]). */
+    private fun armConnectTimeout(attempt: EdgeConnectGuard.Attempt, gatt: BluetoothGatt) {
+        connectionScope.launch {
+            delay(attempt.timeoutMs)
+            if (!edgeConnectGuard.onTimeout(attempt)) return@launch
+            Log.w(TAG, "Connect to ${attempt.address} (scan ${attempt.rssi} dBm) timed out after ${attempt.timeoutMs} ms; " +
+                "next try in ${edgeConnectGuard.backoffRemainingMs(attempt.address)} ms")
+            try { gatt.disconnect() } catch (_: Exception) { }
+            try { gatt.close() } catch (_: Exception) { }
+            connectionTracker.removePendingConnection(attempt.address)
+        }
+    }
+
     /**
      * Connect to a device as GATT client
      */
@@ -469,6 +530,8 @@ class BluetoothGattClientManager(
 
         val deviceAddress = device.address
         val linkID = UUID.randomUUID().toString()
+        // One connectGatt per address in flight, with a timeout (P1-5, EdgeConnectGuard)
+        val attempt = edgeConnectGuard.begin(deviceAddress, rssi) ?: return
         Log.d(TAG, "Connecting to bitchat device: $deviceAddress (peerID: $peerID)")
 
         val gattCallback = object : BluetoothGattCallback() {
@@ -480,14 +543,17 @@ class BluetoothGattClientManager(
                         gatt.requestMtu(517)
                     }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    edgeConnectGuard.onEnded(attempt)
                     if (status != BluetoothGatt.GATT_SUCCESS) {
                         Log.w(TAG, "Disconnected from $deviceAddress with error status $status (client)")
                     } else {
                         Log.i(TAG, "Disconnected from $deviceAddress (client)")
                     }
-                    // Capture the observed peer before cleanup drops the address mapping.
-                    val disconnectedPeerID = connectionTracker.addressPeerMap[deviceAddress]
-                    connectionTracker.cleanupDeviceConnectionIfCurrent(deviceAddress, linkID)
+                    // 只取這一條鏈路自己確認過的 peer。鏈路可能已在本機拆掉（藍牙關閉、閒置過久），
+                    // 同一個位址上的新鏈路的 peer 不能被當成這次斷線。
+                    val disconnectedPeerID = connectionTracker
+                        .removeConnectionIfCurrent(deviceAddress, linkID)
+                        ?.observedPeerID
 
                     // Notify higher layers about device disconnection to update direct flags
                     delegate?.onDeviceDisconnected(gatt.device, linkID, disconnectedPeerID)
@@ -507,6 +573,11 @@ class BluetoothGattClientManager(
                 val deviceAddress = gatt.device.address
 
                 if (status == BluetoothGatt.GATT_SUCCESS) {
+                    // Timed out and cancelled meanwhile: drop this link rather than use it.
+                    if (!edgeConnectGuard.onLinkReady(attempt)) {
+                        gatt.disconnect()
+                        return
+                    }
                     // Now that MTU is set, connection is fully ready.
                     val deviceConn = BluetoothConnectionTracker.DeviceConnection(
                         device = gatt.device,
@@ -597,11 +668,15 @@ class BluetoothGattClientManager(
             val gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
             if (gatt == null) {
                 Log.e(TAG, "connectGatt returned null for $deviceAddress")
+                edgeConnectGuard.onEnded(attempt)
                 // keep the pending connection so we can avoid too many reconnections attempts, TODO: needs testing
                 // connectionTracker.removePendingConnection(deviceAddress)
+            } else {
+                armConnectTimeout(attempt, gatt)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Client: Exception connecting to $deviceAddress: ${e.message}")
+            edgeConnectGuard.onEnded(attempt)
             // keep the pending connection so we can avoid too many reconnections attempts, TODO: needs testing
             // connectionTracker.removePendingConnection(deviceAddress)
         }

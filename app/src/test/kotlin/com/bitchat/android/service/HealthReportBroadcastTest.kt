@@ -2,11 +2,13 @@ package com.bitchat.android.service
 
 import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshPacketUtils
+import com.bitchat.android.mesh.RelayPolicy
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doReturn
@@ -29,6 +31,19 @@ class HealthReportBroadcastTest {
         assertEquals(null, packet.recipientID)
         assertEquals(1_700_000_000_500uL, packet.timestamp)
         assertArrayEquals(byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) + payload, packet.payload)
+    }
+
+    @Test
+    fun `a Health Report relayed once stays below the unconditional relay threshold`() {
+        // AppConstants.HEALTH_REPORT_TTL_HOPS 與 RelayPolicy 的預設門檻一起讓 Health Report 每一跳都保有
+        // 轉發衰減（取捨見 HEALTH_REPORT_TTL_HOPS）。只改其中一個常數，這裡就會失敗。
+        val relayedTtl = HealthReportBroadcast.packet(sender, payload).ttl - 1u
+        val threshold = RelayPolicy().unconditionalRelayTtl
+
+        assertTrue(
+            "a Health Report relayed with TTL $relayedTtl would skip the relay probability (threshold $threshold)",
+            relayedTtl < threshold
+        )
     }
 
     @Test
