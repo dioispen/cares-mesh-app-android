@@ -26,7 +26,8 @@ internal fun hex(text: String): ByteArray {
 /**
  * The appendix test vectors of docs/ADMIN_NOTICE_V1.md, and notices signed on the fly with the same
  * test key for the cases the vectors do not cover. The key's private seed is published in the spec:
- * test-only, never part of [AdminKeyTable.PRODUCTION].
+ * test-only, never part of [AdminKeyTable.PRODUCTION]. Every vector read is a fresh copy, so a test
+ * that tampers with one cannot change it for the tests after it.
  */
 internal object TestAdminNotices {
     const val TEST_ADMIN_SEED_HEX = "1400079ad9d2b9d0728405120c081de046ea67a696bbbc1575b97ba7d8d03085"
@@ -43,7 +44,8 @@ internal object TestAdminNotices {
     const val V1_CONTENT = "土石流警戒：請立即撤離至大同國小避難所"
 
     /** V1 broadcast, urgent. */
-    val V1 = hex(
+    val V1: ByteArray get() = V1_WIRE.copyOf()
+    private val V1_WIRE = hex(
         """
         01010103a1b2c3d4e5f60718000001a160e85000000001a16231e70000000000
         00000000e59c9fe79fb3e6b581e8ada6e68892efbc9ae8ab8be7ab8be58db3e6
@@ -63,7 +65,8 @@ internal object TestAdminNotices {
     const val OUTSIDER_PRIVATE_HEX = "25c0ec1c0a16c67a57e0bd636008e61851a10ff8f27ebe488fd07cb570ef5ce0"
 
     /** V2 targeted, important, two recipients. */
-    val V2 = hex(
+    val V2: ByteArray get() = V2_WIRE.copyOf()
+    private val V2_WIRE = hex(
         """
         010201020f1e2d3c4b5a6978000001a160e85000000001a161562d0000000000
         00000000a722369abb0be24a97efa8dba00415b782bd5cd532f5e8f95987deb5
@@ -81,7 +84,8 @@ internal object TestAdminNotices {
     const val V3_MESSAGE_ID = "5566778899aabbcc"
 
     /** V3 pure revoke of V1: broadcast kind, empty body, replaces = V1. */
-    val V3 = hex(
+    val V3: ByteArray get() = V3_WIRE.copyOf()
+    private val V3_WIRE = hex(
         """
         010101035566778899aabbcc000001a160f177c0000001a16231e700a1b2c3d4
         e5f60718906c626ca840e351bfaa44b6778bc7ca50e99aa5470cb920602c403d
@@ -91,7 +95,8 @@ internal object TestAdminNotices {
     )
 
     /** V4: V1 with its level tampered (0x03 → 0x01); the signature must fail. */
-    val V4 = hex(
+    val V4: ByteArray get() = V4_WIRE.copyOf()
+    private val V4_WIRE = hex(
         """
         01010101a1b2c3d4e5f60718000001a160e85000000001a16231e70000000000
         00000000e59c9fe79fb3e6b581e8ada6e68892efbc9ae8ab8be7ab8be58db3e6
@@ -108,7 +113,8 @@ internal object TestAdminNotices {
      * V5 targeted, urgent, five recipients and 300 bytes of content: a 661-byte payload, so its
      * 683-byte outer packet is split into two fragments on the mesh (實作前待驗證 1).
      */
-    val V5 = hex(
+    val V5: ByteArray get() = V5_WIRE.copyOf()
+    private val V5_WIRE = hex(
         """
         010201037a5b3c1d9e8f6a42000001a160e85000000001a161c40a0000000000
         000000007ff2642665620d4564fdd4296d74d00b6d4345dbccce0804f17e97af
