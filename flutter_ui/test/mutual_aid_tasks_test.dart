@@ -483,6 +483,25 @@ void main() {
           ['bbbbbbbbbbbb', 'cccccccccccc']);
     });
 
+    // ADR-0012：Reporter 的裝置每 30 分鐘以新的封包重發成立中的回報，payload（含 reportTime）不變
+    test('成立中回報的重發只留一筆，Rescuer 已接下的任務狀態不變', () {
+      final sent = BroadcastHealthReport(reporterHandle: 'aaaaaaaaaaaa', status: '重傷', sos: true, reportTime: t1);
+      final resent = BroadcastHealthReport(reporterHandle: 'aaaaaaaaaaaa', status: '重傷', sos: true, reportTime: t1);
+
+      final merged = mergeBleReport([sent], resent);
+      final tasks = buildMutualAidTasks(
+        reports: const [],
+        bleTasks: [for (final r in merged) bleTaskFrom(r, myLat: null, myLng: null)],
+        currentUserId: 'me',
+        myLat: null,
+        myLng: null,
+        bleStatusOverrides: const {'ble_aaaaaaaaaaaa': TaskStatus.accepted},
+      );
+
+      expect(merged, hasLength(1));
+      expect(tasks.single.status, TaskStatus.accepted);
+    });
+
     test('不同 Reporter Handle 各留一筆，新來的排在後面', () {
       final merged = mergeBleReport([ble('bbbbbbbbbbbb', t2)], ble('aaaaaaaaaaaa', t1));
 

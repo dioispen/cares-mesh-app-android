@@ -4,6 +4,7 @@ import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.util.AppConstants
 
 /**
  * 把 Health Report 的 Broadcast Tier 交給 mesh 廣播。bridge 的 `sendHealthReport` 與實驗發送器
@@ -11,8 +12,8 @@ import com.bitchat.android.protocol.MessageType
  */
 object HealthReportBroadcast {
 
-    /** 現行 Health Report 的 TTL。要不要改屬於 #14，不在這裡改。 */
-    val DEFAULT_TTL: UByte = 3u
+    /** [packet] 與 [send] 的預設 TTL。值與取捨寫在 [AppConstants.HEALTH_REPORT_TTL_HOPS]（#14）。 */
+    val DEFAULT_TTL: UByte = AppConstants.HEALTH_REPORT_TTL_HOPS
 
     /** 把 [payload]（已編碼、未加 tag 的 Broadcast Tier）包成由 [senderID] 發出的 HEALTH_REPORT 封包。 */
     fun packet(

@@ -390,6 +390,28 @@ class GossipSyncManagerHealthReportTest {
     }
 
     @Test
+    fun `keeps a health report from a clock that runs up to the skew limit fast`() {
+        val ahead = healthReport(reporterA, now + AppConstants.Sync.HEALTH_REPORT_MAX_FUTURE_SKEW_MS)
+
+        manager.onPublicPacketSeen(ahead)
+
+        assertEquals(listOf(ahead), syncedHealthReports())
+    }
+
+    @Test
+    fun `ignores a health report dated further ahead than the skew limit`() {
+        val current = healthReport(reporterA, now - 10_000, status = 1)
+        manager.onPublicPacketSeen(current)
+
+        // A clock hours fast would keep it past retention and shadow the sender's real reports
+        manager.onPublicPacketSeen(
+            healthReport(reporterA, now + AppConstants.Sync.HEALTH_REPORT_MAX_FUTURE_SKEW_MS + 1, status = 2)
+        )
+
+        assertEquals(listOf(current), syncedHealthReports())
+    }
+
+    @Test
     fun `each sync reply is reported to the experiment recorder with the requester as peer`() {
         val announce = announce(reporterA, now - 20_000)
         val report = healthReport(reporterA, now - 10_000)
@@ -483,9 +505,8 @@ class GossipSyncManagerHealthReportTest {
     private fun hex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private companion object {
-        // 與 BitchatFlutterChannels.sendHealthReportPacket 送出時的 TTL 相同；同步回送會改成 SYNC_TTL_HOPS，
-        // 比對前還原回來
-        val HEALTH_REPORT_TTL: UByte = 3u
+        // Health Report 送出時的 TTL；同步回送會改成 SYNC_TTL_HOPS，比對前還原回來
+        val HEALTH_REPORT_TTL: UByte = AppConstants.HEALTH_REPORT_TTL_HOPS
         val ANNOUNCE_TTL: UByte = 7u
 
         // ConfigProvider.gcsTargetFpr() 回傳的是 0..1 的比例，不是百分比
