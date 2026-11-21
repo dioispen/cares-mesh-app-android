@@ -493,6 +493,24 @@ void main() {
       expect((await SharedPreferences.getInstance()).getString('app_user'), isNotNull);
       expect(find.text('login screen'), findsNothing);
     });
+
+    testWidgets('targeted Admin Notices that cannot be deleted are reported and nothing else is cleared (#140)',
+        (tester) async {
+      clearNoticeKey = () async => throw PlatformException(code: 'NOTICE_STORE_UNAVAILABLE', message: 'disk full');
+      await pumpSettings(tester);
+      await openPanicDialog(tester);
+
+      await tester.enterText(find.byType(TextField).last, '清除');
+      await tester.pump();
+      await tester.tap(confirmButton());
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('清除未完成'), findsOneWidget);
+      expect(find.textContaining('無法刪除這支手機上給你的管理員公告'), findsOneWidget);
+      expect(account, ['nativePanic']);
+      expect((await SharedPreferences.getInstance()).getString('app_user'), isNotNull);
+      expect(find.text('login screen'), findsNothing);
+    });
   });
 
   testWidgets('about shows the version', (tester) async {

@@ -418,8 +418,13 @@ class BitchatBridge {
       _method.invokeMethod<Uint8List>(AdminNoticeMethods.getPublicKey, <String, dynamic>{'uid': uid});
 
   /// 刪除這支手機的 Admin Notice 收件私鑰（#140）：登出與緊急清除時呼叫，之後這支手機解不開任何
-  /// 定向公告，直到下次登入產生新的一把。正常完成就表示私鑰已從磁碟刪除；錯誤同
-  /// [getAdminNoticePublicKey]，往上拋。
+  /// 定向公告，直到下次登入產生新的一把。已經解開、存在本機的定向公告也一併刪除並收回通知，
+  /// 下一個登入的帳號看不到；廣播是公開的，留著。列表的變化經 [AdminNoticeEvents.notices] 推來。
+  ///
+  /// 正常完成就表示私鑰與定向公告都已從磁碟刪除。私鑰刪不掉丟 [PlatformException]
+  /// （[AdminNoticeErrors.keyStoreUnavailable]），公告刪不掉丟 [AdminNoticeErrors.noticeStoreUnavailable]；
+  /// 兩步都會試過才回報，重試無害。沒有原生 mesh 的平台（iOS、測試）丟 [MissingPluginException]。
+  /// 都往上拋。
   static Future<void> clearAdminNoticeKey() => _method.invokeMethod<void>(AdminNoticeMethods.clearKey);
 
   /// 這支手機收到、還在保留期（expiresAt 後 7 天）內的所有 Admin Notice，新的在前（#142）。每一則是

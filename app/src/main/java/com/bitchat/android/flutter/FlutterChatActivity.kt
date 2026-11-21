@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.bitchat.android.adminnotice.AdminNotices
+import com.bitchat.android.adminnotice.SystemAdminNoticeNotifier
 import com.bitchat.android.adminnotice.recordFirstRead
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
@@ -170,10 +171,12 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         settingsBridge = settings
         // Both stores are process-wide: the mesh service decrypts with the same recipient key, and
         // the Inbox's presenter writes the notices this engine lists. The first reading of a
-        // targeted notice writes its readAt receipt (#143).
+        // targeted notice writes its readAt receipt (#143). Sign-out's clearKey takes back the
+        // notifications of the targeted notices it deletes.
         val adminNotice = AdminNoticeBridge(
             keyStore = { AdminNoticeRecipientKeyStore.getInstance(applicationContext) },
             notices = AdminNotices.store(applicationContext),
+            notifier = SystemAdminNoticeNotifier(applicationContext),
             events = events,
             onFirstRead = AdminNotices.receipts::recordFirstRead
         )
