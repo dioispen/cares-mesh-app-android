@@ -75,6 +75,7 @@ class AdminNoticeFragmentedSyncTest {
     private val lateSync = gossipSync(LATE)
     private val lateInbox = inbox().also { it.attachSyncSet(syncSetOf(lateSync)) }
     private val lateOutcomes = CopyOnWriteArrayList<AdminNoticeOutcome>()
+    private val lateRelayed = CopyOnWriteArrayList<BitchatPacket>()
     private val lateProcessor = PacketProcessor(LATE, dispatcher).also { it.delegate = LateArrival(fragmentManager()) }
 
     @After
@@ -109,6 +110,7 @@ class AdminNoticeFragmentedSyncTest {
         assertEquals(V5_MESSAGE_ID, accepted.payload.messageId)
         assertArrayEquals(V5, accepted.payload.wire)
         assertEquals(5, (accepted.payload.body as AdminNoticeBody.Targeted).recipients.size)
+        assertEquals("a sync reply (TTL 0) goes no further, fragments or reassembled", emptyList<BitchatPacket>(), lateRelayed)
     }
 
     @Test
@@ -152,7 +154,9 @@ class AdminNoticeFragmentedSyncTest {
         override fun handleRequestSync(routed: RoutedPacket) = Unit
         override fun sendAnnouncementToPeer(peerID: String) = Unit
         override fun sendCachedMessages(peerID: String) = Unit
-        override fun relayPacket(routed: RoutedPacket) = Unit
+        override fun relayPacket(routed: RoutedPacket) {
+            lateRelayed += routed.packet
+        }
         override fun sendToPeer(peerID: String, routed: RoutedPacket) = false
     }
 

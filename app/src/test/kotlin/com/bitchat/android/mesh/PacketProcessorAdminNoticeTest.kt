@@ -82,7 +82,7 @@ class PacketProcessorAdminNoticeTest {
     }
 
     @Test
-    fun `fragments of an Admin Notice share its actor and the reassembled notice reaches the handler`() = runTest {
+    fun `fragments of an Admin Notice share its actor, and only the reassembled notice reaches the handler and is relayed`() = runTest {
         val delegate = RecordingDelegate(acceptAdminNotice = true)
         val processor = processor(delegate)
         val large = adminNotice(MESSAGE_ID_2, payload = ByteArray(600) { (it % 251).toByte() }).packet
@@ -93,8 +93,39 @@ class PacketProcessorAdminNoticeTest {
 
         advanceUntilIdle()
         assertEquals(listOf(MESSAGE_ID_2), delegate.adminNotices)
+        assertEquals(
+            "one hop down from the fragments' TTL 6",
+            listOf(MessageType.ADMIN_NOTICE.value to 5),
+            delegate.relayed.map { it.type to it.ttl.toInt() }
+        )
         assertEquals(1, processor.activeActorCount())
         assertTrue(delegate.lastSeen.isEmpty())
+    }
+
+    @Test
+    fun `fragments of other types are still relayed one by one, and their reassembled packet is not`() = runTest {
+        val delegate = RecordingDelegate(acceptAdminNotice = true)
+        val processor = processor(delegate)
+        val large = BitchatPacket(
+            version = 1u,
+            type = MessageType.MESSAGE.value,
+            senderID = PEER_ID.hexToBytes(),
+            recipientID = SpecialRecipients.BROADCAST,
+            timestamp = 1_792_627_200_000uL,
+            payload = ByteArray(600) { (it % 251).toByte() },
+            ttl = 6u
+        )
+        val fragments = FragmentManager().createFragments(large)
+        assertTrue(fragments.size > 1)
+
+        fragments.forEach { processor.processPacket(RoutedPacket(it, PEER_ID, "direct-link")) }
+
+        advanceUntilIdle()
+        assertEquals(1, delegate.messagesHandled)
+        assertEquals(
+            fragments.map { it.copy(ttl = 5u).toBinaryData(padding = false)!!.toList() },
+            delegate.relayed.map { it.toBinaryData(padding = false)!!.toList() }
+        )
     }
 
     @Test
@@ -167,6 +198,7 @@ class PacketProcessorAdminNoticeTest {
         private val fragments = FragmentManager()
         val adminNotices = CopyOnWriteArrayList<String>()
         val lastSeen = CopyOnWriteArrayList<String>()
+        /** Every packet relayed, of any type, in order. */
         val relayed = CopyOnWriteArrayList<BitchatPacket>()
         @Volatile var messagesHandled = 0
 
@@ -193,7 +225,7 @@ class PacketProcessorAdminNoticeTest {
         override fun sendAnnouncementToPeer(peerID: String) = Unit
         override fun sendCachedMessages(peerID: String) = Unit
         override fun relayPacket(routed: RoutedPacket) {
-            if (routed.packet.type == MessageType.ADMIN_NOTICE.value) relayed += routed.packet
+            relayed += routed.packet
         }
         override fun sendToPeer(peerID: String, routed: RoutedPacket) = false
     }

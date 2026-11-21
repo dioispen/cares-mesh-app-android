@@ -22,6 +22,35 @@ object AdminNoticeTraffic {
     }
 
     /**
+     * Whether a FRAGMENT is relayed as it arrives. A 0x31's is not: only the Inbox can tell a
+     * forged notice, and it sees one only once every fragment is in, so a relay that passed the
+     * fragments on would flood a forgery before anyone checked it. The notice goes on as a whole,
+     * once reassembled and accepted ([reassembled]), and the transport fragments it again.
+     * Fragments of every other type are relayed as they arrive.
+     */
+    fun relaysFragment(fragment: BitchatPacket): Boolean = !carriesAdminNotice(fragment)
+
+    /**
+     * A reassembled packet as PacketProcessor goes on to handle it. FragmentManager zeroes the TTL
+     * of every reassembled packet, because its fragments have been relayed already. A 0x31's have
+     * not ([relaysFragment]): a 0x31 reassembled from fragments labelled 0x31 carries the TTL of the
+     * fragment that completed it, so the Inbox and the relay rules take it like a 0x31 that arrived
+     * whole — relayed once, normalized, one hop down. A sender fragments a packet all at once, so
+     * its fragments share one TTL; they differ only when old-version relays carried them along
+     * different paths. A sync reply's fragments have TTL 0, and so does the notice.
+     *
+     * Anything else keeps TTL 0: a set labelled 0x31 that reassembles to another type goes no
+     * further, and a 0x31 inside fragments labelled otherwise, relayed as they arrived, is not
+     * relayed a second time.
+     */
+    fun reassembled(packet: BitchatPacket, completedBy: BitchatPacket): BitchatPacket =
+        if (packet.type == MessageType.ADMIN_NOTICE.value && !relaysFragment(completedBy)) {
+            packet.copy(ttl = completedBy.ttl)
+        } else {
+            packet
+        }
+
+    /**
      * The copy of a verified 0x31 a relay passes on: the normalized outer packet (「外層封包」),
      * whatever recipient, device signature, route or severity a sender added. None of these is in
      * the packet ID, so a copy carrying them is the same packet to the dedup and the Inbox accepts

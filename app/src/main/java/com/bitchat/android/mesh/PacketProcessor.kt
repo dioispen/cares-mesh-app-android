@@ -169,7 +169,7 @@ class PacketProcessor(
             MessageType.FILE_TRANSFER -> handleMessage(routed) // treat same routing path; parsing happens in handler
             MessageType.VOICE_FRAME -> validPacket = delegate?.handleVoiceFrame(routed) ?: false
             MessageType.LEAVE -> handleLeave(routed)
-            MessageType.FRAGMENT -> handleFragment(routed)
+            MessageType.FRAGMENT -> validPacket = handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
             MessageType.HEALTH_REPORT -> handleMessage(routed)
             // Relayed only when the Inbox verified the Administrators' signature (ADR-0011).
@@ -244,22 +244,24 @@ class PacketProcessor(
     }
     
     /**
-     * Handle message fragments
+     * Handle message fragments. Returns whether the fragment itself is relayed (validPacket): an
+     * Admin Notice's fragment is not, see [AdminNoticeTraffic.relaysFragment].
      */
-    private suspend fun handleFragment(routed: RoutedPacket) {
+    private suspend fun handleFragment(routed: RoutedPacket): Boolean {
         val reassembledPacket = delegate?.handleFragment(routed.packet)
         if (reassembledPacket != null) {
             handleReceivedPacket(
                 RoutedPacket(
-                    packet = reassembledPacket,
+                    packet = AdminNoticeTraffic.reassembled(reassembledPacket, completedBy = routed.packet),
                     peerID = routed.peerID,
                     relayAddress = routed.relayAddress,
                     ingressLinkID = routed.ingressLinkID
                 )
             )
         }
-        
+
         // Fragment relay is now handled by centralized PacketRelayManager
+        return AdminNoticeTraffic.relaysFragment(routed.packet)
     }
 
     /**
