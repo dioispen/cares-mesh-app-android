@@ -29,6 +29,8 @@ NO_REPLACES = bytes(MESSAGE_ID_SIZE)
 LEVELS = (LEVEL_INFO, LEVEL_IMPORTANT, LEVEL_URGENT)
 MAX_CONTENT_BYTES = 300
 MAX_VALIDITY_MS = 24 * 3600_000
+MAX_RECIPIENTS = 5
+RECIPIENT_KEY_SIZE = 32
 
 
 class NoticeError(ValueError):
@@ -128,6 +130,37 @@ def targeted_body(hdr, message_id, eph, recipients, content_key, nonce, content)
     ciphertext = AESGCM(content_key).encrypt(nonce, content, hdr)
     body = eph_pub + bytes([len(recipients)]) + entries + nonce + ciphertext
     return body, trace
+
+
+def build_targeted(admin: Ed25519PrivateKey, *, key_id: int, level: int, message_id: bytes,
+                   issued_at: int, expires_at: int, content: str, recipients: list) -> bytes:
+    """組一則定向公告，加密給 recipients（每個收件裝置的 noticePublicKey，1–5 個）並簽章。
+
+    一次性的 X25519 金鑰、contentKey 與 nonce 每則都用安全亂數；收件條目以隨機順序排列
+    （「定向 body」管理端加密第 1、4 步）。違反格式或上限丟 NoticeError。
+    """
+    check_header_fields(key_id=key_id, level=level, message_id=message_id, issued_at=issued_at,
+                        expires_at=expires_at, replaces=NO_REPLACES)
+    body = encode_content(content)
+    if not body:
+        # 純撤回一律用廣播 kind（「撤回與取代」），定向公告一定有內容。
+        raise NoticeError("定向公告的內容不能是空的")
+    if not 1 <= len(recipients) <= MAX_RECIPIENTS:
+        raise NoticeError(f"每則定向公告要有 1–{MAX_RECIPIENTS} 個收件裝置，這裡有 {len(recipients)} 個")
+    if any(len(r) != RECIPIENT_KEY_SIZE for r in recipients):
+        raise NoticeError(f"noticePublicKey 必須是 {RECIPIENT_KEY_SIZE} bytes")
+    if len(set(recipients)) != len(recipients):
+        raise NoticeError("同一個收件裝置出現兩次")
+    order = list(recipients)
+    secrets.SystemRandom().shuffle(order)
+    hdr = header(KIND_TARGETED, key_id, level, message_id, issued_at, expires_at, NO_REPLACES)
+    try:
+        targeted, _ = targeted_body(hdr, message_id, X25519PrivateKey.generate(), order,
+                                    secrets.token_bytes(32), secrets.token_bytes(12), body)
+    except ValueError:
+        # cryptography 在 X25519 結果全為 0（small-order point）時丟 ValueError：依規格中止。
+        raise NoticeError("有一個 noticePublicKey 無效（X25519 結果全為 0），不能加密給它") from None
+    return sign(admin, hdr + targeted)
 
 
 def open_as_recipient(payload: bytes, rcpt: X25519PrivateKey):

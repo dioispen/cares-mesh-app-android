@@ -83,6 +83,7 @@
   <string name="admin_notice_title_urgent">Urgent notice</string>
   <string name="admin_notice_title_important">Important notice</string>
   <string name="admin_notice_title_info">Notice</string>
+  <string name="admin_notice_targeted_hidden">A notice for you. Unlock to read it.</string>
 
   <!-- Favorites accessibility -->
   <string name="cd_add_favorite">Add to favorites</string>

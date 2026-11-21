@@ -1,6 +1,7 @@
 package com.bitchat.android.adminnotice
 
 import android.content.Context
+import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -11,8 +12,8 @@ import java.util.concurrent.TimeUnit
  * the process (an App restart starts them empty, as the spec expects), across mesh service
  * instances, and whether or not `MeshForegroundService` runs.
  *
- * Cheap on the main thread: the encrypted store opens on first use, which happens on the Firestore
- * listener's own thread.
+ * Cheap on the main thread: the encrypted notice store and the recipient key store open on first
+ * use, which happens on the Firestore listener's or the mesh's own thread.
  */
 object AdminNotices {
     @Volatile
@@ -45,7 +46,9 @@ object AdminNotices {
                     Executors.newSingleThreadScheduledExecutor { runnable ->
                         Thread(runnable, "AdminNoticeInjection").apply { isDaemon = true }
                     }
-                )
+                ),
+                // The Flutter bridge's instance: a sign-out's clearKey reaches the Inbox at once.
+                recipientKey = StoredAdminNoticeRecipientKey { AdminNoticeRecipientKeyStore.getInstance(appContext) }
             )
         )
     }

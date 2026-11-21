@@ -11,9 +11,47 @@ data class ReceivedAdminNotice(
     val expiresAtMs: Long,
     /** The messageId this notice corrects; null when it replaces nothing. */
     val replaces: String?,
-    /** The text: a broadcast's body, or (#141) a targeted notice's decrypted content. */
-    val content: String
+    /** The text: a broadcast's body, or a targeted notice's content as decrypted for this device. */
+    val content: String,
+    /** Where this device got the copy it presents: what a receipt's `via` reports (#143). */
+    val source: AdminNoticeSource
 )
+
+/** How a notice reached this device. Each notice is presented once, from the first copy that arrives. */
+enum class AdminNoticeSource {
+    /** Read from Firestore `admin_notices` by this device's Gateway listener: a receipt says `via = firestore`. */
+    BACKEND,
+
+    /** Heard over the mesh as a 0x31 packet: a receipt says `via = ble`. */
+    MESH
+}
+
+/**
+ * 收件者加密金鑰: this device's Admin Notice recipient key, through which the Inbox opens targeted
+ * notices. The private key stays behind this port; the Inbox only gets the public key `R` and the
+ * X25519 `shared` secret. In production the process-wide `identity/AdminNoticeRecipientKeyStore`
+ * ([StoredAdminNoticeRecipientKey]), so a sign-out (`adminNotice_clearKey`) takes effect at once.
+ *
+ * Called on the Inbox's caller thread while the Inbox holds its lock; may read encrypted storage.
+ */
+interface AdminNoticeRecipientKey {
+    /** This device's public key `R` (32 bytes); null when there is none (never signed in, or signed out). */
+    fun publicKey(): ByteArray?
+
+    /**
+     * X25519 of this device's private key with a targeted notice's [ephemeralPublicKey]; null when
+     * there is no key or the result would be all zeros. Null means "not for this device".
+     */
+    fun agree(ephemeralPublicKey: ByteArray): ByteArray?
+
+    companion object {
+        /** A device that holds no recipient key: it opens no targeted notice. */
+        val NONE: AdminNoticeRecipientKey = object : AdminNoticeRecipientKey {
+            override fun publicKey(): ByteArray? = null
+            override fun agree(ephemeralPublicKey: ByteArray): ByteArray? = null
+        }
+    }
+}
 
 /**
  * 本機呈現: the Inbox's output to the device's own store and notifications. Called on the Inbox's

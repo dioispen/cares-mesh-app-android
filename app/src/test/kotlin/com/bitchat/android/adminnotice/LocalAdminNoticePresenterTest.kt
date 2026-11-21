@@ -193,6 +193,29 @@ class LocalAdminNoticePresenterTest {
     }
 
     @Test
+    fun `a targeted notice is stored with its decrypted content, and that content is encrypted at rest`() {
+        val store = EncryptedAdminNoticeStore.open(context, nowMs = { now })
+        val inbox = AdminNoticeInbox(
+            TestAdminNotices.TEST_KEYS,
+            LocalAdminNoticePresenter(store, notifier, nowMs = { now }),
+            nowMs = { now },
+            injectionScheduler = ManualScheduler(),
+            recipientKey = FakeRecipientKey(TestAdminNotices.RECIPIENT_1_PRIVATE_HEX)
+        )
+
+        inbox.onMeshPacket(TestAdminNotices.meshPacket(TestAdminNotices.V2))
+
+        val stored = store.all().single()
+        assertEquals(AdminNoticeKind.TARGETED, stored.kind)
+        assertEquals(TestAdminNotices.V2_CONTENT, stored.content)
+        val raw = context.getSharedPreferences(EncryptedAdminNoticeStore.PREFS_NAME, Context.MODE_PRIVATE).all
+        val onDisk = raw.keys.joinToString() + raw.values.joinToString()
+        assertFalse(onDisk.contains(TestAdminNotices.V2_MESSAGE_ID))
+        assertFalse(onDisk.contains("救援人員"))
+        assertFalse(onDisk.contains("TARGETED"))
+    }
+
+    @Test
     fun `notices are encrypted at rest`() {
         startApp().first.onBackendNotice(V1)
 

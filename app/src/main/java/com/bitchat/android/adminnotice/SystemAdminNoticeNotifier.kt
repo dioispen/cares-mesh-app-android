@@ -25,6 +25,9 @@ interface AdminNoticeTexts {
     fun channelName(level: AdminNoticeLevel): String
     fun channelDescription(level: AdminNoticeLevel): String
     fun title(level: AdminNoticeLevel): String
+
+    /** What the lock screen shows in place of a targeted notice's content. */
+    fun hiddenContent(): String
 }
 
 private class ResourceAdminNoticeTexts(private val context: Context) : AdminNoticeTexts {
@@ -53,6 +56,8 @@ private class ResourceAdminNoticeTexts(private val context: Context) : AdminNoti
             AdminNoticeLevel.INFO -> R.string.admin_notice_title_info
         }
     )
+
+    override fun hiddenContent() = context.getString(R.string.admin_notice_targeted_hidden)
 }
 
 /**
@@ -63,6 +68,10 @@ private class ResourceAdminNoticeTexts(private val context: Context) : AdminNoti
  *   category, since DND exceptions for alarms, events or messages would let it through.
  * - 重要: default importance.
  * - 資訊: low importance, silent.
+ *
+ * A broadcast shows its content on the lock screen. A targeted notice (#141) is private with a
+ * public version that shows only its level ([AdminNoticeTexts.hiddenContent]); Android uses that
+ * version on a secure lock screen unless the user lets the lock screen show sensitive content.
  *
  * Each notice is posted under its messageId as the tag, so a correction or withdrawal can cancel it.
  * POST_NOTIFICATIONS is optional: without it nothing is posted, and the home screen's notice card
@@ -92,7 +101,7 @@ class SystemAdminNoticeNotifier(
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notification = NotificationCompat.Builder(context, channelId(notice.level))
+        val builder = NotificationCompat.Builder(context, channelId(notice.level))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(texts.title(notice.level))
             .setContentText(notice.content)
@@ -103,15 +112,27 @@ class SystemAdminNoticeNotifier(
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .setPriority(priority(notice.level))
-            // A broadcast is public by design; a targeted notice's content (#141) is not.
-            .setVisibility(
-                if (notice.kind == AdminNoticeKind.BROADCAST) {
-                    NotificationCompat.VISIBILITY_PUBLIC
-                } else {
-                    NotificationCompat.VISIBILITY_PRIVATE
-                }
-            )
-            .build()
+        if (notice.kind == AdminNoticeKind.BROADCAST) {
+            // A broadcast is public by design: every device in range can read it anyway.
+            builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        } else {
+            // A targeted notice's content is for its recipient: a secure lock screen shows only its
+            // level, and an explicit public version keeps that independent of each launcher.
+            builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(
+                    NotificationCompat.Builder(context, channelId(notice.level))
+                        .setSmallIcon(R.drawable.ic_notification)
+                        .setContentTitle(texts.title(notice.level))
+                        .setContentText(texts.hiddenContent())
+                        .setWhen(notice.issuedAtMs)
+                        .setShowWhen(true)
+                        .setContentIntent(openApp)
+                        .setAutoCancel(true)
+                        .setPriority(priority(notice.level))
+                        .build()
+                )
+        }
+        val notification = builder.build()
         try {
             notificationManager.notify(notice.messageId, NOTIFICATION_ID, notification)
         } catch (e: SecurityException) {
