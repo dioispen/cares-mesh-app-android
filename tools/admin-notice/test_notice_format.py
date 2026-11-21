@@ -8,6 +8,7 @@ import unittest
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 
 import notice_format as nf
 
@@ -104,6 +105,105 @@ class BroadcastLimitsTest(unittest.TestCase):
 
     def test_reserved_key_id_zero_is_rejected(self):
         self.assert_rejected(key_id=0x00)
+
+
+def x25519(label: str) -> X25519PrivateKey:
+    return X25519PrivateKey.from_private_bytes(hashlib.sha256(label.encode()).digest())
+
+
+# 附錄「共用金鑰」的收件者私鑰
+RECIPIENT_1 = x25519("cares-admin-notice-test/recipient-1")
+RECIPIENT_2 = x25519("cares-admin-notice-test/recipient-2")
+OUTSIDER = x25519("cares-admin-notice-test/outsider")
+V2_CONTENT = "救援人員約 10 分鐘內抵達，請留在原地"
+
+
+def targeted(recipients, **overrides) -> bytes:
+    fields = dict(key_id=0x01, level=nf.LEVEL_IMPORTANT, message_id=bytes.fromhex("0f1e2d3c4b5a6978"),
+                  issued_at=ISSUED_AT, expires_at=ISSUED_AT + 2 * HOUR, content=V2_CONTENT)
+    fields.update(overrides)
+    return nf.build_targeted(TEST_ADMIN, recipients=[nf.raw_public(r) for r in recipients], **fields)
+
+
+class BuildTargetedTest(unittest.TestCase):
+    """docs/ADMIN_NOTICE_V1.md「定向 body」：發送工具每次都用新的亂數金鑰，所以不比對附錄的位元組。"""
+
+    def test_every_recipient_opens_it_and_the_outsider_does_not(self):
+        payload = targeted([RECIPIENT_1, RECIPIENT_2])
+
+        nf.verify(TEST_ADMIN_PUBLIC, payload)
+        self.assertEqual(bytes([nf.VERSION, nf.KIND_TARGETED, 0x01, nf.LEVEL_IMPORTANT]), payload[:4])
+        self.assertEqual(2, payload[nf.HEADER_SIZE + 32])  # recipientCount
+        self.assertEqual(V2_CONTENT.encode(), nf.open_as_recipient(payload, RECIPIENT_1))
+        self.assertEqual(V2_CONTENT.encode(), nf.open_as_recipient(payload, RECIPIENT_2))
+        self.assertIsNone(nf.open_as_recipient(payload, OUTSIDER))
+
+    def test_payload_size_matches_the_size_table(self):
+        # 「大小上限」：5 個收件裝置、內容 300 bytes → payload 661
+        five = [x25519(f"recipient-{i}") for i in range(5)]
+        self.assertEqual(661, len(targeted(five, content="a" * 300)))
+
+    def test_keys_are_fresh_for_every_notice(self):
+        first, second = targeted([RECIPIENT_1]), targeted([RECIPIENT_1])
+        self.assertNotEqual(first[nf.HEADER_SIZE:nf.HEADER_SIZE + 32], second[nf.HEADER_SIZE:nf.HEADER_SIZE + 32])
+        self.assertNotEqual(first[:-nf.SIGNATURE_SIZE], second[:-nf.SIGNATURE_SIZE])
+
+    def test_recipient_entries_are_in_random_order(self):
+        recipients = [x25519(f"recipient-{i}") for i in range(5)]
+        positions = set()
+        for _ in range(20):
+            payload = targeted(recipients)
+            positions.add(entry_position(payload, recipients[0]))
+        # 20 次都排在同一個位置的機率是 5^-19
+        self.assertGreater(len(positions), 1)
+
+    def test_one_to_five_recipients(self):
+        targeted([RECIPIENT_1])
+        targeted([x25519(f"recipient-{i}") for i in range(5)])
+        with self.assertRaises(nf.NoticeError):
+            targeted([])
+        with self.assertRaises(nf.NoticeError):
+            targeted([x25519(f"recipient-{i}") for i in range(6)])
+
+    def test_the_same_recipient_twice_is_rejected(self):
+        with self.assertRaises(nf.NoticeError):
+            targeted([RECIPIENT_1, RECIPIENT_1])
+
+    def test_empty_content_is_rejected(self):
+        # 純撤回一律用廣播 kind（「撤回與取代」），定向公告一定有內容。
+        with self.assertRaises(nf.NoticeError):
+            targeted([RECIPIENT_1], content="")
+
+    def test_content_over_300_bytes_is_rejected(self):
+        with self.assertRaises(nf.NoticeError):
+            targeted([RECIPIENT_1], content="警" * 101)
+
+    def test_a_public_key_that_is_not_32_bytes_is_rejected(self):
+        with self.assertRaises(nf.NoticeError):
+            nf.build_targeted(TEST_ADMIN, key_id=0x01, level=nf.LEVEL_INFO, message_id=V1_MESSAGE_ID,
+                              issued_at=ISSUED_AT, expires_at=ISSUED_AT + HOUR, content="x",
+                              recipients=[bytes(31)])
+
+    def test_a_small_order_public_key_is_rejected(self):
+        # X25519 結果全為 0 時中止（「定向 body」管理端加密第 2 步）
+        with self.assertRaises(nf.NoticeError):
+            nf.build_targeted(TEST_ADMIN, key_id=0x01, level=nf.LEVEL_INFO, message_id=V1_MESSAGE_ID,
+                              issued_at=ISSUED_AT, expires_at=ISSUED_AT + HOUR, content="x",
+                              recipients=[bytes(32)])
+
+    def test_header_limits_apply_as_for_a_broadcast(self):
+        with self.assertRaises(nf.NoticeError):
+            targeted([RECIPIENT_1], expires_at=ISSUED_AT + 24 * HOUR + 1)
+
+
+def entry_position(payload: bytes, recipient: X25519PrivateKey) -> int:
+    """recipient 的條目排在第幾個（收件端以 tag 認出自己的條目）。"""
+    message_id, body = payload[4:12], payload[nf.HEADER_SIZE:-nf.SIGNATURE_SIZE]
+    eph_pub, count = body[:32], body[32]
+    shared = recipient.exchange(X25519PublicKey.from_public_bytes(eph_pub))
+    tag, _ = nf.recipient_secrets(shared, message_id, eph_pub, nf.raw_public(recipient))
+    tags = [body[33 + 40 * i:41 + 40 * i] for i in range(count)]
+    return tags.index(tag)
 
 
 class NewMessageIdTest(unittest.TestCase):
