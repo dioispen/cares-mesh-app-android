@@ -154,7 +154,7 @@ Debug 限定的畫面，可設定的參數：
 - 發送迴圈跑在 `MeshForegroundService` 的 scope 裡，app 進背景、離開實驗畫面都會繼續送。
 - 只走 mesh，不寫入 Firestore。
 
-**為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 3（[BitchatFlutterChannels.kt](../../app/src/main/java/com/bitchat/android/flutter/BitchatFlutterChannels.kt) 的 `sendHealthReportPacket`），依程式碼推算最遠只到第 4 跳。要量 7 支手機線性鏈（6 跳）的物理極限，必須用 TTL 7。
+**為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 3（[AppConstants.kt](../../app/src/main/java/com/bitchat/android/util/AppConstants.kt) 的 `HEALTH_REPORT_TTL_HOPS`），依程式碼推算最遠只到第 4 跳。要量 7 支手機線性鏈（6 跳）的物理極限，必須用 TTL 7。
 
 **(c) 現場即時計數**
 

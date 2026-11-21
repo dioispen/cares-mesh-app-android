@@ -505,9 +505,8 @@ class GossipSyncManagerHealthReportTest {
     private fun hex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private companion object {
-        // 與 BitchatFlutterChannels.sendHealthReportPacket 送出時的 TTL 相同；同步回送會改成 SYNC_TTL_HOPS，
-        // 比對前還原回來
-        val HEALTH_REPORT_TTL: UByte = 3u
+        // Health Report 送出時的 TTL；同步回送會改成 SYNC_TTL_HOPS，比對前還原回來
+        val HEALTH_REPORT_TTL: UByte = AppConstants.HEALTH_REPORT_TTL_HOPS
         val ANNOUNCE_TTL: UByte = 7u
 
         // ConfigProvider.gcsTargetFpr() 回傳的是 0..1 的比例，不是百分比

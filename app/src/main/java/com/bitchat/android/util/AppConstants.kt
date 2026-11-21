@@ -10,6 +10,25 @@ object AppConstants {
     val MESSAGE_TTL_HOPS: UByte = 7u     // Default TTL for regular packets
     val SYNC_TTL_HOPS: UByte = 0u        // TTL for neighbor-only sync packets
 
+    /**
+     * Health Report（包括帶 SOS 的）送出時的 TTL：flood 最遠到第 4 跳。刻意低於 [MESSAGE_TTL_HOPS]
+     * （#14），依據是 2026-11-18 四機實地試跑報告的 §11.1 與 §13.3 P1-7：
+     *
+     * - **TTL 只決定快的那條路，不決定到不到。** 每台裝置都把各 Reporter 最新的 Health Report 留在同步
+     *   暫存，anti-entropy 同步（[SYNC_TTL_HOPS]）會一跳一跳把它帶到 TTL 範圍外。flood 每跳約 +50 ms；
+     *   同步在新連線約 1 s 後補送，已連著的鏈路每跳最多 30 s。所以 TTL 決定的是「幾跳內能在約 1 秒內
+     *   收到」。也因此 TTL 不是 Health Report 擴散範圍的上限，拿來當隱私半徑並不成立。
+     * - **TTL ≤ 4 才能讓每一跳都保有轉發衰減。** 轉發前 TTL 先扣 1，扣完若仍 ≥
+     *   [com.bitchat.android.mesh.RelayPolicy.unconditionalRelayTtl]（預設 4），Relay Decision 就跳過依
+     *   網路規模的轉發機率。TTL 3 第一次轉發就降到 2，每一跳都走機率；TTL 7 會讓前 3 代轉發一律送出，
+     *   大型 mesh 的 flood 成本跟著放大。`HealthReportBroadcastTest` 鎖住這個關係，只改一邊就會失敗。
+     * - **SOS 暫不另設 TTL**（ADR-0004）：要不要提高，等 E1-C（7 機比較 TTL 3 與 7）與 policy-level
+     *   模擬（ADR-0001）的結果再決定。
+     *
+     * 只有實驗發送器（#70）經 `HealthReportBroadcast.send(ttl = …)` 覆寫。
+     */
+    val HEALTH_REPORT_TTL_HOPS: UByte = 3u
+
     object Mesh {
         // Peer lifecycle
         const val STALE_PEER_TIMEOUT_MS: Long = 180_000L // 3 minutes
