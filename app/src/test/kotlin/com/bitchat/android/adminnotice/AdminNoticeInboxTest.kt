@@ -356,6 +356,19 @@ class AdminNoticeInboxTest {
     }
 
     @Test
+    fun `a checked exception from the key, such as the Android Keystore's, never costs the relay either`() {
+        val keystoreFailing = object : AdminNoticeRecipientKey {
+            override fun publicKey(): ByteArray? = throw java.security.KeyStoreException("keystore locked")
+            override fun agree(ephemeralPublicKey: ByteArray): ByteArray? = throw java.security.KeyStoreException("keystore locked")
+        }
+
+        val outcome = inbox(recipientKey = keystoreFailing).onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(outcome.relay)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test
     fun `V2, a targeted notice, is verified and recorded but not presented on a device without a recipient key`() {
         val inbox = inbox()
 

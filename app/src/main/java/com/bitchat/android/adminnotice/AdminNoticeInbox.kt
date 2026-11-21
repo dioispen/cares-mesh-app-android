@@ -235,7 +235,8 @@ class AdminNoticeInbox(
      */
     private fun openForThisDevice(payload: AdminNoticePayload, body: AdminNoticeBody.Targeted): String? = try {
         TargetedAdminNotice.open(payload, body, recipientKey)
-    } catch (e: RuntimeException) {
+    } catch (e: Exception) {
+        // Exception, not RuntimeException: the Android Keystore's are checked, and Kotlin lets a port throw them.
         null
     }
 
