@@ -35,8 +35,9 @@ class BluetoothConnectionTracker(
     val addressPeerMap = ConcurrentHashMap<String, String>()
     // Track whether we have seen the first ANNOUNCE on a given device connection
     private val firstAnnounceSeen = ConcurrentHashMap<String, Boolean>()
-    // RSSI tracking from scan results (for devices we discover but may connect as servers)
-    private val scanRSSI = ConcurrentHashMap<String, Int>()
+    // RSSI from scan results, by address and by peer: for devices we may connect as servers, and to
+    // keep connected peers' strength fresh (P1-5).
+    private val scanRSSI = RssiSamples()
     // 每條鏈路（以 linkID 區分 GATT 世代，位址會被重用）最後一次有動靜的時間，以 monotonicClockMs
     // 計：連上時寫入，之後每收到一個封包更新，所以就是 max(連上時間, 最後收包時間)（P0-2）。
     private val lastLinkActivityMs = ConcurrentHashMap<String, Long>()
@@ -225,22 +226,54 @@ class BluetoothConnectionTracker(
     }
     
     /**
-     * Store RSSI from scan results
+     * Store RSSI from scan results. Called for connected peers too: they keep advertising, and this
+     * is what keeps their strength fresh. [peerID] is the one in the advertisement's service data.
      */
-    fun updateScanRSSI(deviceAddress: String, rssi: Int) {
-        scanRSSI[deviceAddress] = rssi
+    fun updateScanRSSI(deviceAddress: String, rssi: Int, peerID: String? = null) {
+        scanRSSI.record(deviceAddress, peerID, rssi)
     }
     
     /**
-     * Get best available RSSI for a device (connection RSSI preferred, then scan RSSI)
+     * The freshest RSSI known for a device: the one stored on its link at connect time, or a later
+     * scan of the same address or of the link's peer (an inbound link's address differs from the
+     * one its peer advertises with).
      */
     fun getBestRSSI(deviceAddress: String): Int? {
-        // Prefer connection RSSI if available and valid
-        connectedDevices[deviceAddress]?.rssi?.takeIf { it != Int.MIN_VALUE }?.let { return it }
-        
-        // Fall back to scan RSSI
-        return scanRSSI[deviceAddress]
+        val link = connectedDevices[deviceAddress]
+        val linkSample = link?.takeIf { it.rssi != Int.MIN_VALUE }?.let { RssiSamples.Sample(it.rssi, it.connectedAt) }
+        val peerID = addressPeerMap[deviceAddress] ?: link?.peerID
+        return RssiSamples.freshest(
+            linkSample,
+            scanRSSI.byAddress(deviceAddress),
+            peerID?.let(scanRSSI::byPeer)
+        )?.rssi
     }
+
+    /**
+     * Distinct peers on the current links (P1-5). Counts peers, not links: two phones often hold a
+     * link in each role to each other. A link counts once its peer is identified, by the scan's
+     * service data (outbound links) or by its first verified ANNOUNCE; a link still waiting for it
+     * (the first second or so of an inbound link) does not count yet.
+     */
+    fun getDirectPeerCount(): Int =
+        connectedDevices.entries.mapNotNullTo(HashSet()) { (address, link) -> addressPeerMap[address] ?: link.peerID }.size
+
+    /** Whether any current link, in either role, is identified as [peerID]. */
+    fun isPeerDirectlyConnected(peerID: String): Boolean =
+        connectedDevices.entries.any { (address, link) -> (addressPeerMap[address] ?: link.peerID) == peerID }
+
+    /**
+     * The outbound link [getConnectionsToEvict] would give up first, with its freshest RSSI (null
+     * when unknown); null without outbound links. Used to replace a weak link when full (P1-5).
+     */
+    fun getWeakestClientLink(): Pair<DeviceConnection, Int?>? {
+        val strength = linkStrengths()
+        return strength.keys.filter { it.isClient }.sortedWith(weakestFirst(strength)).firstOrNull()
+            ?.let { it to strength[it] }
+    }
+
+    private fun linkStrengths(): Map<DeviceConnection, Int?> =
+        connectedDevices.entries.associate { (address, link) -> link to getBestRSSI(address) }
     
     /**
      * Add a subscribed device
@@ -294,20 +327,25 @@ class BluetoothConnectionTracker(
     /**
      * Calculate which connections should be evicted to satisfy limits.
      * Logic:
-     * 1. Enforce strict role limits (maxClient, maxServer) - evict oldest excess.
-     * 2. Enforce overall limit (maxOverall) - evict oldest remaining, preferring clients.
+     * 1. Enforce strict role limits (maxClient, maxServer) - evict the weakest excess.
+     * 2. Enforce overall limit (maxOverall) - evict the weakest remaining, preferring clients.
+     *
+     * "Weakest" is the freshest RSSI ([getBestRSSI]), oldest first on a tie; links of unknown
+     * strength go after all known ones, oldest first (P1-5: upstream evicted purely the oldest).
      */
     fun getConnectionsToEvict(maxOverall: Int, maxServer: Int, maxClient: Int): List<DeviceConnection> {
         val toEvict = mutableSetOf<DeviceConnection>()
-        val currentDevices = connectedDevices.values.toList()
+        val strength = linkStrengths()
+        val evictionOrder = weakestFirst(strength)
+        val currentDevices = strength.keys.toList()
         
         // 1. Enforce Role Limits
-        val clients = currentDevices.filter { it.isClient }.sortedBy { it.connectedAt }
+        val clients = currentDevices.filter { it.isClient }.sortedWith(evictionOrder)
         if (clients.size > maxClient) {
             toEvict.addAll(clients.take(clients.size - maxClient))
         }
         
-        val servers = currentDevices.filter { !it.isClient }.sortedBy { it.connectedAt }
+        val servers = currentDevices.filter { !it.isClient }.sortedWith(evictionOrder)
         if (servers.size > maxServer) {
             toEvict.addAll(servers.take(servers.size - maxServer))
         }
@@ -319,8 +357,8 @@ class BluetoothConnectionTracker(
             val excessCount = remaining.size - maxOverall
             
             // Explicitly prefer evicting clients first
-            val clientCandidates = remaining.filter { it.isClient }.sortedBy { it.connectedAt }
-            val serverCandidates = remaining.filter { !it.isClient }.sortedBy { it.connectedAt }
+            val clientCandidates = remaining.filter { it.isClient }.sortedWith(evictionOrder)
+            val serverCandidates = remaining.filter { !it.isClient }.sortedWith(evictionOrder)
             
             var needed = excessCount
             
@@ -339,6 +377,12 @@ class BluetoothConnectionTracker(
         return toEvict.toList()
     }
     
+    /** Weakest known RSSI first, oldest first on a tie; unknown strength last, oldest first. */
+    private fun weakestFirst(strength: Map<DeviceConnection, Int?>): Comparator<DeviceConnection> =
+        compareBy<DeviceConnection> { if (strength[it] == null) 1 else 0 }
+            .thenBy { strength[it] ?: 0 }
+            .thenBy { it.connectedAt }
+
     /**
      * Clean up a specific device connection
      */
@@ -438,7 +482,7 @@ class BluetoothConnectionTracker(
             connectedDevices.forEach { (address, deviceConn) ->
                 val age = (System.currentTimeMillis() - deviceConn.connectedAt) / 1000
                 val idle = lastLinkActivityMs[deviceConn.linkID]?.let { "${(nowMonotonic - it) / 1000}s" } ?: "?"
-                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, idle $idle, RSSI: ${deviceConn.rssi})")
+                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, idle $idle, RSSI: ${getBestRSSI(address)})")
             }
             appendLine()
             appendLine("Subscribed Devices (server mode): ${subscribedDevices.size}")
@@ -450,8 +494,9 @@ class BluetoothConnectionTracker(
                 appendLine("  - $address: ${attempt.attempts} attempts, last ${elapsed}s ago")
             }
             appendLine()
-            appendLine("Scan RSSI Cache: ${scanRSSI.size}")
-            scanRSSI.forEach { (address, rssi) ->
+            val scanned = scanRSSI.addressSnapshot()
+            appendLine("Scan RSSI Cache: ${scanned.size}")
+            scanned.forEach { (address, rssi) ->
                 appendLine("  - $address: $rssi dBm")
             }
         }

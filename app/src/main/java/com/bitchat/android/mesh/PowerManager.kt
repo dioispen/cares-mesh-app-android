@@ -228,12 +228,16 @@ class PowerManager private constructor(context: Context) : LifecycleEventObserve
 
     fun getMaxConnections(): Int = profile.value.ble.maxConnections
 
-    fun getRSSIThreshold(): Int = when (profile.value.mode) {
-        PowerMode.PERFORMANCE -> -95
-        PowerMode.BALANCED -> -85
-        PowerMode.POWER_SAVER -> -75
-        PowerMode.ULTRA_LOW_POWER -> -65
-    }
+    /**
+     * The weakest scan RSSI at which to initiate a connection, given how many distinct peers this
+     * phone is directly linked to and how full its connection slots are ([ConnectionRssiThreshold]).
+     */
+    internal fun getRSSIThreshold(
+        directPeerCount: Int,
+        connectionCount: Int,
+        maxConnections: Int
+    ): ConnectionRssiThreshold.Decision =
+        ConnectionRssiThreshold.resolve(profile.value.mode, directPeerCount, connectionCount, maxConnections)
 
     fun shouldUseDutyCycle(): Boolean = !profile.value.ble.continuousScan
 
