@@ -1,18 +1,23 @@
-"""send 對著 Firebase emulator 跑一次：REST commit 真的經過 firestore.rules。
+"""send 對著 Firebase emulator 跑一次：REST 查詢與 commit 真的經過 firestore.rules。
 
 只有設定 FIRESTORE_EMULATOR_HOST 與 FIREBASE_AUTH_EMULATOR_HOST 時才執行，平常略過。
 執行方式見 README.md「測試」。不會連到任何線上專案。
 """
 
+import base64
 import hashlib
 import io
 import json
 import os
 import re
 import tempfile
+import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
+
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 import admin_notice_tool as tool
 import firebase_rest as fb
@@ -56,7 +61,7 @@ def read_as_owner(path: str):
 
 
 @unittest.skipUnless(FIRESTORE_HOST and AUTH_HOST, "需要 Firestore 與 Auth emulator")
-class SendThroughEmulatorTest(unittest.TestCase):
+class EmulatorTestCase(unittest.TestCase):
     def setUp(self):
         request("DELETE", documents_url().replace("/v1/", "/emulator/v1/"))
         request("DELETE", f"http://{AUTH_HOST}/emulator/v1/projects/{PROJECT}/accounts")
@@ -81,6 +86,8 @@ class SendThroughEmulatorTest(unittest.TestCase):
         }))
         self.stdout, self.stderr = io.StringIO(), io.StringIO()
 
+
+class SendThroughEmulatorTest(EmulatorTestCase):
     def send(self, email: str) -> int:
         return tool.main(
             ["send", "--email", email, "--level", "urgent", "--content", "土石流警戒：請立即撤離",
@@ -111,6 +118,118 @@ class SendThroughEmulatorTest(unittest.TestCase):
         self.assertIn("PERMISSION_DENIED", self.stderr.getvalue())
         self.assertEqual({}, request("GET", documents_url("/admin_notices"), token="owner"))
         self.assertEqual({}, request("GET", documents_url("/admin_notice_records"), token="owner"))
+
+
+DAY_MS = 24 * 3_600_000
+TARGETED_CONTENT = "救援人員約 10 分鐘內抵達，請留在原地"
+
+
+def sign_in(email: str) -> str:
+    """emulator 帳號的 ID token，用來以本人身分經過 rules 寫入。"""
+    response = request("POST", f"http://{AUTH_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=any",
+                       {"email": email, "password": PASSWORD, "returnSecureToken": True})
+    return response["idToken"]
+
+
+class SendTargetedThroughEmulatorTest(EmulatorTestCase):
+    """定向公告：查詢 installations 與寫入都經過 firestore.rules，寫出的 wire 只有收件裝置解得開。"""
+
+    def setUp(self):
+        super().setUp()
+        self.endpoints = fb.Endpoints.from_env(os.environ)
+        self.member_token = sign_in("member@example.org")
+
+    def register(self, uid: str, handle: str, *, token=None, registered_at=None) -> X25519PrivateKey:
+        """登記一台裝置。token 是本人時照 App 的做法經過 rules、registeredAt 用伺服器時間；
+        沒有 token 時以 owner 繞過 rules，才能填過去的 registeredAt。"""
+        key = X25519PrivateKey.generate()
+        fields = {"reporterHandle": handle, "signingPublicKey": bytes(32), "noticePublicKey": nf.raw_public(key)}
+        path = f"reporter_handles/{uid}/installations/{handle}"
+        if token:
+            write = fb.create_write(PROJECT, path, fields, server_time_fields=["registeredAt"])
+        else:
+            write = fb.create_write(PROJECT, path, {**fields, "registeredAt": fb.Timestamp(registered_at)})
+        fb.commit(fb.urllib_post, self.endpoints, PROJECT, token or "owner", [write])
+        return key
+
+    def send(self, *targets, email="admin@example.org") -> int:
+        return tool.main(
+            ["send", "--email", email, "--level", "important", "--content", TARGETED_CONTENT,
+             "--valid-for", "2h", "--key", str(self.key_path), "--yes", *targets],
+            tool.Deps(stdout=self.stdout, stderr=self.stderr,
+                      env={**os.environ, tool.PASSWORD_ENV: PASSWORD},
+                      public_keys_path=self.public_keys, google_services_path=self.google_services))
+
+    def written(self) -> list[tuple[str, bytes, dict]]:
+        """這次寫入的每一則：(messageId, wire, admin_notice_records 的欄位)。"""
+        notices = []
+        for message_id in re.findall(r"admin_notices/([0-9a-f]{16})", self.stdout.getvalue()):
+            notice = read_as_owner(f"admin_notices/{message_id}")["fields"]
+            wire = base64.b64decode(notice["wire"]["bytesValue"])
+            nf.verify(bytes.fromhex(TEST_PUBLIC_HEX), wire)
+            record = read_as_owner(f"admin_notice_records/{message_id}")["fields"]
+            notices.append((message_id, wire, {k: fb.decode_value(v) for k, v in record.items()}))
+        return notices
+
+    @staticmethod
+    def opens(wire: bytes, key: X25519PrivateKey) -> bool:
+        return nf.open_as_recipient(wire, key) == TARGETED_CONTENT.encode()
+
+    def test_by_uid_every_device_the_member_registered_opens_the_notice(self):
+        phone = self.register(self.member_uid, "a1a1a1a1a1a1", token=self.member_token)
+        tablet = self.register(self.member_uid, "a2a2a2a2a2a2", token=self.member_token)
+        stranger = X25519PrivateKey.generate()
+
+        self.assertEqual(0, self.send("--uid", self.member_uid), self.stderr.getvalue())
+
+        (message_id, wire, record), = self.written()
+        self.assertEqual(nf.KIND_TARGETED, wire[1])
+        self.assertEqual([True, True, False], [self.opens(wire, k) for k in (phone, tablet, stranger)])
+        self.assertEqual("targeted", record["kind"])
+        self.assertEqual(message_id, record["batchId"])
+        self.assertEqual([self.member_uid], record["recipientUids"])
+        self.assertEqual(2, record["recipientCount"])
+        self.assertEqual({"a1a1a1a1a1a1", "a2a2a2a2a2a2"}, {d["reporterHandle"] for d in record["recipientDevices"]})
+
+    def test_by_handle_the_newest_registration_opens_the_notice_and_the_operator_is_warned(self):
+        # 同一個 Handle 先登記在另一個帳號底下（兩天前），後來 member 以 App 登記（現在）。
+        earlier = self.register("uid-someone-else", "c1c1c1c1c1c1", registered_at=int(time.time() * 1000) - 2 * DAY_MS)
+        newest = self.register(self.member_uid, "c1c1c1c1c1c1", token=self.member_token)
+
+        self.assertEqual(0, self.send("--handle", "c1c1c1c1c1c1"), self.stderr.getvalue())
+
+        (_, wire, record), = self.written()
+        self.assertEqual([True, False], [self.opens(wire, k) for k in (newest, earlier)])
+        self.assertEqual(["c1c1c1c1c1c1"], record["recipientHandles"])
+        self.assertIn("uid-someone-else", self.stderr.getvalue())
+        self.assertIn("冒領", self.stderr.getvalue())
+
+    def test_six_devices_are_split_into_two_notices_sharing_one_batch_id(self):
+        keys = [self.register(self.member_uid, f"d{i}d{i}d{i}d{i}d{i}d{i}", token=self.member_token) for i in range(6)]
+
+        self.assertEqual(0, self.send("--uid", self.member_uid), self.stderr.getvalue())
+
+        notices = self.written()
+        self.assertEqual(2, len(notices))
+        self.assertEqual(1, len({record["batchId"] for _, _, record in notices}))
+        self.assertIn(notices[0][2]["batchId"], {message_id for message_id, _, _ in notices})
+        self.assertEqual([1] * 6, [sum(self.opens(wire, k) for _, wire, _ in notices) for k in keys])
+
+    def test_a_target_without_recipient_devices_writes_nothing(self):
+        self.register(self.member_uid, "a1a1a1a1a1a1", token=self.member_token)
+
+        self.assertNotEqual(0, self.send("--uid", self.member_uid, "--uid", "uid-nobody"))
+
+        self.assertIn("uid-nobody", self.stderr.getvalue())
+        self.assertEqual({}, request("GET", documents_url("/admin_notices"), token="owner"))
+
+    def test_an_account_that_is_not_an_administrator_cannot_look_recipients_up(self):
+        self.register(self.admin_uid, "e1e1e1e1e1e1", registered_at=int(time.time() * 1000))
+
+        self.assertNotEqual(0, self.send("--uid", self.admin_uid, email="member@example.org"))
+
+        self.assertIn("PERMISSION_DENIED", self.stderr.getvalue())
+        self.assertEqual({}, request("GET", documents_url("/admin_notices"), token="owner"))
 
 
 if __name__ == "__main__":

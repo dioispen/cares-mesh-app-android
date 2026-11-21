@@ -83,6 +83,34 @@ class SystemAdminNoticeNotifierTest {
     }
 
     @Test
+    fun `a targeted notice keeps its content off the lock screen, which shows only its level`() {
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        notifier().notify(notice(AdminNoticeLevel.IMPORTANT, kind = AdminNoticeKind.TARGETED))
+
+        val posted = shadowOf(system).getNotification(MESSAGE_ID, SystemAdminNoticeNotifier.NOTIFICATION_ID)!!
+        assertEquals(Notification.VISIBILITY_PRIVATE, posted.visibility)
+        assertEquals(TestAdminNotices.V1_CONTENT, posted.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        val lockScreen = posted.publicVersion!!
+        assertEquals("title 重要", lockScreen.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals("hidden", lockScreen.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        val shownLocked = lockScreen.extras.keySet().joinToString { lockScreen.extras.get(it).toString() }
+        assertFalse(shownLocked, shownLocked.contains(TestAdminNotices.V1_CONTENT))
+        assertEquals(SystemAdminNoticeNotifier.channelId(AdminNoticeLevel.IMPORTANT), lockScreen.channelId)
+    }
+
+    @Test
+    fun `a broadcast has no separate lock-screen version, since its content is public`() {
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        notifier().notify(notice(AdminNoticeLevel.URGENT))
+
+        val posted = shadowOf(system).getNotification(MESSAGE_ID, SystemAdminNoticeNotifier.NOTIFICATION_ID)!!
+        assertEquals(Notification.VISIBILITY_PUBLIC, posted.visibility)
+        assertNull(posted.publicVersion)
+    }
+
+    @Test
     fun `each level posts on its own channel`() {
         shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val notifier = notifier()
@@ -107,14 +135,19 @@ class SystemAdminNoticeNotifierTest {
         assertTrue(shadowOf(system).allNotifications.isEmpty())
     }
 
-    private fun notice(level: AdminNoticeLevel, messageId: String = MESSAGE_ID) = ReceivedAdminNotice(
+    private fun notice(
+        level: AdminNoticeLevel,
+        messageId: String = MESSAGE_ID,
+        kind: AdminNoticeKind = AdminNoticeKind.BROADCAST
+    ) = ReceivedAdminNotice(
         messageId = messageId,
-        kind = AdminNoticeKind.BROADCAST,
+        kind = kind,
         level = level,
         issuedAtMs = TestAdminNotices.VECTOR_ISSUED_AT,
         expiresAtMs = TestAdminNotices.V1_EXPIRES_AT,
         replaces = null,
-        content = TestAdminNotices.V1_CONTENT
+        content = TestAdminNotices.V1_CONTENT,
+        source = AdminNoticeSource.BACKEND
     )
 
     private object FakeTexts : AdminNoticeTexts {
@@ -122,6 +155,7 @@ class SystemAdminNoticeNotifierTest {
         override fun channelName(level: AdminNoticeLevel) = "channel ${label(level)}"
         override fun channelDescription(level: AdminNoticeLevel) = "description ${label(level)}"
         override fun title(level: AdminNoticeLevel) = "title ${label(level)}"
+        override fun hiddenContent() = "hidden"
 
         private fun label(level: AdminNoticeLevel) = when (level) {
             AdminNoticeLevel.URGENT -> "緊急"

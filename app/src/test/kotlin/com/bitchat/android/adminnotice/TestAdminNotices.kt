@@ -2,9 +2,19 @@ package com.bitchat.android.adminnotice
 
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
+import org.bouncycastle.crypto.agreement.X25519Agreement
+import org.bouncycastle.crypto.digests.SHA256Digest
+import org.bouncycastle.crypto.generators.HKDFBytesGenerator
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.params.HKDFParameters
+import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
+import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.nio.ByteBuffer
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /** Hex → bytes for test literals; whitespace (the spec wraps payloads) is ignored. */
 internal fun hex(text: String): ByteArray {
@@ -44,6 +54,13 @@ internal object TestAdminNotices {
     )
 
     const val V2_MESSAGE_ID = "0f1e2d3c4b5a6978"
+    const val V2_EXPIRES_AT = 1_792_634_400_000L
+    const val V2_CONTENT = "救援人員約 10 分鐘內抵達，請留在原地"
+
+    /** The appendix's recipient keys (共用金鑰): V2 is encrypted to recipient-1 and recipient-2 only. */
+    const val RECIPIENT_1_PRIVATE_HEX = "543430b3141351317d1fc752adafabb51eea760014c56ef649db958aee664b12"
+    const val RECIPIENT_2_PRIVATE_HEX = "9ca79b4e47da69ee9e5f577e7354942ddae23de0df9bac70a03fc397827c1473"
+    const val OUTSIDER_PRIVATE_HEX = "25c0ec1c0a16c67a57e0bd636008e61851a10ff8f27ebe488fd07cb570ef5ce0"
 
     /** V2 targeted, important, two recipients. */
     val V2 = hex(
@@ -169,6 +186,53 @@ internal object TestAdminNotices {
             ByteArray(40 * recipientCount) { 0x22 } + ByteArray(12) { 0x33 } +
             ByteArray(contentBytes + 16) { 0x44 }
 
+    /**
+     * [wire] with [tamper] applied to everything before its signature, then signed again with the
+     * test key: the signature holds, so whatever fails afterwards is not step 4.
+     */
+    fun resigned(wire: ByteArray, tamper: (ByteArray) -> Unit): ByteArray {
+        val unsigned = wire.copyOf(wire.size - 64).also(tamper)
+        return unsigned + sign("CARES-ADMIN-NOTICE-v1".toByteArray(Charsets.US_ASCII) + unsigned)
+    }
+
+    /**
+     * A targeted notice encrypted to [recipients] (their `noticePublicKey`s) as the spec's 管理端加密
+     * does, with fresh random keys, signed with the test key. For keys no vector covers, such as one
+     * the production key store generated; the vectors (V2) pin the format itself.
+     */
+    fun targeted(
+        recipients: List<ByteArray>,
+        content: String,
+        messageId: String = "2233445566778899",
+        expiresAt: Long = VECTOR_ISSUED_AT + 3_600_000L
+    ): ByteArray {
+        val random = SecureRandom()
+        val ephemeral = X25519PrivateKeyParameters(random)
+        val ephemeralPublic = ephemeral.generatePublicKey().encoded
+        val contentKey = ByteArray(32).also(random::nextBytes)
+        val nonce = ByteArray(12).also(random::nextBytes)
+        val header = ByteBuffer.allocate(36)
+            .put(0x01).put(0x02).put(0x01).put(0x02)
+            .put(hex(messageId)).putLong(VECTOR_ISSUED_AT).putLong(expiresAt).put(ByteArray(8))
+            .array()
+        val entries = recipients.fold(ByteArray(0)) { acc, recipient ->
+            val shared = ByteArray(32)
+            X25519Agreement().apply { init(ephemeral) }.calculateAgreement(X25519PublicKeyParameters(recipient, 0), shared, 0)
+            val okm = ByteArray(40)
+            HKDFBytesGenerator(SHA256Digest()).apply {
+                init(HKDFParameters(shared, hex(messageId), "CARES-ADMIN-NOTICE-v1/recipient".toByteArray(Charsets.US_ASCII) + ephemeralPublic + recipient))
+            }.generateBytes(okm, 0, 40)
+            acc + okm.copyOfRange(0, 8) + ByteArray(32) { i -> (contentKey[i].toInt() xor okm[8 + i].toInt()).toByte() }
+        }
+        val ciphertext = Cipher.getInstance("AES/GCM/NoPadding").run {
+            init(Cipher.ENCRYPT_MODE, SecretKeySpec(contentKey, "AES"), GCMParameterSpec(128, nonce))
+            updateAAD(header)
+            doFinal(content.toByteArray(Charsets.UTF_8))
+        }
+        val unsigned = header + ephemeralPublic + byteArrayOf(recipients.size.toByte()) + entries + nonce + ciphertext
+        return unsigned + sign("CARES-ADMIN-NOTICE-v1".toByteArray(Charsets.US_ASCII) + unsigned)
+    }
+
     private fun sign(message: ByteArray): ByteArray = Ed25519Signer().run {
         init(true, Ed25519PrivateKeyParameters(hex(TEST_ADMIN_SEED_HEX), 0))
         update(message, 0, message.size)
@@ -237,4 +301,26 @@ internal class RecordingSyncSet : AdminNoticeSyncSet {
 
     /** The messageIds offered, in order. */
     fun messageIds(): List<String> = added.map { (packet, _) -> packet.senderID.joinToString("") { "%02x".format(it) } }
+}
+
+/**
+ * This device's recipient key as the Inbox sees it, over a fixed X25519 private key (one of the
+ * appendix's), or none. [clear] plays a sign-out (`adminNotice_clearKey`).
+ */
+internal class FakeRecipientKey(privateKeyHex: String?) : AdminNoticeRecipientKey {
+    private var privateKey: X25519PrivateKeyParameters? = privateKeyHex?.let { X25519PrivateKeyParameters(hex(it), 0) }
+
+    fun clear() {
+        privateKey = null
+    }
+
+    override fun publicKey(): ByteArray? = privateKey?.generatePublicKey()?.encoded
+
+    override fun agree(ephemeralPublicKey: ByteArray): ByteArray? {
+        val key = privateKey ?: return null
+        val shared = ByteArray(32)
+        X25519Agreement().apply { init(key) }
+            .calculateAgreement(X25519PublicKeyParameters(ephemeralPublicKey, 0), shared, 0)
+        return shared
+    }
 }

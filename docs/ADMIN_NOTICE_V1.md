@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）。取代與撤回、定向解密與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具已實作（#135 廣播；#141 定向公告）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）；定向公告的解密與呈現（#141）。取代與撤回、回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -146,6 +146,14 @@ UTF-8 文字，0–300 bytes。只有 replaces 不為 0（純撤回）時才可�
 4. 收件者條目以隨機順序排列。
 
 收件者解密：用自己的私鑰與 `ephemeralPublicKey` 算出 `shared` 與 `okm`，以常數時間比對每個條目的 tag。比對到就還原 `contentKey` 解密；GCM 驗證失敗視為不是收件者。全部比對不到就不是收件者，不呈現，但照常轉送。
+
+#141 定下的細節：
+
+- Inbox 經注入的 port `AdminNoticeRecipientKey`（`publicKey()` 取得 `R`、`agree(ephemeralPublicKey)` 取得 `shared`）解密，私鑰不離開 `AdminNoticeRecipientKeyStore`。正式環境的 `StoredAdminNoticeRecipientKey` 每次都向 `AdminNoticeRecipientKeyStore.getInstance` 取用，與 Flutter bridge 是同一個實例：登出（`adminNotice_clearKey`）之後收到的定向公告立刻不再呈現。它不在建構時開 keystore（Inbox 在主執行緒建立）。
+- 解密是第 11 步（Firestore 那條路是「呈現在本機」那一步），排在驗簽、去重表與轉送的決定之後，只決定呈現與否。沒有金鑰、金鑰讀不到（例外）、tag 比對不到、GCM 失敗，一律當成不是收件者：照常轉送與注入。例外若一路傳到 mesh，會被當成「不轉送」，而這則已記為「已在 mesh 裡」，之後的副本也不會再轉送，所以 Inbox 一定攔下。
+- tag 以 `MessageDigest.isEqual` 比對每一個條目，比對到也不提早結束；有兩個條目相符時用第一個。
+- 每則公告只呈現一次，由第一份收到的副本決定（去重表的三種情況）。呈現時帶著那份副本的來源（`ReceivedAdminNotice.source`：`BACKEND` 或 `MESH`），#143 依它寫回條的 `via`（`firestore`、`ble`）。第一份解不開（例如當時沒有登入），之後的副本不會再試。
+- 解出空內容的定向公告不呈現，與空內容的廣播相同（純撤回一律用廣播 kind，發送工具也不簽空內容的定向公告）。
 
 tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來，旁人無法把兩則公告連到同一位收件者。
 
@@ -299,11 +307,20 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 | `content` | string | 明文內容；純撤回是空字串 |
 | `issuedAt`、`expiresAt` | timestamp | 與 `wire` 裡簽過的相同 |
 | `replaces` | string 或 null | 被取代的 messageId（16 個小寫十六進位字元）；沒有就是 null |
-| `batchId` | string | 拆成多則的定向公告共用同一個值；沒有拆的公告填自己的 messageId |
+| `batchId` | string | 拆成多則的定向公告共用同一個值，即第一則的 messageId；沒有拆的公告填自己的 messageId |
 | `createdBy` | string | 操作者的 uid，與 `admin_notices` 的 `createdBy` 相同 |
 | `createdAt` | timestamp | 伺服器時間 |
 
-定向公告另外記錄收件對象（指定的 uid 或 Reporter Handle，以及加密給了哪些收件裝置），欄位由定向公告的票補上。
+定向公告另外記錄收件對象（#141）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `recipientUids` | array of string | 操作者指定的帳號（uid），依指定的順序；同一批的每一則都一樣 |
+| `recipientHandles` | array of string | 操作者指定的 Reporter Handle；同一批的每一則都一樣 |
+| `recipientCount` | integer | 這一則加密給的收件裝置數，即 `wire` 的 recipientCount |
+| `recipientDevices` | array of map | 這一則加密給的每台收件裝置：`uid`、`reporterHandle`（登記文件的路徑）與 `noticePublicKey`（當時用的公鑰，Bytes）。順序與 `wire` 裡的條目無關 |
+
+收件裝置以 `uid` + `reporterHandle` 記錄，回條（`receipts/{uid}`）與登記文件都對得起來；`noticePublicKey` 讓事後查得出當時加密給的是哪一把，那支手機之後換過帳號也一樣。
 
 ### Security rules 草稿
 
@@ -376,8 +393,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 2. 定向公告要找出每個收件裝置的 `noticePublicKey`：
    - 指定帳號：讀 `reporter_handles/{uid}/installations` 底下的所有文件。
    - 指定 Reporter Handle（例如在 `mesh_reports` 上看到的）：以 collection group 查詢 `installations` 中 `reporterHandle == handle` 的文件，索引見 MESH_GATEWAY.md 第 8 節。有多個 uid 宣稱同一個 Handle 時，只用 `registeredAt` 最新的那份，並提示操作者（可能是冒領，見已知限制）。
-   - 每份有 `noticePublicKey` 的文件是一個收件裝置。找不到任何收件裝置的對象無法送達，要明確提示操作者；`registeredAt` 超過 30 天的顯示警告，但照樣加密。
-   - 收件裝置超過 5 個就拆成多則，每則有自己的 messageId，`admin_notice_records` 用同一個 batchId 串起來。
+   - 每份有 `noticePublicKey` 的文件是一個收件裝置；同一把 `noticePublicKey` 只加密一次（同一台裝置以 uid 和 Handle 都指定到時）。找不到任何收件裝置的對象無法送達，要明確提示操作者；`registeredAt` 超過 30 天的顯示警告，但照樣加密。Python 工具在任何一個對象找不到收件裝置時整批不送，讓操作者先改正收件對象。
+   - 收件裝置超過 5 個就拆成多則，每則有自己的 messageId，`admin_notice_records` 用同一個 batchId（第一則的 messageId）串起來。Python 工具把裝置平均分到最少的幾則（6 個拆成 3 + 3，不是 5 + 1）：收件裝置越少 payload 越小，見「大小上限」。整批在同一次 batch write 寫入，不會只送出一半。
 3. 依「線路格式」組 payload 並簽章，定向公告依「定向 body」加密。實作要先對過附錄的 test vectors。
 4. 用一次 batch write 同時寫入 `admin_notices/{messageId}`（`wire`、`expiresAt`、`createdAt`、`createdBy`，限制見 rules 草稿）與 `admin_notice_records/{messageId}`（欄位見「集合」）。`createdAt` 用 `serverTimestamp()`。
 
@@ -387,7 +404,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 ## 收件端呈現
 
-- 收到的公告存在 Kotlin 端的本機儲存，以 messageId 去重，只在第一次寫入時發通知。定向公告解密後的內容要加密儲存。保留到 `expiresAt` 後 7 天，期間標示為「已過期」。
+- 收到的公告存在 Kotlin 端的本機儲存，以 messageId 去重，只在第一次寫入時發通知。定向公告解密後的內容要加密儲存（本機儲存從 #136 起就整份加密，#141 以測試確認）。保留到 `expiresAt` 後 7 天，期間標示為「已過期」。
   - 實作是 EncryptedSharedPreferences（與身分金鑰相同的做法），廣播也一起加密，不另分兩種儲存。寫入用 `commit`，通知發出後行程立刻被殺也不會漏記。
   - 寫不進本機儲存時照樣通知：撤離令比重開後重複一次重要，同一個行程內仍有去重表擋著。
   - 純撤回沒有內容，不呈現也不通知；被撤回的公告怎麼標示見「撤回與取代」。
@@ -401,6 +418,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
   | 資訊 | 低 | 不出聲 |
 
   通知不設 category：勿擾模式對鬧鐘、活動或訊息的例外會把它放行。每則通知以 messageId 當 tag，撤回或取代時才找得到它來更新或取消。廣播的通知在鎖定畫面顯示內容，定向公告不顯示。
+
+  實作（#141）：定向公告的通知是 `VISIBILITY_PRIVATE`，附一份只有等級標題與「有一則給你的公告，解鎖後查看」的 public version，安全鎖定畫面顯示的是這一份。使用者在系統設定裡允許鎖定畫面顯示敏感內容時，Android 仍會顯示完整內容，這與其他通訊軟體相同；若要不論設定一律不顯示，得改成 `VISIBILITY_SECRET`，代價是鎖定畫面上完全看不到這則通知。
 
 - `POST_NOTIFICATIONS` 是選用權限。沒有權限時，首頁要放一張醒目的公告卡片代替通知。
   - 「沒有權限」看 `system_status` 的 `notificationGranted`，判斷與 notifier 相同：App 的通知沒被關掉，Android 13 起再加上權限。權限是在系統設定裡改的，原生不推事件，首頁出現與回到前景時重讀。
