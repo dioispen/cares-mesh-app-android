@@ -64,7 +64,7 @@ private class ResourceAdminNoticeTexts(private val context: Context) : AdminNoti
  * - 重要: default importance.
  * - 資訊: low importance, silent.
  *
- * Each notice is posted under its messageId as the tag, so #139 can update or cancel it.
+ * Each notice is posted under its messageId as the tag, so a correction or withdrawal can cancel it.
  * POST_NOTIFICATIONS is optional: without it nothing is posted, and the home screen's notice card
  * (#142) stands in.
  */
@@ -101,7 +101,6 @@ class SystemAdminNoticeNotifier(
             .setShowWhen(true)
             .setContentIntent(openApp)
             .setAutoCancel(true)
-            // A correction (#139) updates this notification without sounding again.
             .setOnlyAlertOnce(true)
             .setPriority(priority(notice.level))
             // A broadcast is public by design; a targeted notice's content (#141) is not.
@@ -118,6 +117,11 @@ class SystemAdminNoticeNotifier(
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission withdrawn before Admin Notice ${notice.messageId} was posted")
         }
+    }
+
+    /** A corrected or withdrawn notice: its notification, found by its messageId as the tag, goes. */
+    override fun cancel(messageId: String) {
+        notificationManager.cancel(messageId, NOTIFICATION_ID)
     }
 
     private fun canPostNotifications(): Boolean =
