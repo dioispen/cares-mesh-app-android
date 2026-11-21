@@ -1,7 +1,12 @@
 package com.bitchat.android.adminnotice
 
 import com.bitchat.android.adminnotice.TestAdminNotices.V1
+import com.bitchat.android.adminnotice.TestAdminNotices.RECIPIENT_1_PRIVATE_HEX
+import com.bitchat.android.adminnotice.TestAdminNotices.RECIPIENT_2_PRIVATE_HEX
 import com.bitchat.android.adminnotice.TestAdminNotices.V1_MESSAGE_ID
+import com.bitchat.android.adminnotice.TestAdminNotices.V2
+import com.bitchat.android.adminnotice.TestAdminNotices.V2_EXPIRES_AT
+import com.bitchat.android.adminnotice.TestAdminNotices.V2_MESSAGE_ID
 import com.bitchat.android.adminnotice.TestAdminNotices.V3
 import com.bitchat.android.adminnotice.TestAdminNotices.V3_MESSAGE_ID
 import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
@@ -121,6 +126,59 @@ class AdminNoticeRevocationTest {
         assertFalse(inbox.onMeshPacket(TestAdminNotices.meshPacket(V1)).relay)
         assertEquals(listOf("correct $V1_MESSAGE_ID by $CORRECTION_ID", "present $CORRECTION_ID"), presenter.events)
     }
+
+    // ── 定向公告（#141）───────────────────────────────────────────────────
+
+    @Test
+    fun `a pure revoke, always a broadcast, withdraws a targeted notice too`() {
+        val recipient = recipientInbox()
+        recipient.onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        assertTrue(recipient.onMeshPacket(TestAdminNotices.meshPacket(revokeOf(V2_MESSAGE_ID, expiresAt = V2_EXPIRES_AT))).relay)
+
+        assertEquals(listOf("present $V2_MESSAGE_ID", "withdraw $V2_MESSAGE_ID"), presenter.events)
+    }
+
+    @Test
+    fun `a targeted correction for this device marks the original corrected, then is presented`() {
+        val recipient = recipientInbox()
+        recipient.onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        recipient.onMeshPacket(TestAdminNotices.meshPacket(targetedCorrectionOfV2(to = RECIPIENT_1_PRIVATE_HEX)))
+
+        assertEquals(
+            listOf("present $V2_MESSAGE_ID", "correct $V2_MESSAGE_ID by $CORRECTION_ID", "present $CORRECTION_ID"),
+            presenter.events
+        )
+    }
+
+    @Test
+    fun `a targeted correction this device cannot open still marks the original corrected, and is relayed`() {
+        val recipient = recipientInbox()
+        recipient.onMeshPacket(TestAdminNotices.meshPacket(V2))
+
+        val outcome = recipient.onMeshPacket(TestAdminNotices.meshPacket(targetedCorrectionOfV2(to = RECIPIENT_2_PRIVATE_HEX)))
+
+        assertTrue(outcome.relay)
+        assertEquals(listOf("present $V2_MESSAGE_ID", "correct $V2_MESSAGE_ID by $CORRECTION_ID"), presenter.events)
+    }
+
+    /** An Inbox holding recipient-1's key, which opens V2. */
+    private fun recipientInbox() = AdminNoticeInbox(
+        adminKeys = TestAdminNotices.TEST_KEYS,
+        presenter = presenter,
+        nowMs = { now },
+        injectionScheduler = ManualScheduler(),
+        recipientKey = FakeRecipientKey(RECIPIENT_1_PRIVATE_HEX)
+    )
+
+    private fun targetedCorrectionOfV2(to: String) = TestAdminNotices.targeted(
+        recipients = listOf(requireNotNull(FakeRecipientKey(to).publicKey())),
+        content = "救援人員改約 30 分鐘後抵達",
+        messageId = CORRECTION_ID,
+        expiresAt = V2_EXPIRES_AT,
+        replaces = V2_MESSAGE_ID
+    )
 
     // ── 先驗簽才寫撤回紀錄 ───────────────────────────────────────────────────
 
