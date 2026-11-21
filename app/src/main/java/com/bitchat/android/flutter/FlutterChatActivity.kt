@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.bitchat.android.adminnotice.AdminNotices
+import com.bitchat.android.adminnotice.recordFirstRead
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.mesh.BluetoothMeshService
@@ -168,11 +169,13 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         )
         settingsBridge = settings
         // Both stores are process-wide: the mesh service decrypts with the same recipient key, and
-        // the Inbox's presenter writes the notices this engine lists.
+        // the Inbox's presenter writes the notices this engine lists. The first reading of a
+        // targeted notice writes its readAt receipt (#143).
         val adminNotice = AdminNoticeBridge(
             keyStore = { AdminNoticeRecipientKeyStore.getInstance(applicationContext) },
             notices = AdminNotices.store(applicationContext),
-            events = events
+            events = events,
+            onFirstRead = AdminNotices.receipts::recordFirstRead
         )
         adminNoticeBridge = adminNotice
         // 傳遞 activity (this) 給 channels，以便支援權限請求

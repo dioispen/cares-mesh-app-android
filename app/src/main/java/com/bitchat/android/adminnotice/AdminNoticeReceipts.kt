@@ -25,3 +25,13 @@ interface AdminNoticeReceipts {
         }
     }
 }
+
+/**
+ * The Flutter bridge's `onFirstRead` (`flutter/AdminNoticeBridge`): [notice] was just marked read
+ * for the first time, with its readAt set. A targeted notice's reading becomes its read receipt;
+ * a broadcast's, which the bridge reports too, writes nothing.
+ */
+fun AdminNoticeReceipts.recordFirstRead(notice: StoredAdminNotice) {
+    if (notice.kind != AdminNoticeKind.TARGETED) return
+    read(notice.messageId, notice.readAtMs ?: return)
+}
