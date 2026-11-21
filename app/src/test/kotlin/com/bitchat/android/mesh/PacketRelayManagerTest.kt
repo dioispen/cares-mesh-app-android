@@ -4,9 +4,14 @@ package com.bitchat.android.mesh
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.util.AppConstants
 import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
@@ -14,6 +19,7 @@ import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import kotlin.random.Random
 
 @ExperimentalCoroutinesApi
 class PacketRelayManagerTest {
@@ -101,6 +107,79 @@ class PacketRelayManagerTest {
 
         verify(delegate, never()).sendToPeer(any(), any())
         verify(delegate).broadcastPacket(any())
+    }
+
+    // Relay Decision 的政策參數（#1 R13）。「收到的 TTL」在轉發前先扣 1，門檻比的是扣完的值。
+
+    @Test
+    fun `the default policy keeps today's unconditional relay threshold of 4`() = runTest {
+        assertEquals(4, RelayPolicy().unconditionalRelayTtl.toInt())
+
+        val relay = RelayUnderTest(random = NeverWinsTheDraw)
+
+        assertTrue("received 5, relayed as 4", relay.relays(receivedTtl = 5u))
+        assertFalse("received 4, relayed as 3", relay.relays(receivedTtl = 4u))
+    }
+
+    @Test
+    fun `a packet whose relayed TTL reaches the threshold is relayed unconditionally`() = runTest {
+        val relay = RelayUnderTest(RelayPolicy(unconditionalRelayTtl = 6u), NeverWinsTheDraw)
+
+        assertTrue("relayed TTL == threshold", relay.relays(receivedTtl = 7u))
+        assertFalse("relayed TTL == threshold - 1", relay.relays(receivedTtl = 6u))
+    }
+
+    @Test
+    fun `a threshold above every TTL puts every hop through the network-size probability`() = runTest {
+        val relay = RelayUnderTest(RelayPolicy(unconditionalRelayTtl = UByte.MAX_VALUE), NeverWinsTheDraw)
+
+        assertFalse(relay.relays(receivedTtl = AppConstants.MESSAGE_TTL_HOPS))
+        assertFalse(relay.relays(receivedTtl = UByte.MAX_VALUE))
+    }
+
+    @Test
+    fun `the same seed gives the same probabilistic Relay Decisions`() = runTest {
+        suspend fun decisions(seed: Int): List<Boolean> {
+            val relay = RelayUnderTest(random = Random(seed))
+            return List(64) { relay.relays(receivedTtl = 3u) }
+        }
+
+        val first = decisions(seed = 42)
+
+        assertEquals(first, decisions(seed = 42))
+        assertTrue("the probabilistic path both relays and drops", true in first && false in first)
+        assertNotEquals(first, decisions(seed = 43))
+    }
+
+    /** `nextDouble()` 永遠是 [0, 1) 的最大值：機率路徑一律不轉發，只剩無條件轉發會送出。 */
+    private object NeverWinsTheDraw : Random() {
+        override fun nextBits(bitCount: Int): Int = 0
+        override fun nextDouble(): Double = Math.nextDown(1.0)
+    }
+
+    /**
+     * 真實的 [PacketRelayManager] 接一個只計算 broadcastPacket 次數的 delegate。預設網路規模 > 100，
+     * 機率路徑的轉發機率是 0.4，門檻以外的決策才看得出來。
+     */
+    private inner class RelayUnderTest(
+        policy: RelayPolicy = RelayPolicy(),
+        random: Random,
+        private val networkSize: Int = 200
+    ) : PacketRelayManagerDelegate {
+        private val manager = PacketRelayManager(myPeerID, policy, random).also { it.delegate = this }
+        private var broadcasts = 0
+
+        /** 收到一個 TTL 為 [receivedTtl] 的廣播封包時，是否轉發出去。 */
+        suspend fun relays(receivedTtl: UByte): Boolean {
+            val before = broadcasts
+            manager.handlePacketRelay(RoutedPacket(createPacket(route = null).copy(ttl = receivedTtl), otherPeerID))
+            return broadcasts > before
+        }
+
+        override fun getNetworkSize(): Int = networkSize
+        override fun getBroadcastRecipient(): ByteArray = ByteArray(8)
+        override fun broadcastPacket(routed: RoutedPacket) { broadcasts++ }
+        override fun sendToPeer(peerID: String, routed: RoutedPacket): Boolean = false
     }
 
     private fun hexStringToPeerBytes(hex: String): ByteArray {
