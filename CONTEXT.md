@@ -39,7 +39,7 @@ An account the project has listed on the backend to run the management dashboard
 _Avoid_: admin user, 管理中心 (the organisation, not the account), Verified Rescuer
 
 **Mutual-aid Task**:
-A Health Report whose Status calls for help (輕傷 or 重傷) or that carries an SOS, offered to Rescuers to take on; those carrying an SOS come first. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it.
+A Health Report whose Status calls for help (輕傷 or 重傷) or that carries an SOS, offered to Rescuers to take on; those carrying an SOS come first. It is waiting until a Rescuer accepts it, then accepted until that Rescuer completes or releases it. One Reporter can appear as two tasks, one from the backend and one heard over the mesh: the system deliberately cannot tell that a Reporter Handle belongs to an account, so it never merges them.
 _Avoid_: rescue request, ticket, job
 
 **Helper**:
@@ -79,5 +79,11 @@ Any way of making Relay Decisions that reads Severity — weighting the chance o
 _Avoid_: severity routing, priority relay, 嚴重度傳播策略
 
 **Gateway**:
-A signed-in device with internet access that writes the Broadcast Tier of other Reporters' Health Reports, received over the mesh, to the backend. A relay passes a packet on to the mesh; a Gateway passes it out of the mesh. It never carries the Detail or Sensitive Tier, and the backend does not verify what it writes.
-_Avoid_: uplink, bridge, 代理上網, relay (when the packet leaves the mesh)
+A signed-in device with internet access that carries packets across the edge of the mesh, both ways: out, writing the Broadcast Tier of other Reporters' Health Reports to the backend; in, injecting the Admin Notices it reads from the backend into the mesh. A relay passes a packet on within the mesh; a Gateway passes it out of or into the mesh. Outbound it never carries the Detail or Sensitive Tier and the backend does not verify what it writes; inbound, no device trusts an Admin Notice because a Gateway injected it.
+_Avoid_: uplink, bridge, 代理上網, 閘道, relay (when the packet leaves or enters the mesh)
+
+### Notices
+
+**Admin Notice**:
+A message an Administrator publishes to every device or to a few chosen accounts, valid until the expiry it states. Devices trust it only by the Administrators' signature, whichever Gateway or backend copy it reached them through; a later Admin Notice can correct or withdraw it.
+_Avoid_: announcement (the mesh's presence packet is ANNOUNCE), alert, push notification

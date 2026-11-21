@@ -316,6 +316,29 @@ above. Reusing a warm Gradle user home (`BITCHAT_CONTAINER_GRADLE_HOME_NAME`)
 removes most of the network exposure without affecting the output, because the
 build runs with `--no-build-cache` and `--rerun-tasks`.
 
+### The build host still leaks into the AAB entry order
+
+The container pins every tool, but it shares the host's kernel and filesystem.
+AGP adds the native debug symbols to the app bundle
+(`BUNDLE-METADATA/com.android.tools.build.debugsymbols/<abi>/*.so.sym`, included
+by default through `android.bundle.includeNativeDebugMetadata`) in the order a
+directory walk returns them, and that order comes from the host's filesystem.
+Two replicas of the same commit produced the same entries, with identical
+compressed bytes, in a different order on GitHub's AWS and Azure runners, so
+the AAB digests differed. The APKs do not carry these entries and were
+unaffected.
+
+`build-release.sh` therefore passes the AAB through
+`tools/reproducible-builds/NormalizeZipEntryOrder.java`, which sorts the entries
+by name. It copies each entry's local header, compressed data and data
+descriptor byte for byte and only rewrites the central directory offsets, so
+nothing is recompressed and every entry's content is unchanged. It rejects
+Zip64 and multi-disk archives instead of guessing. The symbols stay in the
+bundle, so Play Console can still symbolicate native crashes.
+
+Do not run it on the APKs: moving entries would break the alignment that
+`apksigner` relies on.
+
 ## Reproduce a release locally
 
 Requirements are Git and Docker with Linux/amd64 support. The figures below were

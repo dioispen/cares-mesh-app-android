@@ -10,7 +10,7 @@ void main() {
     test('both delivered', () {
       const delivery = HealthReportDelivery();
 
-      expect(delivery.message('重傷'), '已回報：重傷');
+      expect(reportDeliveryMessage(delivery, '重傷'), '已回報：重傷');
       expect(delivery.complete, isTrue);
       expect(delivery.failed, isFalse);
     });
@@ -18,7 +18,7 @@ void main() {
     test('only the cloud got it: nearby rescuers did not', () {
       const delivery = HealthReportDelivery(broadcastFailure: 'mesh 尚未啟動');
 
-      expect(delivery.message('重傷'), '已上傳雲端，但附近廣播失敗：mesh 尚未啟動');
+      expect(reportDeliveryMessage(delivery, '重傷'), '已上傳雲端，但附近廣播失敗：mesh 尚未啟動');
       expect(delivery.complete, isFalse);
       expect(delivery.failed, isFalse);
     });
@@ -26,7 +26,7 @@ void main() {
     test('only the broadcast went out', () {
       const delivery = HealthReportDelivery(uploadFailure: 'unavailable');
 
-      expect(delivery.message('輕傷'), '已向附近廣播：輕傷，但雲端上傳失敗：unavailable');
+      expect(reportDeliveryMessage(delivery, '輕傷'), '已向附近廣播：輕傷，但雲端上傳失敗：unavailable');
       expect(delivery.complete, isFalse);
       expect(delivery.failed, isFalse);
     });
@@ -34,7 +34,7 @@ void main() {
     test('offline: the broadcast went out and the upload is queued', () {
       const delivery = HealthReportDelivery(uploadQueued: true);
 
-      expect(delivery.message('輕傷'), '已向附近廣播：輕傷，目前離線，恢復連線後自動上傳雲端');
+      expect(reportDeliveryMessage(delivery, '輕傷'), '已向附近廣播：輕傷，目前離線，恢復連線後自動上傳雲端');
       expect(delivery.complete, isFalse);
       expect(delivery.failed, isFalse);
     });
@@ -42,7 +42,7 @@ void main() {
     test('offline and no broadcast: only the queued upload is left', () {
       const delivery = HealthReportDelivery(broadcastFailure: 'mesh 尚未啟動', uploadQueued: true);
 
-      expect(delivery.message('重傷'), '已記錄：重傷，但附近廣播失敗（mesh 尚未啟動），目前離線，恢復連線後自動上傳雲端');
+      expect(reportDeliveryMessage(delivery, '重傷'), '已記錄：重傷，但附近廣播失敗（mesh 尚未啟動），目前離線，恢復連線後自動上傳雲端');
       expect(delivery.complete, isFalse);
       expect(delivery.failed, isFalse);
     });
@@ -50,7 +50,7 @@ void main() {
     test('neither got it', () {
       const delivery = HealthReportDelivery(broadcastFailure: 'mesh 尚未啟動', uploadFailure: 'unavailable');
 
-      expect(delivery.message('重傷'), '回報失敗：附近廣播失敗（mesh 尚未啟動），雲端上傳也失敗（unavailable）');
+      expect(reportDeliveryMessage(delivery, '重傷'), '回報失敗：附近廣播失敗（mesh 尚未啟動），雲端上傳也失敗（unavailable）');
       expect(delivery.failed, isTrue);
     });
   });

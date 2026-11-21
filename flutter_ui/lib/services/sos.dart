@@ -97,15 +97,30 @@ enum CloudSosWrite {
   patch,
 }
 
-/// Status 改變、或還沒有文件（[previousStatus] 為 null）時整份寫入。另外，已完成（`done`）的
-/// 任務又舉起 SOS 時也重新開一筆，否則這次求救不會出現在任何人的待救援清單上。
+/// 這份回報要不要讓任務回到等待中（`taskStatus`／`helperId`）。健康回報與 SOS 都照這條規則。
+///
+/// 內容變了（Status 改變、還沒有文件時 [previousStatus] 為 null，或 [injuryChanged]），沿用舊的
+/// 認領會讓協助者看到對不上的任務。已完成（`done`）的任務又帶著 SOS 也重新開一筆，否則這次求救
+/// 不會出現在任何人的待救援清單上。其餘情況不動：重送相同內容不該讓路上的協助者丟掉任務。
+bool reportResetsTask({
+  required String? previousStatus,
+  required String status,
+  bool injuryChanged = false,
+  required bool sos,
+  String? taskStatus,
+}) =>
+    previousStatus != status || injuryChanged || (sos && taskStatus == 'done');
+
+/// [reportResetsTask] 成立時整份寫入，否則只改那幾個欄位。
 CloudSosWrite cloudSosWriteFor({
   required String? previousStatus,
   required String status,
   required bool sos,
   String? taskStatus,
 }) =>
-    previousStatus != status || (sos && taskStatus == 'done') ? CloudSosWrite.replace : CloudSosWrite.patch;
+    reportResetsTask(previousStatus: previousStatus, status: status, sos: sos, taskStatus: taskStatus)
+        ? CloudSosWrite.replace
+        : CloudSosWrite.patch;
 
 /// 寫進 `health_reports/{uid}` 的欄位（Detail Tier，ADR-0005）。
 ///
@@ -153,56 +168,3 @@ Map<String, Object?> cloudSosSensitiveFields(AppUser user) => HealthReport(
       emergencyContactRelation: user.emergencyContactRelation,
     ).toSensitiveJson()
       ..remove('surveySensitive');
-
-/// 一次 SOS 送出的兩條路各自的結果：經 BLE mesh 廣播給附近裝置，以及寫入雲端（Firestore）。
-///
-/// 斷網是災害現場的常態：mesh 已送出而雲端逾時，要說「附近裝置已收到」，不能說成失敗。
-class SosDelivery {
-  const SosDelivery({
-    required this.withLocation,
-    this.broadcastFailure,
-    this.uploadFailure,
-    this.uploadQueued = false,
-  });
-
-  /// 送出的回報有沒有附上位置。
-  final bool withLocation;
-
-  /// 附近廣播沒有送出的原因（給使用者看）；null 表示原生已交給 mesh 廣播。
-  final String? broadcastFailure;
-
-  /// 雲端寫入失敗的原因；null 表示已寫入或已暫存（見 [uploadQueued]）。
-  final String? uploadFailure;
-
-  /// 離線：寫入已進本機佇列，恢復連線後會自動送出，但伺服器還沒收到。
-  final bool uploadQueued;
-
-  /// 兩條路都送到，也附上了位置。
-  bool get complete => broadcastFailure == null && uploadFailure == null && !uploadQueued && withLocation;
-
-  /// 兩條路都失敗：這次求救誰都沒收到。
-  bool get failed => broadcastFailure != null && uploadFailure != null;
-
-  /// 已經有人收到：mesh 已送出，或雲端已確認。離線暫存還不算——伺服器還沒收到。
-  bool get reachedSomeone => broadcastFailure == null || (uploadFailure == null && !uploadQueued);
-
-  /// 離線暫存的上傳之後送到（[failure] 為 null）或失敗了。
-  SosDelivery withUpload({String? failure}) => SosDelivery(
-        withLocation: withLocation,
-        broadcastFailure: broadcastFailure,
-        uploadFailure: failure,
-      );
-
-  String get message {
-    final outcome = switch ((broadcastFailure, uploadFailure)) {
-      (null, null) when uploadQueued => '附近裝置已收到求救，雲端尚未上傳，恢復連線後會自動送出。',
-      (final broadcast?, null) when uploadQueued => '目前離線，附近廣播也失敗（$broadcast）。求救已暫存，恢復連線後會自動送出。',
-      (null, null) => withLocation ? 'SOS 已發送，請保持冷靜等待救援。' : 'SOS 已發送，但沒有附上位置，請設法告知所在地。',
-      (final broadcast?, null) => '求救已上傳雲端，但附近廣播失敗（$broadcast）。',
-      (null, final upload?) => '附近裝置已收到求救，但雲端上傳失敗（$upload）。',
-      (final broadcast?, final upload?) => '發送失敗：附近廣播失敗（$broadcast），雲端上傳也失敗（$upload）。請再試一次。',
-    };
-    final caveatAlreadySaid = failed || (broadcastFailure == null && uploadFailure == null && !uploadQueued);
-    return withLocation || caveatAlreadySaid ? outcome : '$outcome沒有附上位置，請設法告知所在地。';
-  }
-}

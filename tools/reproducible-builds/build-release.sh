@@ -85,7 +85,12 @@ if [ ! -f "$aab_source" ]; then
   echo "error: expected phone release AAB not found" >&2
   exit 1
 fi
-cp "$aab_source" "$OUTPUT_DIR/bitchat-android-release-unsigned.aab"
+# AGP adds the native debug symbols (BUNDLE-METADATA/.../debugsymbols/<abi>/*.so.sym) in
+# directory-walk order, which depends on the host's filesystem: GitHub's AWS and Azure runners
+# produced the same entries in a different order. Sort the entries, copying each one's bytes
+# unchanged, so the bundle does not depend on where it was built.
+java "$SCRIPT_DIR/NormalizeZipEntryOrder.java" \
+  "$aab_source" "$OUTPUT_DIR/bitchat-android-release-unsigned.aab"
 
 # AGP cannot build split APKs and an app bundle from the same intermediates.
 ./gradlew "${gradle_args[@]}" :app:clean :app:assembleRelease
