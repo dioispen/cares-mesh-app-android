@@ -9,7 +9,7 @@ import com.bitchat.android.protocol.BitchatPacket
  * Gateway's Firestore listener (`gateway/`, the only side that touches Firebase) publishes `wire`,
  * the mesh publishes the 0x31 packets it hears, and the Inbox receives both, so neither the Inbox
  * nor `mesh/` depends on Firebase. The running mesh service also attaches itself here as the
- * Inbox's injector.
+ * Inbox's injector and sync set.
  *
  * One Inbox per process, installed by [AdminNotices.install] when the App starts: its dedup table
  * must outlive any one mesh service instance and serve the mesh whether or not the foreground
@@ -60,13 +60,20 @@ object AdminNoticeBridge {
         }
     }
 
-    /** The mesh service started and can broadcast: this Gateway injects through [injector]. */
-    fun attachMesh(injector: AdminNoticeInjector) {
-        inbox?.attachInjector(injector)
+    /**
+     * The mesh service started and can broadcast: this Gateway injects through [injector], and
+     * [syncSet], its gossip sync, is handed the notices already in the mesh and each one entering it.
+     */
+    fun attachMesh(injector: AdminNoticeInjector, syncSet: AdminNoticeSyncSet) {
+        val current = inbox ?: return
+        current.attachSyncSet(syncSet)
+        current.attachInjector(injector)
     }
 
-    /** The mesh service stopped: the Inbox cancels the injections waiting for it. */
-    fun detachMesh(injector: AdminNoticeInjector) {
-        inbox?.detachInjector(injector)
+    /** The mesh service stopped: the Inbox cancels the injections waiting for it and stops offering it notices. */
+    fun detachMesh(injector: AdminNoticeInjector, syncSet: AdminNoticeSyncSet) {
+        val current = inbox ?: return
+        current.detachInjector(injector)
+        current.detachSyncSet(syncSet)
     }
 }

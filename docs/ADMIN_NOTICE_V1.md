@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）。sync、取代與撤回、定向解密與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）。取代與撤回、定向解密與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -195,7 +195,7 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 
 - 第 3 步只比對 senderID 與 timestamp。外層其他欄位（recipient、裝置簽章、route、severity、version）Inbox 不看，轉送時一律換成正規化的外層封包（`AdminNoticeTraffic.normalizedForRelay`），TTL 與收到的 payload 編碼不變。這些欄位都不在 `PacketIdUtil` 的封包 ID 裡，`SecurityManager` 又在 Inbox 之前就記下封包 ID：如果帶著它們的副本被擋下，攻擊者先送一份加了 recipient 的真公告就能讓後到的正規副本被當成重複；如果原樣轉送，就能把公告擋在指定的收件者、或用 route 導向指定的路徑。
 - `SecurityManager` 在 Inbox 驗簽之前就記下 0x31 的封包 ID，這不違反「先驗簽才記錄」：管理端簽章在 payload 裡，偽造的副本封包 ID 一定和真的不同，佔不住真公告。
-- 去重表的「只從 Firestore 收過」改為「已在 mesh 裡」時，`Inbox.markInMesh` 一併取消待注入；mesh 聽到的與 Gateway 注入的公告都經過這裡，#138 在這裡加入 sync 集合。
+- 去重表的「只從 Firestore 收過」改為「已在 mesh 裡」時，`Inbox.markInMesh` 一併取消待注入；mesh 聽到的與 Gateway 注入的公告都經過這裡，#138 在這裡加入 sync 集合（見「Gossip sync」的實作）。
 - `onMeshPacket` 回傳的 `relay` 就是 `validPacket`。沒有安裝 Inbox、或處理時丟出例外，`AdminNoticeBridge.deliverFromMesh` 一律回傳不轉送。BLE mesh 與 Wi-Fi Aware 的 `MeshCore` 交給同一個 Inbox。
 
 **0x31 的 senderID 不是 peer**（ADR-0011）。把 senderID 當成 peer 的地方都要排除 0x31：
@@ -228,6 +228,14 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 - 被取代的公告立即移除。
 - 定向公告的密文也要同步。中繼看不到內容，但收件者常常正是晚到的那個人。
 - 封包是正規化的，GCS 的封包 ID 在所有節點上都一致，不會因為副本來自不同 Gateway 而一再重送。
+- 實作（#138）：
+  - `GossipSyncManager.onAdminNoticeSeen(packet, expiresAtMs)` 是 0x31 唯一的入口，`onPublicPacketSeen` 照舊不收 0x31，所以沒驗過簽章的副本進不來。`removeAdminNotice(messageId)` 給 #139 移除被取代的公告。expiresAt 到了、定期清理（`CLEANUP_INTERVAL_MS`，1 分鐘）還沒清掉的，不送也不宣告；交進來時已到期的不收。
+  - sync 回應依序送 ANNOUNCE、Health Report、公告、公開訊息；公告前面不送任何東西。
+  - GCS 候選清單照既有規則依 timestamp（公告是 issuedAt）由新到舊取，公告不另外優先。公開訊息很多時，舊公告可能擠不進自己的 filter，鄰居每輪就會再送一次；收到的 Inbox 視為重複、不轉送，只多花頻寬，不會漏送。
+  - Inbox 交給 sync 的 port 是 `AdminNoticeSyncSet`（`add(packet, expiresAtMs)`、`remove(messageId)`），屬於正在跑的 mesh 服務，生命週期與注入出口相同：`BluetoothMeshService` 啟動成功後經 `AdminNoticeBridge.attachMesh(injector, syncSet)` 一起掛上，`stopServices` 與關閉 BLE 傳輸時 `detachMesh` 一起卸下，舊實例較晚才卸下時不影響新實例。
+  - 這個 `GossipSyncManager` 與 Wi-Fi Aware 的 `MeshCore` 共用（`MeshServiceHolder`），Wi-Fi Aware 聽到的公告也經同一個 Inbox 進來，兩邊的 peer 都補得到。除錯設定把 BLE 傳輸關掉時 mesh 服務不會掛上，與注入一樣沒有 sync。
+  - mesh 服務換新的實例：Inbox 與行程同壽，已在 mesh 裡的公告不會重新注入，新實例的 sync 集合卻是空的。所以 Inbox 另外留一份還沒過期、已在 mesh 裡的公告（正規化的外層封包與 expiresAt，上限同 sync 集合 50 則，滿了丟 expiresAt 最早的），新的 sync 集合掛上時一次補給它。這份只放記憶體，App 重開後與 sync 集合一起清空，要等 Firestore 的快取或鄰居的 sync 補回。#139 移除被取代的公告時，這份與 port 都要移除。
+  - 在時鐘誤差容忍內收下、但已過 expiresAt 的公告照常轉送，不加入 sync 集合。
 
 ### 撤回與取代
 
@@ -256,7 +264,7 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
   - `BluetoothMeshService` 啟動成功後經 `AdminNoticeBridge.attachMesh` 成為注入出口；`stopServices` 與關閉 BLE 傳輸時 `detachMesh`，Inbox 隨即取消所有待注入。舊實例較晚才停止時，不會取消新實例的待注入。
   - 注入的封包不簽章、不加 route，經 `broadcastRoutedPacket` 送出（BLE 與橋接的傳輸）。
   - 時間到時沒有 mesh 服務、或交不出去，這次注入就放棄，公告仍是「只從 Firestore 收過」：期間從 BLE 聽到，照「收到 0x31」轉送、不再呈現。
-  - Inbox 與行程同壽（#136），去重表會撐過 mesh 服務重開，所以上一段的「再注入一次」只適用於還沒進 mesh 的公告：「只從 Firestore 收過」、待注入已被取消或放棄的公告，再從 Firestore 收到時重新排注入，不再呈現。已在 mesh 裡的公告不會重新注入；mesh 服務換新的實例後，sync 集合要怎麼補回這些公告由 #138 決定。
+  - Inbox 與行程同壽（#136），去重表會撐過 mesh 服務重開，所以上一段的「再注入一次」只適用於還沒進 mesh 的公告：「只從 Firestore 收過」、待注入已被取消或放棄的公告，再從 Firestore 收到時重新排注入，不再呈現。已在 mesh 裡的公告不會重新注入；mesh 服務換新的實例後，由 Inbox 把它們補回新的 sync 集合（#138，見「Gossip sync」的實作）。
 - 來自 Firestore 本機快取的文件（`isFromCache`），例如重開時還沒有網路，照樣處理與注入：安全性由簽章保證，不靠文件從哪裡來。App 重開後只放記憶體的 sync 集合已經清空，也能靠快取補回來。
 - listener 出錯就會終止，要重新掛上：
   - `RESOURCE_EXHAUSTED`（Spark 額度用完）、`UNAVAILABLE`：從 1 分鐘開始指數退避，最長 30 分鐘。**不可以立即重試**，否則會把剩下的額度燒光，連 Health Report 都讀不到。其他錯誤碼也照這樣退避。
@@ -432,7 +440,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 ## 實作前待驗證
 
-1. **超過 512 bytes 的 0x31 能不能完整走過 gossip sync。** 讀程式的結果是可以：重組後的封包經 `handleMessage` 交給 `onPublicPacketSeen`，sync 回應經 `sendPacketToPeer` 的 `fragmentingSender` 切片。但還沒有任何類型實際這樣跑過，main 上也沒有切片 sync 的測試，實作時寫單元測試確認。
+1. **超過 512 bytes 的 0x31 能不能完整走過 gossip sync。** 已確認可以（#138）：`AdminNoticeFragmentedSyncTest` 的「V5 sent as a sync reply is fragmented, reassembled by the late arrival and accepted by its Inbox」以附錄的 V5（外層封包 683 bytes）走過整條路。sync 回應經 transport 共用的 `FragmentingPacketSender` 切成 2 片（TTL 0）；收到的一方由 `PacketProcessor` 重組，重組後的 0x31 不經 `handleMessage`，而是交給 0x31 的 handler，Inbox 驗過管理端簽章，再加入它自己的 sync 集合。
 2. **舊版 App 會不會轉送 0x31。** 已從 main 的程式碼確認會：未知類型的廣播封包 `validPacket` 維持 true，交給 `PacketRelayManager` 轉送；`updatePeerLastSeen` 只更新已存在的 peer。實機驗收時順便觀察即可。
 3. **Doze 模式與小米、OPPO 等廠商的省電機制下，前景服務與 listener 能不能保持連線。** 併入實機驗收，與 MESH_GATEWAY.md 第 10 節用同一組手機。
 4. **App 被系統終止後重開，離線佇列裡的回條什麼時候送出。** 佇列本身會寫磁碟（ADR-0009）；要確認的是沒有 Flutter 畫面時，Kotlin 端有沒有啟動 Firestore 實例把它送出。
@@ -442,7 +450,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **Kotlin 單元測試**
 
-- 附錄的 test vectors：驗過 V1–V3、拒絕 V4；以 recipient-1、recipient-2 解開 V2，outsider 比對不到任何 tag。
+- 附錄的 test vectors：驗過 V1–V3、V5，拒絕 V4；以 recipient-1、recipient-2 解開 V2，以 recipient-1 到 recipient-5 解開 V5，outsider 比對不到任何 tag。
 - 「收到 0x31」的每一步各自擋得住；先驗簽才寫去重表與撤回紀錄；去重表的三種情況。
 - 撤回與取代：先收到原公告再收到取代，以及反過來，兩種順序都對。
 - sync 集合：上限、到期、被取代就移除；超過 512 bytes 的公告經 sync 切片後完整送達（待驗證 1）。
@@ -452,7 +460,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **Dart 測試（管理後台）**
 
-- 以相同輸入產生逐位元組相同的 V1–V3，在 Web 上執行。
+- 以相同輸入產生逐位元組相同的 V1–V3、V5，在 Web 上執行。
 
 **規則測試**（`firestore-tests/rules.test.mjs`）
 
@@ -484,9 +492,12 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 由 `tools/admin-notice/gen_test_vectors.py` 產生（需要 `pip install cryptography`）。所有金鑰都由固定字串的 SHA-256 推出，**只能用於測試**。Kotlin 與 Dart 的實作都要能：
 
-- 驗過 V1、V2、V3 的簽章，並拒絕 V4。
+- 驗過 V1、V2、V3、V5 的簽章，並拒絕 V4。
 - 用 recipient-1 與 recipient-2 的私鑰解開 V2；用 outsider 的私鑰比對不到任何 tag。
-- 管理端用相同的輸入，產生逐位元組相同的 V1、V2、V3。
+- 用 recipient-1 到 recipient-5 的私鑰都解得開 V5（條目刻意不照編號排）；outsider 比對不到任何 tag。
+- 管理端用相同的輸入，產生逐位元組相同的 V1、V2、V3、V5。
+
+V5 是「大小上限」表的最後一列：5 個收件裝置、內容 300 bytes，外層封包 683 bytes，送上 mesh 會切成 2 片，用來驗證切片後的 sync（實作前待驗證第 1 項）。
 
 ### 共用金鑰
 
@@ -573,4 +584,54 @@ payload:
   92a4e99ba2e887b3e5a4a7e5908ce59c8be5b08fe981bfe99ba3e689805c770d
   5b6d3a8d4165dd74006650f7c96b1fab54ec1340438ad884db367d8a7f2d0288
   9bc878922000ad2616d9dbaa019eeaeeecc4af17d7813bb76eb8a5a60b
+```
+
+### V5 組播（緊急，5 個收件裝置，外層封包超過 512 bytes）
+
+```text
+messageId: 7a5b3c1d9e8f6a42
+issuedAt: 1792627200000
+expiresAt: 1792641600000
+content (UTF-8): 第三救援隊、第五救援隊及醫療組請注意：大同國小避難所東側通道已因土石崩落封閉，請改由北側中山路進入。現場約有四十名民眾，其中六人需要擔架後送，請攜帶擔架與氧氣瓶，抵達後立即向現場指揮官回報抵達的人數。
+content bytes: 300
+recipient-3 X25519 private: 78da96d74d479ba3f82e74d10911557b18591b30c4c7cf840ec00907fc6e61e8
+recipient-3 X25519 public: a329a3497cdaff7178e3242e11ec65c0c65264993b3d0bb181b695538456c760
+recipient-4 X25519 private: c1946f5a8ac3042aedec7f9ce1c2ff032de7d48c4bc6adfe2e97aa49ef43e589
+recipient-4 X25519 public: 67463a97e6852a5fe18f45268bb0abf449be13e17eed36684fbfa2ccf8e37e12
+recipient-5 X25519 private: 3beeb0d9c85e9720e2d67f625525749c2bfd7fe0bdd38ac44db7022da09ff6bb
+recipient-5 X25519 public: 47fb178e09a1c1481b5da4106966c801444320df0d12dccbc15420bc2c43324b
+ephemeral X25519 private: 75dc5e6dbfc486931c91111eb8e23c7bbeaa28a944957b0e3aeeef58a3de2540
+ephemeral X25519 public: 7ff2642665620d4564fdd4296d74d00b6d4345dbccce0804f17e97afda62b34c
+contentKey: 69fada4a6edb29be916232fce2827807b9d7f3bceccd3f31ed421285e0e1bc7b
+nonce: 31aebc49d7fa19563d19c990
+entry order: recipient-4, recipient-1, recipient-5, recipient-3, recipient-2
+recipient-4 tag: d37191cc72eaab65
+recipient-1 tag: a325be078784b61a
+recipient-5 tag: 024b1a23ea7ee3c9
+recipient-3 tag: c7cc646682afe82e
+recipient-2 tag: 9bee11ce396fb1f8
+payload bytes: 661
+outer packet bytes: 683
+payload:
+  010201037a5b3c1d9e8f6a42000001a160e85000000001a161c40a0000000000
+  000000007ff2642665620d4564fdd4296d74d00b6d4345dbccce0804f17e97af
+  da62b34c05d37191cc72eaab65dfb1ea60c9df00f27fd9be3fed2f4020b73319
+  d86fe072243fa78dc224df5610a325be078784b61a875f8c9eadd66ff7242bc2
+  f0d8f72d719c9b432e16acee746355242df5c99ade024b1a23ea7ee3c959ed79
+  28d5a71177e828485ed2ffb645c469f863470df1a7e28d1b4d1b259b07c7cc64
+  6682afe82ea810feb8d7441eea132d5c91a18f3d2c7f2d656d66f3f4b1f04521
+  0a7fdebc099bee11ce396fb1f83f2e40b91fe3d64810f48e25dd53ecb32aa001
+  935fb612ae83901c57df3e683c31aebc49d7fa19563d19c990a5ee2f217ec3fa
+  bd86123a4e2ab0670e2afc48bed789652f5f766dffcda8969a562fbf772e9911
+  39aa48514c42aa89dd2386e95f274d475910d598c78d213c674e9b50c2f5ae34
+  da90b8e886dc49b7b5bd1b1b012b665f9cf4eaf3e6406855b065be62bab22a2f
+  61292a78cc5b489c3be265d0b8f42e128ec985884202b5330f8fbdfe172ac1e6
+  65b962cb3c475d453f1f634a679ec4be933d0c5b48c47aa878ca317cda590976
+  9be4071579300e257f398cd3712c6a3c9c9a69290701caaf7d704383f2b2c0e2
+  dea612f4cbf416ae9b6fef1ce95815fe96056f75e05e38007c22241bd8c8ea52
+  82c37d4c17726c03c5bb8b042600c07aeb13c457148338286f45dc4394981196
+  6a288361b0c7a7a233f103b42530816b9ec3ca9bbddc3986039adf1a1acb1f40
+  f4f0f2bb51277bafd1c05d900469009d842249b19c512059f4288e4025e37b7d
+  fe94ce27999fabcb74e189fda4d2544150001524ed1f3097a37cd57767258701
+  3e722fa3b40b06ac612d5b8f0765d42af609796906
 ```

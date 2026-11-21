@@ -66,15 +66,31 @@ class AdminNoticeBridgeTest {
     fun `the mesh service attached through the bridge injects, and detaching it cancels`() {
         AdminNoticeBridge.install(inbox)
         val mesh = RecordingInjector()
-        AdminNoticeBridge.attachMesh(mesh)
+        val sync = RecordingSyncSet()
+        AdminNoticeBridge.attachMesh(mesh, sync)
         AdminNoticeBridge.deliverFromBackend(TestAdminNotices.V1)
         scheduler.advance(5_000)
         AdminNoticeBridge.deliverFromBackend(TestAdminNotices.signed())
 
-        AdminNoticeBridge.detachMesh(mesh)
+        AdminNoticeBridge.detachMesh(mesh, sync)
         scheduler.advance(5_000)
 
         assertEquals(listOf(TestAdminNotices.V1_MESSAGE_ID), mesh.injected.map { it.senderID.toHex() })
+    }
+
+    @Test
+    fun `the mesh service attached through the bridge gets the notices in the mesh, until it detaches`() {
+        AdminNoticeBridge.install(inbox)
+        AdminNoticeBridge.deliverFromMesh(TestAdminNotices.meshPacket(TestAdminNotices.V1))
+        val mesh = RecordingInjector()
+        val sync = RecordingSyncSet()
+
+        AdminNoticeBridge.attachMesh(mesh, sync)
+        AdminNoticeBridge.deliverFromMesh(TestAdminNotices.meshPacket(TestAdminNotices.V2))
+        AdminNoticeBridge.detachMesh(mesh, sync)
+        AdminNoticeBridge.deliverFromMesh(TestAdminNotices.meshPacket(TestAdminNotices.signed()))
+
+        assertEquals(listOf(TestAdminNotices.V1_MESSAGE_ID, TestAdminNotices.V2_MESSAGE_ID), sync.messageIds())
     }
 
     @Test

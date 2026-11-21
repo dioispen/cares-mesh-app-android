@@ -26,7 +26,7 @@ The application follows a clean architecture pattern, heavily modularized by fea
 | `service/` | **Core Service**: Contains `MeshForegroundService`, managing persistent background connectivity. |
 | `mesh/` | **Mesh Networking**: Logic for peer discovery, advertising, and message routing. |
 | `protocol/` | **Wire Protocol**: Definitions of messages exchanged between peers. |
-| `adminnotice/` | **Admin Notice** (`docs/ADMIN_NOTICE_V1.md`): `AdminNoticeInbox` runs every received notice, from the backend or the mesh (0x31), through the processing rules and schedules a Gateway's injection into the mesh; Firebase-free. Also the local store and notifications. `mesh/` may depend on it; a 0x31's senderID is a messageId, never a peer (`mesh/AdminNoticeTraffic`). |
+| `adminnotice/` | **Admin Notice** (`docs/ADMIN_NOTICE_V1.md`): `AdminNoticeInbox` runs every received notice, from the backend or the mesh (0x31), through the processing rules, schedules a Gateway's injection into the mesh, and offers every verified notice in the mesh to the running mesh service's gossip sync (`AdminNoticeSyncSet`, never `onPublicPacketSeen`); Firebase-free. Also the local store and notifications. `mesh/` may depend on it; a 0x31's senderID is a messageId, never a peer (`mesh/AdminNoticeTraffic`). |
 | `gateway/` | **Gateway** (ADR-0009, ADR-0011): the only Kotlin code using Firebase; uploads to `mesh_reports`, listens to `admin_notices`. |
 | `crypto/` | **Security**: Cryptographic primitives and key management. |
 | `noise/` | **Encryption**: Implementation of the Noise Protocol Framework for secure channels. |

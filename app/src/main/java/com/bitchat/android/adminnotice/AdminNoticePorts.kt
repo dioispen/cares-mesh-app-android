@@ -38,6 +38,19 @@ fun interface AdminNoticeInjector {
 }
 
 /**
+ * 加入 sync 集合: the running mesh service's gossip sync (#138), which offers each notice in the
+ * mesh to neighbors that lack it until the notice expires, so that devices arriving late still get
+ * it. Called while the Inbox holds its lock, so it must not call back into the Inbox.
+ */
+interface AdminNoticeSyncSet {
+    /** Offers [packet], a verified notice's normalized outer packet, until [expiresAtMs]. */
+    fun add(packet: BitchatPacket, expiresAtMs: Long)
+
+    /** Stops offering the notice [messageId] (16 lowercase hex characters): one a later notice replaced (#139). */
+    fun remove(messageId: String)
+}
+
+/**
  * Runs an action after a delay (the Gateway's injection delay). The returned function cancels it.
  * The action must run on another thread than [schedule]'s caller, never inline.
  */
