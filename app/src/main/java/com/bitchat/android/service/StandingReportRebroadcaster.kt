@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * 什麼時候重發 Reporter 自己最新的 Health Report（ADR-0010）。純函式，不碰時鐘以外的狀態。
+ * 什麼時候重發 Reporter 自己最新的 Health Report（ADR-0012）。純函式，不碰時鐘以外的狀態。
  *
  * 舉著 SOS、或 Status 為輕傷／重傷的回報「一直成立」，直到 Reporter 送出下一筆；但每支手機的
  * 同步暫存只保留一筆回報 2 小時（[AppConstants.Sync.HEALTH_REPORT_RETENTION_MS]）。所以這種回報
@@ -75,7 +75,7 @@ object StandingHealthReport {
 
 /**
  * 依 [StandingHealthReport] 重發成立中的 Health Report，在 MeshForegroundService 的 scope 裡跑，
- * 不依賴 Flutter 畫面（ADR-0010）。
+ * 不依賴 Flutter 畫面（ADR-0012）。
  *
  * 平時只有一個 delay 等到下次發送，沒有輪詢；保存的回報一變（[changes]：Reporter 送出新的一筆、
  * 這裡自己的重發寫回保存區、panic 清除），就取消等待、從新的那筆重算。發送走

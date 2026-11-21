@@ -121,7 +121,7 @@ class OwnHealthReportKeeperTest {
         val holding = OwnHealthReportKeeper(myPeerID, store, nowMs = { now }, keepPastExpiry = { true })
         holding.keep(sent)
 
-        // The phone was off for longer than the retention period (ADR-0010)
+        // The phone was off for longer than the retention period (ADR-0012)
         now += AppConstants.Sync.HEALTH_REPORT_RETENTION_MS + 60_000
 
         assertNull(holding.latest())

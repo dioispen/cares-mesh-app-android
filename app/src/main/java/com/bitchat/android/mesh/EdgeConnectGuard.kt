@@ -2,7 +2,7 @@ package com.bitchat.android.mesh
 
 /**
  * Keeps outbound connection attempts at the edge of range from tying up the controller (P1-5,
- * ADR-0011).
+ * ADR-0013).
  *
  * [ConnectionRssiThreshold] lets the client try any advertisement it can hear. A
  * `connectGatt(autoConnect = false)` that cannot complete hangs in the stack for about 30 s before

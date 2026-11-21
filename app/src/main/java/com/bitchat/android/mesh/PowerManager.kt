@@ -441,7 +441,7 @@ internal object PowerProfileResolver {
             PowerManager.AdvertiseProfile(PowerManager.BleAdvertiseMode.LOW_POWER, PowerManager.BleTxPower.ULTRA_LOW)
     }
 
-    // Background and isolation (P1-6, ADR-0011). Survivors' phones are mostly screen-off in a
+    // Background and isolation (P1-6, ADR-0013). Survivors' phones are mostly screen-off in a
     // pocket, and the Rescuer who could relay their Health Report often only passes by.
 
     /**

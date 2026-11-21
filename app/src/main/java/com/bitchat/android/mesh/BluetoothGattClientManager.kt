@@ -429,7 +429,7 @@ class BluetoothGattClientManager(
         val maxOverall = dbg?.maxConnectionsOverall?.value ?: powerManager.getMaxConnections()
         val maxClient = dbg?.maxClientConnections?.value ?: maxOverall
 
-        // Situational RSSI filtering (P1-5, ADR-0011)
+        // Situational RSSI filtering (P1-5, ADR-0013)
         val threshold = powerManager.getRSSIThreshold(
             directPeerCount = connectionTracker.getDirectPeerCount(),
             connectionCount = connectionTracker.getConnectedDeviceCount(),
@@ -479,7 +479,7 @@ class BluetoothGattClientManager(
         }
     }
     
-    // Connection policy (P1-5, ADR-0011): the threshold logged once per change, not per advertisement.
+    // Connection policy (P1-5, ADR-0013): the threshold logged once per change, not per advertisement.
     @Volatile private var lastThreshold: ConnectionRssiThreshold.Decision? = null
     private val weakLinkReplacement = WeakLinkReplacement()
     private val edgeConnectGuard = EdgeConnectGuard()

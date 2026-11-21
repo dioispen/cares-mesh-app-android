@@ -625,7 +625,7 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
 
         // 1. Notify UI —— 只帶 Broadcast Tier：Status 與近似位置，不含任何 PII。
         //    同一則陳述（Reporter Handle、reportTime 都相同）只交一次：Reporter 的裝置會以新的封包
-        //    重發成立中的回報（ADR-0010）。聊天列本來就依 id 去重，但每交一次就會再震動一次。
+        //    重發成立中的回報（ADR-0012）。聊天列本來就依 id 去重，但每交一次就會再震動一次。
         if (chatHealthReports.isNew(report)) {
             val approx = report.approximateLatLng()
             val locationText = if (approx != null) {

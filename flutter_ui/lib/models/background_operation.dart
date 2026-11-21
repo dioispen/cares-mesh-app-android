@@ -1,6 +1,6 @@
 import 'settings_state.dart';
 
-/// 離開 App 後 Mesh 還會不會繼續運作（P1-6、ADR-0011），對應 Kotlin `MeshBackgroundStatus`
+/// 離開 App 後 Mesh 還會不會繼續運作（P1-6、ADR-0013），對應 Kotlin `MeshBackgroundStatus`
 /// （`system_status` 的 `backgroundOperation`，線上名稱 [wireName]）。
 ///
 /// 前景服務沒有在跑時，App 一進背景就可能被系統凍結，附近的人與 Rescuer 就收不到這支手機的

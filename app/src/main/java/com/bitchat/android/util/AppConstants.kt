@@ -72,7 +72,7 @@ object AppConstants {
         // and keeps any report at most 2 h 10 min.
         const val HEALTH_REPORT_MAX_FUTURE_SKEW_MS: Long = 10 * 60 * 1000L
         // A standing Health Report (SOS raised, or Status 輕傷/重傷) is sent again, newly signed
-        // and timestamped, this long after the last send (ADR-0010). Must stay well below
+        // and timestamped, this long after the last send (ADR-0012). Must stay well below
         // HEALTH_REPORT_RETENTION_MS: four sends per retention period, so the report outlives a
         // re-send that reached nobody or a wait that Doze stretched.
         const val STANDING_REPORT_RESEND_INTERVAL_MS: Long = 30 * 60 * 1000L

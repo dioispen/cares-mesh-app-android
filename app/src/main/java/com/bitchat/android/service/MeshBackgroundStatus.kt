@@ -1,7 +1,7 @@
 package com.bitchat.android.service
 
 /**
- * Whether the mesh keeps running once the app leaves the screen, and if not, why (P1-6, ADR-0011).
+ * Whether the mesh keeps running once the app leaves the screen, and if not, why (P1-6, ADR-0013).
  * Flutter reads it as `backgroundOperation` in `system_status`, named on the wire as [wireName].
  *
  * Without the foreground service the system may freeze the app as soon as it is in the background,

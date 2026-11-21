@@ -483,7 +483,7 @@ void main() {
       expect(merged.single.task.injury, '重傷');
     });
 
-    // ADR-0010：Reporter 的裝置每 30 分鐘以新的封包重發成立中的回報，payload（含 reportTime）不變
+    // ADR-0012：Reporter 的裝置每 30 分鐘以新的封包重發成立中的回報，payload（含 reportTime）不變
     test('成立中回報的重發只留一筆，Rescuer 已接下的任務狀態不變', () {
       final sent = (task: _bleTask(handle: 'aaaaaaaaaaaa', sos: true), reportTime: t1);
       final resent = (task: _bleTask(handle: 'aaaaaaaaaaaa', sos: true), reportTime: t1);

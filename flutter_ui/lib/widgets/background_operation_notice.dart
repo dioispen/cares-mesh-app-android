@@ -13,7 +13,7 @@ BackgroundOperation? _dismissedReason;
 @visibleForTesting
 void resetBackgroundNoticeDismissal() => _dismissedReason = null;
 
-/// 首頁的背景運作提示（P1-6、ADR-0011）：前景服務沒有在跑時說明原因，並提供一鍵修正。
+/// 首頁的背景運作提示（P1-6、ADR-0013）：前景服務沒有在跑時說明原因，並提供一鍵修正。
 ///
 /// 一直留在首頁，直到問題解決或使用者關掉它；關掉後原因改變（或下次開 App）時再出現。
 /// 沒有原生實作（測試、iOS）或原生沒有回報背景運作時什麼都不顯示，也不訂閱事件串流。

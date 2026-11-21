@@ -185,7 +185,7 @@ class MeshForegroundService : Service() {
         gateway = MeshGatewayRuntime.start(applicationContext)
 
         // A raised SOS or an injury report is sent again every 30 min while it stands, so it
-        // does not expire from the mesh after 2 h, screens closed or not (ADR-0010).
+        // does not expire from the mesh after 2 h, screens closed or not (ADR-0012).
         standingReportResender = StandingReportRebroadcaster.start(scope)
 
         // Notification content is driven by peer-state changes, not a permanent timer.

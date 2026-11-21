@@ -2,7 +2,7 @@ package com.bitchat.android.mesh
 
 /**
  * The weakest scan RSSI at which this phone still initiates a GATT connection to a peer (P1-5,
- * ADR-0011). A link that is already up is never dropped for being weak; it lives until the BLE
+ * ADR-0013). A link that is already up is never dropped for being weak; it lives until the BLE
  * supervision timeout.
  *
  * Upstream bitchat (2025-07) used one strict value per power mode, tuned for crowded places where

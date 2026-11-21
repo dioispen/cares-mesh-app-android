@@ -3,7 +3,7 @@ package com.bitchat.android.mesh
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * The latest advertisement RSSI heard per device address and per peer (P1-5, ADR-0011).
+ * The latest advertisement RSSI heard per device address and per peer (P1-5, ADR-0013).
  *
  * A connected peer keeps advertising, so its scan RSSI stays fresh, while the RSSI stored on a link
  * is only the one from connect time. Judging "the weakest link" needs the fresh value. Samples are

@@ -121,7 +121,7 @@ class MeshGatewayTest {
         val report = heard()
 
         gateway.onReport(report)
-        // ADR-0010：Reporter 的裝置 30 分鐘後重新簽章、換了封包時間戳，payload 原封不動
+        // ADR-0012：Reporter 的裝置 30 分鐘後重新簽章、換了封包時間戳，payload 原封不動
         now += 30 * 60_000L
         gateway.onReport(heard(reportTimeMs = report.reportTimeMs, rawPacket = byteArrayOf(0x01, 0x30, 0x02)))
         runCurrent()

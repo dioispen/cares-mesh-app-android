@@ -1,7 +1,7 @@
 package com.bitchat.android.mesh
 
 /**
- * Whether a full phone gives up its weakest link for a clearly stronger candidate (P1-5, ADR-0011).
+ * Whether a full phone gives up its weakest link for a clearly stronger candidate (P1-5, ADR-0013).
  *
  * Upstream never connected once the connection limit was reached, and evicted the oldest link
  * when over it. Near capacity the RSSI threshold is strict ([ConnectionRssiThreshold]), so a full

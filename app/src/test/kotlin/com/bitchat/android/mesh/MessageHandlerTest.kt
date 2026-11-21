@@ -408,7 +408,7 @@ class MessageHandlerTest {
         verify(delegate, never()).onMessageReceived(any())
     }
 
-    // ADR-0010：Reporter 的裝置以新的封包重發成立中的回報，payload 不變（reportTime 也不變）
+    // ADR-0012：Reporter 的裝置以新的封包重發成立中的回報，payload 不變（reportTime 也不變）
     @Test
     fun `a re-sent health report reaches the chat once but Flutter and the gateway every time`() = runBlocking {
         whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))

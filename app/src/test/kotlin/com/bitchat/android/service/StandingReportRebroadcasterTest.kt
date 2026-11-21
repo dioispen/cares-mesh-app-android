@@ -20,7 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * ADR-0010：舉著 SOS 或受傷的 Health Report，由 Reporter 的裝置每 30 分鐘以新的封包時間戳重發，
+ * ADR-0012：舉著 SOS 或受傷的 Health Report，由 Reporter 的裝置每 30 分鐘以新的封包時間戳重發，
  * payload 原封不動。
  */
 @OptIn(ExperimentalCoroutinesApi::class)

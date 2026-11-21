@@ -63,7 +63,7 @@
 | 背景、電量 11–20% | POWER_SAVER | 同上 | 同上 | 120 s |
 | 背景、電量 ≤ 10% | ULTRA_LOW_POWER | 同上 | LOW_POWER / ULTRA_LOW<br>無直連鄰居：LOW_POWER / MEDIUM | 300 s |
 
-「無直連鄰居」時的掃描與廣播、以及發起連線的 RSSI 門檻，見 [ADR-0011](../adr/0011-connection-policy-favours-sparse-networks.md)。門檻不再只看模式：直連的 peer 少於 2 個時 −115 dBm（聽得到就連）；連線數 ≥ 上限 − 1 時維持 −95／−85／−75／−65 dBm（PERFORMANCE／BALANCED／POWER_SAVER／ULTRA_LOW_POWER）；其他情況 −115 dBm，ULTRA_LOW_POWER 為 −95 dBm。**斷線後手機變成孤立，廣播會變強**，距離類的 run 要把這點寫進紀錄。
+「無直連鄰居」時的掃描與廣播、以及發起連線的 RSSI 門檻，見 [ADR-0013](../adr/0013-connection-policy-favours-sparse-networks.md)。門檻不再只看模式：直連的 peer 少於 2 個時 −115 dBm（聽得到就連）；連線數 ≥ 上限 − 1 時維持 −95／−85／−75／−65 dBm（PERFORMANCE／BALANCED／POWER_SAVER／ULTRA_LOW_POWER）；其他情況 −115 dBm，ULTRA_LOW_POWER 為 −95 dBm。**斷線後手機變成孤立，廣播會變強**，距離類的 run 要把這點寫進紀錄。
 
 **除了 E4 以外，所有實驗都固定在 BALANCED 模式**：
 

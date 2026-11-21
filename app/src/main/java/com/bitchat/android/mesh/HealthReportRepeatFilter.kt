@@ -7,7 +7,7 @@ import com.bitchat.android.util.AppConstants
  * Tells a new statement from a repeat of one already handled, by Reporter Handle and `reportTime`.
  *
  * Packet IDs cannot: a Reporter's device re-sends a standing Health Report newly signed and
- * timestamped, with the payload unchanged (ADR-0010), and SecurityManager forgets a packet ID
+ * timestamped, with the payload unchanged (ADR-0012), and SecurityManager forgets a packet ID
  * after a few minutes, so a synced copy can come round again too. Only a report newer than every
  * earlier one from that Reporter is new; an older one that arrives late counts as a repeat.
  */

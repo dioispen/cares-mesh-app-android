@@ -73,7 +73,7 @@ object OwnHealthReportPolicy {
  * re-signed or re-timestamped here. Restoring runs in the mesh service, not in Flutter, so it also
  * works when only MeshForegroundService is running.
  *
- * The SOS re-sender (ADR-0010) sends the kept report again under a new timestamp while it stands;
+ * The SOS re-sender (ADR-0012) sends the kept report again under a new timestamp while it stands;
  * that send comes back through [keep] like any other, so the slot always holds the last one sent.
  */
 class OwnHealthReportKeeper(
@@ -83,7 +83,7 @@ class OwnHealthReportKeeper(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /**
      * A kept report this is true for stays past its sync expiry, for [latestOwn]: a standing SOS
-     * is re-sent from it however long the phone was off (ADR-0010). Any other is erased then.
+     * is re-sent from it however long the phone was off (ADR-0012). Any other is erased then.
      */
     private val keepPastExpiry: (BitchatPacket) -> Boolean = { false }
 ) {
@@ -180,7 +180,7 @@ class OwnHealthReportKeeper(
         /**
          * Moves on whenever a keeper has written a report or been cleared. Process-wide, not per
          * keeper: the mesh service that owns one is replaced (panic, restart) without telling
-         * those who read it. The SOS re-sender (ADR-0010) reads the kept report again on it.
+         * those who read it. The SOS re-sender (ADR-0012) reads the kept report again on it.
          */
         val changes: StateFlow<Long> = changeCount.asStateFlow()
     }
