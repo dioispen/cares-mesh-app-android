@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/user.dart';
 import '../services/mascot_service.dart';
 import '../services/profile_store.dart';
+import '../widgets/background_operation_notice.dart';
 import '../widgets/chat_navigation_host.dart';
 import '../widgets/user_avatar.dart';
 import 'knowledge_screen.dart';
@@ -207,6 +208,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   ],
                 ),
               ),
+            ),
+
+            // 前景服務沒有在跑時的提示（P1-6）：離開 App 後 Mesh 可能被系統暫停。
+            const SliverToBoxAdapter(
+              child: BackgroundOperationNotice(padding: EdgeInsets.fromLTRB(16, 18, 16, 0)),
             ),
 
             // 功能卡片

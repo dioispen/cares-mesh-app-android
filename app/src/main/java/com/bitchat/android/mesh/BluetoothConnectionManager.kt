@@ -38,6 +38,8 @@ class BluetoothConnectionManager(
         private const val RADIO_START_RETRY_DELAY_MS = 3_000L
         private const val MAX_RADIO_START_RETRIES = 3
         private const val CLEANUP_DELAY = com.bitchat.android.util.AppConstants.Mesh.CONNECTION_CLEANUP_DELAY_MS
+        /** Advertising restarts once its settings have held this long (P1-6): direct peers may flap. */
+        private const val ADVERTISE_RESTART_DEBOUNCE_MS = 3_000L
     }
     
     // Core Bluetooth components
@@ -182,14 +184,15 @@ class BluetoothConnectionManager(
 
     init {
         connectionScope.launch {
-            var previousMode: PowerManager.PowerMode? = null
+            // Advertising follows whether we have direct peers too, not only the mode (P1-6).
+            var previousAdvertise: PowerManager.AdvertiseProfile? = null
             powerManager.profile.collect { profile ->
-                val modeChanged = previousMode != null && previousMode != profile.mode
-                previousMode = profile.mode
+                val advertiseChanged = previousAdvertise != null && previousAdvertise != profile.advertise
+                previousAdvertise = profile.advertise
                 if (!isActive || !isBleTransportEnabled() || !radioRunning) return@collect
 
-                if (modeChanged && isGattServerEnabled()) {
-                    serverManager.restartAdvertising()
+                if (advertiseChanged && isGattServerEnabled()) {
+                    scheduleAdvertisingRestart()
                 }
                 clientManager.applyPowerProfile(profile)
             }
@@ -238,6 +241,22 @@ class BluetoothConnectionManager(
         } catch (_: Exception) { }
     }
     
+    private var advertisingRestartJob: Job? = null
+
+    /**
+     * Restarts advertising with the current settings once they have stopped changing for
+     * [ADVERTISE_RESTART_DEBOUNCE_MS], so direct peers coming and going cannot cause a restart storm.
+     */
+    private fun scheduleAdvertisingRestart() {
+        advertisingRestartJob?.cancel()
+        advertisingRestartJob = connectionScope.launch {
+            delay(ADVERTISE_RESTART_DEBOUNCE_MS)
+            if (this@BluetoothConnectionManager.isActive && radioRunning && isGattServerEnabled()) {
+                serverManager.restartAdvertising()
+            }
+        }
+    }
+
     /**
      * Centralized connection limit enforcement
      */

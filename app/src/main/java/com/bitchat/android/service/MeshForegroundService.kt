@@ -25,6 +25,9 @@ import com.bitchat.android.mesh.BluetoothMeshService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -82,6 +85,18 @@ class MeshForegroundService : Service() {
             context.startService(intent)
         }
 
+        private val foregroundActive = MutableStateFlow(false)
+
+        /** Whether the service runs in the foreground, so the mesh survives the app leaving the screen (P1-6). */
+        val isForegroundActive: StateFlow<Boolean> = foregroundActive.asStateFlow()
+
+        /** Whether background operation is active, and if not, why. */
+        fun backgroundStatus(context: Context): MeshBackgroundStatus = MeshBackgroundStatus.resolve(
+            serviceInForeground = foregroundActive.value,
+            backgroundEnabled = MeshServicePreferences.isBackgroundEnabled(true),
+            hasBluetoothPermissions = hasBluetoothPermissionsStatic(context)
+        )
+
         private fun shouldStartAsForeground(context: Context): Boolean {
             return MeshServicePreferences.isBackgroundEnabled(true) &&
                     hasBluetoothPermissionsStatic(context)
@@ -112,6 +127,10 @@ class MeshForegroundService : Service() {
     // Service lifecycle callbacks and notification state are main-thread confined.
     private val scope = CoroutineScope(Dispatchers.Main.immediate + serviceJob)
     private var isInForeground: Boolean = false
+        set(value) {
+            field = value
+            foregroundActive.value = value
+        }
     private var isShuttingDown: Boolean = false
     private var lastNotifiedPeerCount: Int? = null
     private var gateway: MeshGatewayRuntime? = null

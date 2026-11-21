@@ -1,6 +1,8 @@
 package com.bitchat.android.flutter
 
+import android.Manifest
 import android.os.Build
+import com.bitchat.android.service.MeshServicePreferences
 import com.bitchat.android.testsupport.FakeAndroidKeyStore
 import com.bitchat.android.testsupport.RecordingResult
 import io.flutter.plugin.common.BinaryMessenger
@@ -13,6 +15,7 @@ import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -20,6 +23,7 @@ import org.junit.runner.RunWith
 import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import kotlin.coroutines.CoroutineContext
 
@@ -84,6 +88,34 @@ class BitchatFlutterChannelsTest {
         assertTrue(channels.handle(MethodCall("getSigningPublicKey", null), result))
 
         assertEquals(listOf("error:SERVICE_NOT_READY"), result.calls)
+    }
+
+    @Test
+    fun `system status says why the mesh would not keep running in the background`() {
+        val app = RuntimeEnvironment.getApplication()
+        MeshServicePreferences.init(app)
+        val channels = newChannels().also { channels = it }
+
+        // Robolectric grants no permissions; before Android 12 the service needs location.
+        MeshServicePreferences.setBackgroundEnabled(true)
+        val missing = systemStatus(channels)
+        assertEquals("permissionsMissing", missing["backgroundOperation"])
+        assertEquals("location", missing["backgroundPermission"])
+
+        MeshServicePreferences.setBackgroundEnabled(false)
+        val disabled = systemStatus(channels)
+        assertEquals("backgroundDisabled", disabled["backgroundOperation"])
+        assertNull(disabled["backgroundPermission"])
+
+        shadowOf(app).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
+        MeshServicePreferences.setBackgroundEnabled(true)
+        assertEquals("notRunning", systemStatus(channels)["backgroundOperation"])
+    }
+
+    private fun systemStatus(channels: BitchatFlutterChannels): Map<*, *> {
+        val result = RecordingResult()
+        assertTrue(channels.handle(MethodCall("getSystemStatus", null), result))
+        return result.values.single() as Map<*, *>
     }
 
     private fun newChannels(signingPublicKey: () -> ByteArray? = { null }) = BitchatFlutterChannels(

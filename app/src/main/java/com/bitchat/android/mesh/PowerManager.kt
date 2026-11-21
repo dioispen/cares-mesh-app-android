@@ -42,12 +42,25 @@ class PowerManager private constructor(context: Context) : LifecycleEventObserve
 
     enum class BatteryBand { NORMAL, LOW, CRITICAL }
 
+    /** `ScanSettings` scan modes. */
+    enum class BleScanMode { LOW_LATENCY, BALANCED, LOW_POWER }
+
+    /** `AdvertiseSettings` advertise modes. */
+    enum class BleAdvertiseMode { LOW_LATENCY, BALANCED, LOW_POWER }
+
+    /** `AdvertiseSettings` TX power levels. */
+    enum class BleTxPower { HIGH, MEDIUM, LOW, ULTRA_LOW }
+
     data class BleSchedule(
         val scanOnMs: Long,
         val scanOffMs: Long,
         val continuousScan: Boolean,
-        val maxConnections: Int = 8
+        val maxConnections: Int = 8,
+        val scanMode: BleScanMode = BleScanMode.BALANCED
     )
+
+    /** How this phone advertises; advertising restarts whenever it changes (P1-6). */
+    data class AdvertiseProfile(val mode: BleAdvertiseMode, val txPower: BleTxPower)
 
     data class WifiAwareSchedule(
         val tcpKeepAliveMs: Long,
@@ -71,6 +84,7 @@ class PowerManager private constructor(context: Context) : LifecycleEventObserve
         val isCharging: Boolean,
         val hasDirectPeers: Boolean,
         val ble: BleSchedule,
+        val advertise: AdvertiseProfile,
         val meshAnnouncementIntervalMs: Long,
         val wifiAware: WifiAwareSchedule,
         val nostr: NostrSchedule
@@ -189,17 +203,17 @@ class PowerManager private constructor(context: Context) : LifecycleEventObserve
         val builder = ScanSettings.Builder()
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
 
-        when (current.mode) {
-            PowerMode.PERFORMANCE -> builder
+        // Resolved per profile, not per mode: an isolated background window scans BALANCED (P1-6).
+        when (current.ble.scanMode) {
+            BleScanMode.LOW_LATENCY -> builder
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
                 .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
-            PowerMode.BALANCED -> builder
+            BleScanMode.BALANCED -> builder
                 .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
                 .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
                 .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
-            PowerMode.POWER_SAVER,
-            PowerMode.ULTRA_LOW_POWER -> builder
+            BleScanMode.LOW_POWER -> builder
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
                 .setMatchMode(ScanSettings.MATCH_MODE_STICKY)
                 .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
@@ -207,22 +221,25 @@ class PowerManager private constructor(context: Context) : LifecycleEventObserve
         return builder.setReportDelay(0).build()
     }
 
-    fun getAdvertiseSettings(): AdvertiseSettings = when (profile.value.mode) {
-        PowerMode.PERFORMANCE -> AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(true).setTimeout(0).build()
-        PowerMode.BALANCED -> AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-            .setConnectable(true).setTimeout(0).build()
-        PowerMode.POWER_SAVER -> AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW)
-            .setConnectable(true).setTimeout(0).build()
-        PowerMode.ULTRA_LOW_POWER -> AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_ULTRA_LOW)
+    // Resolved per profile, not per mode: an isolated phone advertises louder (P1-6).
+    fun getAdvertiseSettings(): AdvertiseSettings {
+        val advertise = profile.value.advertise
+        return AdvertiseSettings.Builder()
+            .setAdvertiseMode(
+                when (advertise.mode) {
+                    BleAdvertiseMode.LOW_LATENCY -> AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+                    BleAdvertiseMode.BALANCED -> AdvertiseSettings.ADVERTISE_MODE_BALANCED
+                    BleAdvertiseMode.LOW_POWER -> AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
+                }
+            )
+            .setTxPowerLevel(
+                when (advertise.txPower) {
+                    BleTxPower.HIGH -> AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+                    BleTxPower.MEDIUM -> AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
+                    BleTxPower.LOW -> AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+                    BleTxPower.ULTRA_LOW -> AdvertiseSettings.ADVERTISE_TX_POWER_ULTRA_LOW
+                }
+            )
             .setConnectable(true).setTimeout(0).build()
     }
 
@@ -249,7 +266,8 @@ class PowerManager private constructor(context: Context) : LifecycleEventObserve
             appendLine("Is Charging: ${current.isCharging}")
             appendLine("App In Background: ${current.isBackground}")
             appendLine("Has Direct Peers: ${current.hasDirectPeers}")
-            appendLine("BLE Scan: ${current.ble.scanOnMs}ms ON / ${current.ble.scanOffMs}ms OFF")
+            appendLine("BLE Scan: ${current.ble.scanOnMs}ms ON / ${current.ble.scanOffMs}ms OFF (${current.ble.scanMode})")
+            appendLine("BLE Advertise: ${current.advertise.mode} / ${current.advertise.txPower}")
             appendLine("Max Connections: ${current.ble.maxConnections}")
         }
     }
@@ -319,24 +337,34 @@ internal object PowerProfileResolver {
         val ble = when {
             isBackground && hasDirectPeers ->
                 PowerManager.BleSchedule(
-                    scanOnMs = 1_000L,
-                    scanOffMs = 29_000L,
-                    continuousScan = false
+                    scanOnMs = CONNECTED_BACKGROUND_SCAN_ON_MS,
+                    scanOffMs = CONNECTED_BACKGROUND_SCAN_OFF_MS,
+                    continuousScan = false,
+                    scanMode = scanModeFor(mode)
                 )
             isBackground ->
                 PowerManager.BleSchedule(
-                    scanOnMs = 1_000L,
-                    scanOffMs = 59_000L,
-                    continuousScan = false
+                    scanOnMs = ISOLATED_BACKGROUND_SCAN_ON_MS,
+                    scanOffMs = ISOLATED_BACKGROUND_SCAN_OFF_MS,
+                    continuousScan = false,
+                    scanMode = ISOLATED_BACKGROUND_SCAN_MODE
                 )
             mode == PowerManager.PowerMode.PERFORMANCE ->
-                PowerManager.BleSchedule(Long.MAX_VALUE, 0L, true)
+                PowerManager.BleSchedule(Long.MAX_VALUE, 0L, true, scanMode = scanModeFor(mode))
             mode == PowerManager.PowerMode.BALANCED ->
-                PowerManager.BleSchedule(8_000L, 2_000L, false)
+                PowerManager.BleSchedule(8_000L, 2_000L, false, scanMode = scanModeFor(mode))
             mode == PowerManager.PowerMode.POWER_SAVER ->
-                PowerManager.BleSchedule(2_000L, 28_000L, false)
+                PowerManager.BleSchedule(2_000L, 28_000L, false, scanMode = scanModeFor(mode))
             else ->
-                PowerManager.BleSchedule(1_000L, 29_000L, false)
+                PowerManager.BleSchedule(1_000L, 29_000L, false, scanMode = scanModeFor(mode))
+        }
+
+        val advertise = when {
+            hasDirectPeers -> advertiseFor(mode)
+            mode == PowerManager.PowerMode.ULTRA_LOW_POWER -> ISOLATED_CRITICAL_BATTERY_ADVERTISE
+            // PERFORMANCE already advertises at LOW_LATENCY / HIGH; isolation never lowers it.
+            mode == PowerManager.PowerMode.PERFORMANCE -> advertiseFor(mode)
+            else -> ISOLATED_ADVERTISE
         }
 
         val announcementInterval = when {
@@ -387,11 +415,67 @@ internal object PowerProfileResolver {
             isCharging = isCharging,
             hasDirectPeers = hasDirectPeers,
             ble = ble,
+            advertise = advertise,
             meshAnnouncementIntervalMs = announcementInterval,
             wifiAware = wifi,
             nostr = nostr
         )
     }
+
+    private fun scanModeFor(mode: PowerManager.PowerMode): PowerManager.BleScanMode = when (mode) {
+        PowerManager.PowerMode.PERFORMANCE -> PowerManager.BleScanMode.LOW_LATENCY
+        PowerManager.PowerMode.BALANCED -> PowerManager.BleScanMode.BALANCED
+        PowerManager.PowerMode.POWER_SAVER,
+        PowerManager.PowerMode.ULTRA_LOW_POWER -> PowerManager.BleScanMode.LOW_POWER
+    }
+
+    /** Each mode's advertising while this phone has direct peers (upstream's values). */
+    private fun advertiseFor(mode: PowerManager.PowerMode): PowerManager.AdvertiseProfile = when (mode) {
+        PowerManager.PowerMode.PERFORMANCE ->
+            PowerManager.AdvertiseProfile(PowerManager.BleAdvertiseMode.LOW_LATENCY, PowerManager.BleTxPower.HIGH)
+        PowerManager.PowerMode.BALANCED ->
+            PowerManager.AdvertiseProfile(PowerManager.BleAdvertiseMode.BALANCED, PowerManager.BleTxPower.MEDIUM)
+        PowerManager.PowerMode.POWER_SAVER ->
+            PowerManager.AdvertiseProfile(PowerManager.BleAdvertiseMode.LOW_POWER, PowerManager.BleTxPower.LOW)
+        PowerManager.PowerMode.ULTRA_LOW_POWER ->
+            PowerManager.AdvertiseProfile(PowerManager.BleAdvertiseMode.LOW_POWER, PowerManager.BleTxPower.ULTRA_LOW)
+    }
+
+    // Background and isolation (P1-6, ADR-0011). Survivors' phones are mostly screen-off in a
+    // pocket, and the Rescuer who could relay their Health Report often only passes by.
+
+    /**
+     * Background without direct peers: a 4 s scan window every 30 s (upstream: 1 s every 60 s),
+     * so two phones in pockets find each other within about 30 s.
+     */
+    const val ISOLATED_BACKGROUND_SCAN_ON_MS = 4_000L
+    const val ISOLATED_BACKGROUND_SCAN_OFF_MS = 26_000L
+
+    /**
+     * ...scanning BALANCED during that window: at LOW_POWER the controller itself listens only
+     * about 0.5 s of every 5 s, so a short window could hear nothing at all.
+     */
+    val ISOLATED_BACKGROUND_SCAN_MODE = PowerManager.BleScanMode.BALANCED
+
+    /** Background with direct peers: unchanged, 1 s every 30 s at the mode's scan mode. */
+    const val CONNECTED_BACKGROUND_SCAN_ON_MS = 1_000L
+    const val CONNECTED_BACKGROUND_SCAN_OFF_MS = 29_000L
+
+    /**
+     * Advertising without direct peers, in every mode but PERFORMANCE (already louder) and
+     * ULTRA_LOW_POWER: a passing Rescuer, usually the one who initiates the connection, hears
+     * the phone from further away. Upstream background advertising was LOW_POWER / LOW.
+     */
+    val ISOLATED_ADVERTISE = PowerManager.AdvertiseProfile(
+        PowerManager.BleAdvertiseMode.BALANCED,
+        PowerManager.BleTxPower.HIGH
+    )
+
+    /** Advertising without direct peers at critical battery (≤ 10%): louder than ULTRA_LOW, still sparing. */
+    val ISOLATED_CRITICAL_BATTERY_ADVERTISE = PowerManager.AdvertiseProfile(
+        PowerManager.BleAdvertiseMode.LOW_POWER,
+        PowerManager.BleTxPower.MEDIUM
+    )
 
     private fun wifi(
         tcpSeconds: Long,
