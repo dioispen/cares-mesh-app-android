@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具已實作（#135 廣播；#141 定向公告）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）；定向公告的解密與呈現（#141）。取代與撤回、回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`；回條的 `receipts` 是 #143）與 Python 發送工具已實作（#135 廣播；#141 定向公告）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）；定向公告的解密與呈現（#141）；定向公告的送達與已讀回條（#143）。取代與撤回尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -344,11 +344,19 @@ match /admin_notices/{messageId} {
   allow delete: if isAdmin();
 
   match /receipts/{uid} {
+    function validReceipt() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['deliveredAt', 'readAt', 'via'])
+          && data.keys().hasAll(['deliveredAt', 'via'])
+          && data.deliveredAt is timestamp
+          && data.via in ['firestore', 'ble']
+          && (!('readAt' in data) || data.readAt is timestamp);
+    }
+
     allow read: if isAdmin();
     allow create, update: if isOwner(uid)
                           && exists(/databases/$(database)/documents/admin_notices/$(messageId))
-                          && request.resource.data.keys().hasOnly(['deliveredAt', 'readAt', 'via'])
-                          && request.resource.data.via in ['firestore', 'ble'];
+                          && validReceipt();
     allow delete: if false;
   }
 }
@@ -379,6 +387,16 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 - 同一帳號的多台裝置共用一份 `receipts/{uid}`，以最後寫入的為準。
 - 回條是收件者自己申報的，rules 不檢查他是不是真的收件者。
 
+#143 定下的細節：
+
+- 回條 port `AdminNoticeReceipts`（`adminnotice/`，不依賴 Firebase）：`delivered(messageId, via, deliveredAtMs)` 與 `read(messageId, readAtMs)`，兩者都必須立即返回。Firestore 實作是 `gateway/FirestoreAdminNoticeReceipts`，由 `BitchatApplication` 交給 `AdminNotices.install`，`adminnotice/` 因此不依賴 `gateway/`。
+- 送達：`LocalAdminNoticePresenter` 在定向公告**第一次存進本機儲存**時呼叫 `delivered`，時間與 `receivedAtMs` 相同，`via` 來自 `ReceivedAdminNotice.source`（`BACKEND` → `firestore`、`MESH` → `ble`）。Inbox 只在解得開時才呈現，所以廣播、不是收件者都不會走到這裡。以本機儲存而不是每次呈現為準：App 重開後去重表是空的，Gateway 的 listener 又會把每則未過期的公告讀一次，若每次都寫，`deliveredAt` 會往後移，經 mesh 收到的回條也會被改成 `firestore`，還多花寫入額度。本機儲存丟出例外時照樣通知（#136），也照樣寫回條，App 重開後可能再寫一次。
+- 已讀：`FlutterChatActivity` 把 bridge 的 `onFirstRead` 接到 `recordFirstRead`，只對定向公告呼叫 `read`，時間是儲存記下的 `readAtMs`。
+- 寫入：每次都以 merge `set` 寫 `admin_notices/{messageId}/receipts/{當下登入的 uid}`，送達是 `{deliveredAt, via}`，已讀是 `{readAt}`，兩次合成同一份。時間是 Firestore timestamp，精度到毫秒。沒有人登入、或行程裡沒有 Firebase 時什麼都不寫。寫入不等伺服器確認，回傳的 Task 只掛一個 failure listener 留 log；port 丟出的例外由呼叫端攔下（例外傳到 mesh 會被當成不轉送），只留 log，公告的通知、轉送與注入都照常。
+- rules 要求每份回條都有 `deliveredAt` 與 `via`，`readAt` 可有可無：只有 `readAt` 的寫入只能補在這個帳號已有的回條上。送達那次沒寫成（例如當時沒有登入）、或同一支手機換帳號之後讀到前一個帳號收到的公告（本機儲存不隨登出清除），寫入會被 rules 拒絕，不會憑空多出一份沒有送達紀錄的回條。
+- 回條寫在「寫入當下登入的帳號」底下，不另記收到時是哪個帳號。
+- 規則測試見 `firestore-tests/rules.test.mjs` 的 `receipts`；Kotlin 單元測試是 `AdminNoticeReceiptsTest`（Inbox、presenter 與本機儲存，fake 的回條 port）、`AdminNoticeBridgeReadReceiptTest`（`adminNotice_markRead`）、`FirestoreAdminNoticeReceiptsTest`（文件路徑與欄位、不等伺服器確認）。
+
 ## 給管理後台的介面契約
 
 這一節給負責管理後台的組別，可以單獨閱讀；格式細節引用前面各節。
@@ -400,7 +418,19 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **取代與撤回**：見「撤回與取代」。新公告的 expiresAt 至少等於被取代的那則；撤回一個拆成多則的批次，每一則都要各發一則撤回。不要用刪除 `admin_notices` 文件代替撤回。
 
-**回條**：定向公告的收件裝置會寫 `admin_notices/{messageId}/receipts/{uid}`（`deliveredAt`、`readAt`、`via`）。時間來自手機時鐘；`via == 'ble'` 代表收件者是經 mesh 收到的。廣播沒有回條。
+**回條**：定向公告的收件裝置會寫 `admin_notices/{messageId}/receipts/{uid}`。廣播沒有回條。
+
+- 每個收件帳號一份，文件 ID 是 uid。同一帳號的多台裝置共用這一份，以最後寫入的為準，所以看不出是哪一台；以 Reporter Handle 指定的收件裝置，回條也寫在它當時登入的帳號底下，可以用 `admin_notice_records` 的 `recipientDevices` 對回 uid。
+
+  | 欄位 | 型別 | 說明 |
+  |---|---|---|
+  | `deliveredAt` | timestamp | 這支手機解開並呈現的時間。一定有 |
+  | `via` | string | `firestore`（從 Firestore 收到）或 `ble`（經 mesh 收到，也就是收件者當時沒有網路）。一定有 |
+  | `readAt` | timestamp | 使用者第一次在 App 裡讀到的時間。還沒讀過就沒有這個欄位 |
+
+- 時間來自手機時鐘，可能有誤差。經 mesh 收到的回條要等收件者連上網路才寫得進來，可能晚好幾個小時；所以「還沒有回條」不代表沒收到。
+- 列出一則公告的回條：讀 `admin_notices/{messageId}/receipts` 這個 collection（只有 Administrator 讀得到）。拆成多則的批次每一則各有自己的回條，以 `batchId` 找出同一批的每一則。
+- 刪除 `admin_notices/{messageId}` 不會刪掉底下的回條（Firestore 不連帶刪除子集合），仍讀得到；但之後送來的回條會被 rules 擋下。要收回條就不要提早刪公告文件。
 
 ## 收件端呈現
 
@@ -453,7 +483,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 5. **Spark 額度。** 每天 50,000 次讀取，大約只撐得住幾百支 Gateway；額度用完時整個專案的 Firestore 讀取都會失敗。這份額度也要分給管理後台讀 `mesh_reports`，而回條規則裡的 `exists()` 每次寫入都多算一次讀取。每天 20,000 次寫入則由回條、Gateway 寫 `mesh_reports` 與其他寫入共用。正式部署前升級 Blaze。
 6. **收件裝置必須在有網路時登入過。** 沒有登記過 `noticePublicKey` 的裝置收不到定向公告。
 7. **撤回不保證送達。** 沒收到撤回的人，會一直看到原公告直到它過期。
-8. **回條是自我申報的。**
+8. **回條是自我申報的，也可能少一份。** rules 不知道寫入者是不是真的收件者。送達時沒有登入，或交給 SDK 後行程立刻被終止（待驗證 4），那份回條不會補寫；之後的已讀也會被 rules 擋下。
 9. **沒有前景服務就沒有 listener。** 使用者關閉「背景執行」（預設開啟）時，這支手機收不到 Firestore 上的公告，只能等別人經 BLE 傳來，也不會當 Gateway 注入。MESH_GATEWAY.md 第 9 節有同一條限制。
 10. **以 Reporter Handle 指定時可能被冒領。** 攻擊者把聽到的 Handle 登記在自己的 uid 底下、`registeredAt` 又比較新時，以那個 Handle 指定的定向公告會加密給攻擊者。日後可以比對 `signingPublicKey` 與 `mesh_reports` 原始封包的簽章 key 來排除（MESH_GATEWAY.md 第 9 節）。
 
@@ -462,7 +492,13 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 1. **超過 512 bytes 的 0x31 能不能完整走過 gossip sync。** 已確認可以（#138）：`AdminNoticeFragmentedSyncTest` 的「V5 sent as a sync reply is fragmented, reassembled by the late arrival and accepted by its Inbox」以附錄的 V5（外層封包 683 bytes）走過整條路。sync 回應經 transport 共用的 `FragmentingPacketSender` 切成 2 片（TTL 0）；收到的一方由 `PacketProcessor` 重組，重組後的 0x31 不經 `handleMessage`，而是交給 0x31 的 handler，Inbox 驗過管理端簽章，再加入它自己的 sync 集合。
 2. **舊版 App 會不會轉送 0x31。** 已從 main 的程式碼確認會：未知類型的廣播封包 `validPacket` 維持 true，交給 `PacketRelayManager` 轉送；`updatePeerLastSeen` 只更新已存在的 peer。實機驗收時順便觀察即可。
 3. **Doze 模式與小米、OPPO 等廠商的省電機制下，前景服務與 listener 能不能保持連線。** 併入實機驗收，與 MESH_GATEWAY.md 第 10 節用同一組手機。
-4. **App 被系統終止後重開，離線佇列裡的回條什麼時候送出。** 佇列本身會寫磁碟（ADR-0009）；要確認的是沒有 Flutter 畫面時，Kotlin 端有沒有啟動 Firestore 實例把它送出。
+4. **App 被系統終止後重開，離線佇列裡的回條什麼時候送出。** 佇列本身會寫磁碟（ADR-0009）；要確認的是沒有 Flutter 畫面時，Kotlin 端有沒有啟動 Firestore 實例把它送出。已從程式碼與 SDK（firebase-firestore 26.1.2）確認（#143）：前景服務在跑、同一個帳號登入著，就會在有網路時送出，不需要 Flutter 畫面，不必另外補程式。
+   - `FirebaseFirestore.getInstance()` 只建立實例，第一次 `collection()` 或 `document()` 才啟動 client（`FirestoreClientProvider.ensureConfigured`）。client 啟動時 `RemoteStore.enableNetwork` 呼叫 `fillWritePipeline`，把磁碟佇列裡的寫入送出；之後 `ConnectivityMonitor` 看到網路變成可達時重新連線再送。原生的預設 FirebaseApp 由 `google-services.json` 在行程啟動時初始化，不靠 Flutter。
+   - 行程重開的每一種方式（`START_STICKY` 重啟服務、開機時的 `BootCompletedReceiver`、`BitchatApplication.onCreate` 啟動服務）都會走到 `MeshForegroundService.onCreate`。其中的 `AdminNoticeListenerRuntime` 在 FirebaseAuth 回報已登入時掛上 `admin_notices` 的 listener（`FirestoreAdminNoticeFeed.listen` 呼叫 `collection()`），client 就此啟動。
+   - 佇列依 uid 分開（`SQLiteMutationQueue` 以 uid 查 `mutations`），只在那個帳號登入時送出：登出後留著，同一個帳號再登入才送；換成另一個帳號時不會送出前一個帳號的回條。未登入時 listener 不會掛上，這時本來就沒有可送的。
+   - 沒有前景服務時（使用者關閉「背景執行」，已知限制 9），行程只會因為使用者打開 App 而啟動。Flutter 的 `main.dart` 在已登入時會寫一次 `reporter_handles` 登記（MESH_GATEWAY.md 7.7），用的是同一個原生實例，同樣會啟動 client。
+   - 回條交給 SDK 之後，要等它的 AsyncQueue 寫進磁碟才算進了佇列；行程在這一小段時間內被終止，那份回條就遺失，之後不會補寫（只在第一次存進本機時寫）。
+   - 仍要實機確認：A 斷網經 mesh 收到定向公告、殺掉 App、重開後連上網路，回條出現（併入實機驗收第 2 項）。
 5. **iOS bitchat 會不會轉送 0x31。** 不在 v1 範圍內，只記錄結果。
 
 ## 測試與驗收
@@ -476,6 +512,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 - Gateway 注入：等待期間從 BLE 聽到同一則就不注入；來自快取的文件照樣注入；服務停止時取消待注入；兩支 Gateway 注入同一則，封包 ID 相同。
 - 0x31 不建立 peer、不留下 actor、不進實驗 log。
 - 收件者金鑰：uid 改變時重新產生；清除後解不開。
+- 回條（fake 的回條 port）：Firestore 來源解開時 `via` 是 firestore，mesh 來源是 ble；廣播、不是收件者都不寫；同一則第二份副本、App 重開後再收到都不再寫；回條寫不出去不影響通知與轉送；第一次讀到定向公告才寫 `readAt`。Firestore 實作不等伺服器確認。
 
 **Dart 測試（管理後台）**
 
@@ -484,7 +521,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 **規則測試**（`firestore-tests/rules.test.mjs`）
 
 - `admin_notices`：只有 Administrator 能建立與刪除；欄位、`createdBy`、`createdAt`、`expiresAt` 上限、messageId 格式；不能 update。
-- `receipts`：只有本人能寫自己的；`via` 只能是兩個值之一；只有 Administrator 能讀。
+- `receipts`：只有本人能寫自己的，公告文件要存在；`via` 只能是兩個值之一；欄位只有三個，`deliveredAt` 與 `via` 必填，只有 `readAt` 的寫入被擋；時間是手機時鐘；只有 Administrator 能讀，本人也不行；不能刪除。
 - `admin_notice_records`：只有 Administrator 能讀與建立，不能修改或刪除。
 - `installations`：缺少 `noticePublicKey` 或長度不對時被擋。
 
