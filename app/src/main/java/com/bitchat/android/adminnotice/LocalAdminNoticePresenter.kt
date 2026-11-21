@@ -56,7 +56,8 @@ class LocalAdminNoticePresenter(
 
     /**
      * The notification is cancelled whatever the store says: it may have been posted although the
-     * notice could not be stored, and cancelling one that is gone does nothing.
+     * notice could not be stored, and cancelling one that is gone does nothing. Neither failure
+     * reaches the Inbox, which would otherwise not relay the notice that replaced it.
      */
     private fun takeBack(messageId: String, mark: () -> StoredAdminNotice?) {
         try {
@@ -64,7 +65,11 @@ class LocalAdminNoticePresenter(
         } catch (e: Exception) {
             Log.w(TAG, "Could not mark Admin Notice $messageId as replaced: ${e.message}")
         }
-        notifier.cancel(messageId)
+        try {
+            notifier.cancel(messageId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not cancel the notification of Admin Notice $messageId: ${e.message}")
+        }
     }
 
     private companion object {
