@@ -34,6 +34,10 @@
 //   - admin_notice_records：管理端留存的明文與操作者，只有 Administrator 能讀與建立
 //   最關鍵的兩條是「非 Administrator 不能建立」與「createdBy 必須是寫入者自己」——共用私鑰之下，
 //   createdBy 是唯一能追查操作者的依據。
+//
+//   issue #143
+//   - admin_notices/{messageId}/receipts：定向公告的回條，只有本人能寫自己的那份，只有 Administrator 讀得到
+//   最關鍵的兩條是「不能寫別人的回條」與「本人也讀不到」——via == 'ble' 會透露收件者當時沒有網路。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
