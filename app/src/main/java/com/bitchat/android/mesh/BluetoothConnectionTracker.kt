@@ -17,7 +17,12 @@ class BluetoothConnectionTracker(
     private val connectionScope: CoroutineScope,
     private val powerManager: PowerManager,
     /** LINK_UP / LINK_DOWN (#70): a link is up once its peer is identified, down when such a link goes away. */
-    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp,
+    /**
+     * 量測鏈路閒置用的時鐘（P0-2）。Android 上 `System.nanoTime()` 是 CLOCK_MONOTONIC，和
+     * `SystemClock.uptimeMillis()` 一樣不含深度睡眠，本機睡著的那段因此不算閒置。
+     */
+    private val monotonicClockMs: () -> Long = { System.nanoTime() / 1_000_000L }
 ) : MeshConnectionTracker(connectionScope, TAG) {
     
     companion object {
@@ -32,6 +37,9 @@ class BluetoothConnectionTracker(
     private val firstAnnounceSeen = ConcurrentHashMap<String, Boolean>()
     // RSSI tracking from scan results (for devices we discover but may connect as servers)
     private val scanRSSI = ConcurrentHashMap<String, Int>()
+    // 每條鏈路（以 linkID 區分 GATT 世代，位址會被重用）最後一次有動靜的時間，以 monotonicClockMs
+    // 計：連上時寫入，之後每收到一個封包更新，所以就是 max(連上時間, 最後收包時間)（P0-2）。
+    private val lastLinkActivityMs = ConcurrentHashMap<String, Long>()
     private val connectionStateLock = Any()
     
     /**
@@ -54,6 +62,13 @@ class BluetoothConnectionTracker(
         val deviceAddress: String,
         val connection: DeviceConnection,
         val observedPeerID: String?
+    )
+
+    /** [findIdleLinks] 找到的一條閒置鏈路；[idleForMs] 是已經多久沒有收到封包。 */
+    data class IdleLink(
+        val deviceAddress: String,
+        val linkID: String,
+        val idleForMs: Long
     )
 
     override fun start() {
@@ -103,7 +118,11 @@ class BluetoothConnectionTracker(
     fun addDeviceConnection(deviceAddress: String, deviceConn: DeviceConnection) {
         Log.d(TAG, "Tracker: Adding device connection for $deviceAddress (isClient: ${deviceConn.isClient}")
         synchronized(connectionStateLock) {
-            connectedDevices[deviceAddress] = deviceConn
+            val replaced = connectedDevices.put(deviceAddress, deviceConn)
+            if (replaced != null && replaced.linkID != deviceConn.linkID) {
+                lastLinkActivityMs.remove(replaced.linkID)
+            }
+            lastLinkActivityMs[deviceConn.linkID] = monotonicClockMs()
             // A route observation belongs to this GATT generation, not its reusable address.
             reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
         }
@@ -141,6 +160,30 @@ class BluetoothConnectionTracker(
 
     fun getCurrentLinkID(deviceAddress: String): String? =
         connectedDevices[deviceAddress]?.linkID
+
+    /**
+     * [linkID] 這條鏈路收到一個封包（P0-2）。只更新仍在連線表上的鏈路：已移除或被取代的舊 GATT
+     * 晚到的封包不會讓它復活，也不會替同一位址上的新鏈路續命。
+     */
+    fun noteLinkReceive(linkID: String) {
+        lastLinkActivityMs.replace(linkID, monotonicClockMs())
+    }
+
+    /**
+     * 超過 [timeoutMs] 沒收到任何封包的鏈路（P0-2）。基準是連上的時間與最後一次收到封包的時間
+     * 取較晚者，見 [LinkIdlePolicy]。
+     */
+    fun findIdleLinks(timeoutMs: Long = com.bitchat.android.util.AppConstants.Mesh.LINK_IDLE_TIMEOUT_MS): List<IdleLink> {
+        val now = monotonicClockMs()
+        return connectedDevices.mapNotNull { (address, connection) ->
+            val lastActivity = lastLinkActivityMs[connection.linkID] ?: return@mapNotNull null
+            if (LinkIdlePolicy.isIdle(lastActivity, now, timeoutMs)) {
+                IdleLink(address, connection.linkID, now - lastActivity)
+            } else {
+                null
+            }
+        }
+    }
 
     /**
      * Records that the current link delivered a validated, non-relayed ANNOUNCE for [peerID].
@@ -301,7 +344,7 @@ class BluetoothConnectionTracker(
      */
     fun cleanupDeviceConnection(deviceAddress: String) {
         synchronized(connectionStateLock) {
-            connectedDevices.remove(deviceAddress)
+            connectedDevices.remove(deviceAddress)?.let { lastLinkActivityMs.remove(it.linkID) }
             subscribedDevices.removeAll { it.address == deviceAddress }
             firstAnnounceSeen.remove(deviceAddress)
             reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
@@ -330,6 +373,7 @@ class BluetoothConnectionTracker(
             if (!connectedDevices.remove(deviceAddress, current)) {
                 return null
             }
+            lastLinkActivityMs.remove(expectedLinkID)
             subscribedDevices.removeAll { it.address == deviceAddress }
             val observedPeerID = addressPeerMap.remove(deviceAddress)
             reportLinkDown(deviceAddress, observedPeerID)
@@ -350,6 +394,7 @@ class BluetoothConnectionTracker(
             }
             addressPeerMap.forEach { (address, peer) -> reportLinkDown(address, peer) }
             connectedDevices.clear()
+            lastLinkActivityMs.clear()
             subscribedDevices.clear()
             addressPeerMap.clear()
             links
@@ -389,9 +434,11 @@ class BluetoothConnectionTracker(
     fun getDebugInfo(): String {
         return buildString {
             appendLine("Connected Devices: ${connectedDevices.size} / ${powerManager.getMaxConnections()}")
+            val nowMonotonic = monotonicClockMs()
             connectedDevices.forEach { (address, deviceConn) ->
                 val age = (System.currentTimeMillis() - deviceConn.connectedAt) / 1000
-                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, RSSI: ${deviceConn.rssi})")
+                val idle = lastLinkActivityMs[deviceConn.linkID]?.let { "${(nowMonotonic - it) / 1000}s" } ?: "?"
+                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, idle $idle, RSSI: ${deviceConn.rssi})")
             }
             appendLine()
             appendLine("Subscribed Devices (server mode): ${subscribedDevices.size}")

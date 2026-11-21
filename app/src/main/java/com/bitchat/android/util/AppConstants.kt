@@ -23,6 +23,15 @@ object AppConstants {
         const val CONNECTION_CLEANUP_INTERVAL_MS: Long = 30_000L
         const val BROADCAST_CLEANUP_DELAY_MS: Long = 500L
 
+        // 殭屍連線偵測（P0-2，2026-11-18 四機試跑 12.1：C 掛著 2–3 條連線 20 分鐘，一筆都沒收到）。
+        // 一條鏈路超過這麼久沒收到任何封包，就在本機斷開讓它重連。門檻必須大於鄰居的心跳間隔，
+        // 否則會誤殺安靜但正常的連線：鄰居每 30 s 在每條鏈路送一次 REQUEST_SYNC（它休眠時會拉長
+        // 到約 60 s），背景時 ANNOUNCE 間隔是 60–300 s，不能拿來當心跳。時間以不含深度睡眠的
+        // 單調時鐘計，本機睡著的那段不算閒置。
+        const val LINK_IDLE_TIMEOUT_MS: Long = 90_000L
+        // 多久檢查一次；一條鏈路最晚在門檻後再過一個間隔被斷開。
+        const val LINK_IDLE_CHECK_INTERVAL_MS: Long = 15_000L
+
         object Gatt {
             val SERVICE_UUID: UUID = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
             val CHARACTERISTIC_UUID: UUID = UUID.fromString("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D")

@@ -74,6 +74,9 @@ class BluetoothConnectionManager(
             device: BluetoothDevice?,
             ingressLinkID: String
         ) {
+            // 殭屍連線偵測（P0-2）：任何解得開的封包都證明這條鏈路還活著，連自己發出、被轉回來的也算。
+            connectionTracker.noteLinkReceive(ingressLinkID)
+
             device?.let { bluetoothDevice ->
                 // Get current RSSI for this device and update if available
                 val currentRSSI = connectionTracker.getBestRSSI(bluetoothDevice.address)
@@ -131,6 +134,7 @@ class BluetoothConnectionManager(
     @Volatile private var radioStartRetries = 0
     @Volatile private var radioFaultRestarts = 0
     private val radioMutex = Mutex()
+    private var idleLinkWatchJob: Job? = null
 
     private val adapterReceiverRegistered = AtomicBoolean(false)
     private val adapterStateReceiver = object : BroadcastReceiver() {
@@ -413,6 +417,7 @@ class BluetoothConnectionManager(
         }
 
         radioRunning = true
+        startIdleLinkWatch()
         Log.i(TAG, "Bluetooth services started successfully")
         return true
     }
@@ -425,6 +430,8 @@ class BluetoothConnectionManager(
     private fun stopRadio(reason: String) {
         Log.i(TAG, "Stopping Bluetooth services ($reason)")
         radioRunning = false
+        idleLinkWatchJob?.cancel()
+        idleLinkWatchJob = null
         clientManager.stop()
         serverManager.stop()
         packetBroadcaster.clearPendingSends()
@@ -434,6 +441,30 @@ class BluetoothConnectionManager(
                 link.connection.linkID,
                 link.observedPeerID
             )
+        }
+    }
+
+    /**
+     * 殭屍連線偵測（P0-2）：定期找出超過 [com.bitchat.android.util.AppConstants.Mesh.LINK_IDLE_TIMEOUT_MS]
+     * 沒收到封包的鏈路，在本機斷開讓它重連。不等藍牙堆疊的斷線回呼：試跑中 C 的回呼晚了 4 分鐘。
+     *
+     * `delay` 與閒置時間都用不含深度睡眠的單調時鐘：本機睡著時這個迴圈不會喚醒裝置，醒來後也不會
+     * 把睡著的那段算成閒置。試跑中 C 的 60 s 計時器隔 1–5 分鐘才觸發，就是同一個現象。
+     */
+    private fun startIdleLinkWatch() {
+        idleLinkWatchJob?.cancel()
+        idleLinkWatchJob = connectionScope.launch {
+            while (true) {
+                delay(com.bitchat.android.util.AppConstants.Mesh.LINK_IDLE_CHECK_INTERVAL_MS)
+                if (!radioRunning) break
+                connectionTracker.findIdleLinks().forEach { idle ->
+                    disconnectLinkLocally(
+                        idle.deviceAddress,
+                        idle.linkID,
+                        "no packets received for ${idle.idleForMs / 1000}s"
+                    )
+                }
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package com.bitchat.android.mesh
 
 import android.os.DeadObjectException
+import com.bitchat.android.util.AppConstants
 
 /**
  * BLE 元件（GATT server／client、掃描、廣播）此刻該不該在跑（P0-1）。
@@ -91,4 +92,24 @@ internal object LinkSendFailurePolicy {
         generateSequence(error) { it.cause }.take(MAX_CAUSE_DEPTH).any { it is DeadObjectException }
 
     private const val MAX_CAUSE_DEPTH = 8
+}
+
+/**
+ * 殭屍連線偵測（P0-2）：鏈路還在連線表上，卻已經收不到任何封包。
+ *
+ * 試跑中 C（12.1）掛著 2–3 條連線 20 分鐘，`RX`、`DUP` 都是 0，`STAT` 仍列出 A、B、D；對方都斷了
+ * 之後，C 自己的斷線回呼又晚了 4 分鐘。這種鏈路要由本機主動斷開，讓它重新連線。
+ */
+internal object LinkIdlePolicy {
+
+    /**
+     * @param lastActivityMs 連上的時間與最後一次收到封包的時間取較晚者。
+     * @param nowMs 和 [lastActivityMs] 同一個不含深度睡眠的單調時鐘：本機睡著、計時器被延後時，
+     *   睡著的那段不算閒置，醒來後不會把正常的鏈路誤判成殭屍連線。
+     */
+    fun isIdle(
+        lastActivityMs: Long,
+        nowMs: Long,
+        timeoutMs: Long = AppConstants.Mesh.LINK_IDLE_TIMEOUT_MS
+    ): Boolean = nowMs - lastActivityMs > timeoutMs
 }

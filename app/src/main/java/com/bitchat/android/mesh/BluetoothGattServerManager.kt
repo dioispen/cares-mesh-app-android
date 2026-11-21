@@ -216,12 +216,13 @@ class BluetoothGattServerManager(
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         Log.i(TAG, "Disconnected from ${device.address} (server)")
-                        val linkID = serverLinkIDs.remove(device.address)
-                        // 只取這一條鏈路自己確認過的 peer。linkID 為 null 表示本機已先拆掉這條鏈路、
-                        // 通知過上層（disconnectLink），這裡不再報一次 peer。
-                        val disconnectedPeerID = linkID?.let {
-                            connectionTracker.removeConnectionIfCurrent(device.address, it)?.observedPeerID
-                        }
+                        // linkID 為 null：本機已先拆掉這條鏈路並通知過上層（disconnectLink），不再通知
+                        // 一次；帶 null linkID 通知會把同一位址上所有鏈路的待送佇列一起清掉。
+                        val linkID = serverLinkIDs.remove(device.address) ?: return
+                        // 只取這一條鏈路自己確認過的 peer。
+                        val disconnectedPeerID = connectionTracker
+                            .removeConnectionIfCurrent(device.address, linkID)
+                            ?.observedPeerID
                         // Notify delegate about device disconnection so higher layers can update direct flags
                         delegate?.onDeviceDisconnected(device, linkID, disconnectedPeerID)
                     }
