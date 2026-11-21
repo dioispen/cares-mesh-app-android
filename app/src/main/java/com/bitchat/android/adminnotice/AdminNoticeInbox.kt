@@ -43,6 +43,12 @@ class AdminNoticeInbox(
     /** messageId → record, kept until expiresAt + [CLOCK_TOLERANCE_MS], at most [maxRecords]. */
     private val records = HashMap<String, Record>()
 
+    /**
+     * 撤回紀錄: replaced messageId → kept until, the replacing notice's expiresAt +
+     * [CLOCK_TOLERANCE_MS], at most [maxRecords]. Memory only, like [records].
+     */
+    private val revoked = HashMap<String, Long>()
+
     /** messageId → cancels its scheduled injection (待注入). Only BACKEND_ONLY notices have one. */
     private val pendingInjections = HashMap<String, () -> Unit>()
 
@@ -81,6 +87,7 @@ class AdminNoticeInbox(
         }
         val now = nowMs()
         untrustedReason(payload, now)?.let { return AdminNoticeOutcome.Rejected(it) }
+        if (isRevoked(payload.messageId, now)) return AdminNoticeOutcome.Rejected(AdminNoticeRejection.REVOKED)
         // Only now, with the signature verified, may the notice claim its messageId.
         when (presenceOf(payload.messageId, now)) {
             // Somebody, maybe this Gateway, has already put it on the mesh.
@@ -94,6 +101,7 @@ class AdminNoticeInbox(
             null -> Unit
         }
         remember(payload, Presence.BACKEND_ONLY)
+        replaceEarlier(payload)
         present(payload)
         scheduleInjection(payload)
         return AdminNoticeOutcome.Accepted(payload)
@@ -111,6 +119,7 @@ class AdminNoticeInbox(
         }
         val now = nowMs()
         untrustedReason(payload, now, outer = packet)?.let { return AdminNoticeOutcome.Rejected(it) }
+        if (isRevoked(payload.messageId, now)) return AdminNoticeOutcome.Rejected(AdminNoticeRejection.REVOKED)
         // Step 8, only now that the signature is verified: a forged copy never claims a messageId.
         when (presenceOf(payload.messageId, now)) {
             Presence.IN_MESH -> return AdminNoticeOutcome.Duplicate
@@ -118,6 +127,7 @@ class AdminNoticeInbox(
             // Already presented then; relayed now like any first mesh copy.
             Presence.BACKEND_ONLY -> markInMesh(payload)
             null -> {
+                replaceEarlier(payload)
                 markInMesh(payload)
                 present(payload)
             }
@@ -187,6 +197,12 @@ class AdminNoticeInbox(
         return null
     }
 
+    /** Step 7, after forgetting the revocations that have expired. */
+    private fun isRevoked(messageId: String, now: Long): Boolean {
+        revoked.values.removeAll { keepUntilMs -> keepUntilMs < now }
+        return messageId in revoked
+    }
+
     /** Step 8's lookup, after forgetting what has expired: null when [messageId] is not recorded. */
     private fun presenceOf(messageId: String, now: Long): Presence? {
         records.values.removeAll { it.keepUntilMs < now }
@@ -235,6 +251,37 @@ class AdminNoticeInbox(
         inMeshNotices.values.removeAll { it.expiresAtMs <= now }
     }
 
+    /**
+     * Step 9 (撤回與取代), only for a verified notice seen for the first time: the notice it replaces
+     * goes into the revocation record, is no longer offered to late arrivals nor injected by this
+     * Gateway, and is marked here as corrected, or withdrawn by a pure revoke.
+     */
+    private fun replaceEarlier(payload: AdminNoticePayload) {
+        val replaced = payload.replaces ?: return
+        revoke(replaced, until = payload.expiresAtMs + CLOCK_TOLERANCE_MS)
+        pendingInjections.remove(replaced)?.invoke()
+        inMeshNotices.remove(replaced)
+        syncSet?.remove(replaced)
+        if (payload.isPureRevoke) {
+            presenter.withdraw(replaced)
+        } else {
+            presenter.correct(replaced, correctedBy = payload.messageId)
+        }
+    }
+
+    /**
+     * Records [messageId] in the revocation record until [until], the replacing notice's expiresAt
+     * plus the clock tolerance: a device accepts the original that long after its own expiresAt,
+     * which the replacing notice's is never earlier than. Past [maxRecords] the revocation expiring
+     * first is forgotten, as in the dedup table.
+     */
+    private fun revoke(messageId: String, until: Long) {
+        revoked[messageId] = maxOf(until, revoked[messageId] ?: until)
+        if (revoked.size > maxRecords) {
+            revoked.minByOrNull { it.value }?.let { revoked.remove(it.key) }
+        }
+    }
+
     /** Gateway: inject [payload] after a random delay unless the mesh brings it first. */
     private fun scheduleInjection(payload: AdminNoticePayload) {
         pendingInjections[payload.messageId] =
@@ -248,7 +295,10 @@ class AdminNoticeInbox(
     @Synchronized
     private fun injectWhenDue(payload: AdminNoticePayload) {
         pendingInjections.remove(payload.messageId)
-        if (presenceOf(payload.messageId, nowMs()) != Presence.BACKEND_ONLY) return
+        val now = nowMs()
+        // Replaced meanwhile: its cancellation may have come too late to stop this run.
+        if (isRevoked(payload.messageId, now)) return
+        if (presenceOf(payload.messageId, now) != Presence.BACKEND_ONLY) return
         val mesh = injector ?: return
         if (!mesh.inject(AdminNoticePacket.outer(payload))) return
         markInMesh(payload)
