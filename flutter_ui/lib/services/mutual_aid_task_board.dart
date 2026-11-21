@@ -214,8 +214,11 @@ class MutualAidTaskBoard {
 
   /// 較新的回報讓本機進度回到等待中的規則，與 Firestore 任務相同（[reportResetsTask]）：Status 變了，
   /// 或已完成的任務又帶著 SOS。重送相同內容不動，路上的協助者不會丟掉任務。
+  ///
+  /// `reportTime` 沒有比較新的是同一則陳述，不是較新的回報：Reporter 的裝置每 30 分鐘重發舉著 SOS
+  /// 的回報，`reportTime` 不變（ADR-0012）。否則 Rescuer 標成已完成之後，每次重發都會讓它重開。
   void _reopenIfNeeded(BroadcastHealthReport? previous, BroadcastHealthReport incoming) {
-    if (previous == null) return;
+    if (previous == null || !incoming.reportTime.isAfter(previous.reportTime)) return;
     final id = bleTaskFrom(incoming, myLat: null, myLng: null).id;
     final progress = _bleProgress[id];
     if (progress == null) return;

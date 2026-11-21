@@ -27,6 +27,7 @@ Reporter A（無網路）
   │  HEALTH_REPORT（簽章明文，Broadcast Tier，geohash-6）
   ▼
 mesh：flood（TTL 3）或 gossip sync 補送（TTL 0，2 小時內）
+      成立中的回報另由 A 的裝置每 30 分鐘重發，reportTime 不變（ADR-0012）
   │
   ▼
 Gateway G（已登入、gateway 開啟）
@@ -207,7 +208,7 @@ match /{path=**}/installations/{handle} {
 - **成功**：記下該 Handle 的 `reportTime`，從暫存移除。
 - **`PERMISSION_DENIED`**：最可能是其他 gateway 已寫入同一份或更新的回報（規則要求嚴格遞增），**視同成功**處理：記下 `reportTime`、從暫存移除。同時記一筆 log，方便排查是否為欄位或規則錯誤。
 - **`UNAVAILABLE` 等暫時性錯誤**：留在暫存，等下一次網路事件再試。`PERMISSION_DENIED` 以外的錯誤都算暫時性；寫入 30 秒沒有得到伺服器確認也算（Firestore 的寫入要等伺服器確認才完成，斷線時會一直等下去）。即時上傳失敗的回報同樣進暫存。
-- 不先讀再寫，以節省 Spark 方案每天 50,000 次讀取的額度。寫入額度為每天 20,000 次；Health Report 只在使用者送出時發送、不會定期重送，加上本機去重，量級在額度之內。
+- 不先讀再寫，以節省 Spark 方案每天 50,000 次讀取的額度。寫入額度為每天 20,000 次。舉著 SOS 或受傷的 Health Report 會由 Reporter 的裝置每 30 分鐘重發（ADR-0012），但重發不改 `reportTime`，7.3 的條件 4 會把它略過，不會多寫一次；寫入量仍取決於使用者送出新回報的次數，加上本機去重，量級在額度之內。
 - 「已上傳過的最新 `reportTime`」只放記憶體；service 重啟後重傳一次會被規則拒絕並視同成功，不影響正確性。
 - 寫到一半斷線的那一筆可能留在 Firestore SDK 的磁碟佇列裡（ADR-0009 已接受）。
 
@@ -266,6 +267,7 @@ match /{path=**}/installations/{handle} {
 | 寫到一半斷線的那一筆會落在磁碟佇列 | 短暫違反「只放記憶體」。逾時的那一筆之後再補傳，SDK 佇列裡就有同一份文件的兩次寫入；先到的生效，後到的被規則拒絕 | 若不可接受，改用 REST 寫入（ADR-0009 Considered Options） |
 | Gateway 跟著前景服務 | 使用者關閉「背景執行」時前景服務不會啟動，mesh 只在 App 畫面裡跑，這時沒有 Gateway；設定頁的開關仍顯示開啟 | 若要在畫面裡也代傳，改由 mesh 啟動處建立 Gateway |
 | `gatewayUid` 只記錄第一個成功寫入的 gateway | 看不出有幾支 gateway 收到同一份 | 改為每支 gateway 各寫一筆子文件，寫入量會乘上 gateway 數 |
+| 2 小時內沒遇到 Gateway 的回報上傳不了 | 成立中的 SOS 雖然持續重發（ADR-0012），`reportTime` 卻不變；超過 2 小時後才被 Gateway 收到，就被 7.3 的條件 3 與規則的 2 小時 10 分鐘下限擋掉 | 同時改條件 3 與 `mesh_reports` 規則，另議（ADR-0012） |
 | 同一秒內的兩份回報，後者會被拒 | 極少見 | — |
 | 只有已登入的手機能當 gateway | 覆蓋率取決於有多少人登入 | — |
 

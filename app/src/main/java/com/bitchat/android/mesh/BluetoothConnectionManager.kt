@@ -1,14 +1,21 @@
 package com.bitchat.android.mesh
 
 import android.bluetooth.*
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.bitchat.android.experiment.ExperimentRecorder
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Power-optimized Bluetooth connection manager with comprehensive memory management
@@ -24,12 +31,22 @@ class BluetoothConnectionManager(
     
     companion object {
         private const val TAG = "BluetoothConnectionManager"
+        // binder 失效後先拆掉元件，隔一段時間再重建；連續失效時加倍，最多到 64 s。
+        private const val RADIO_RESTART_DELAY_MS = 2_000L
+        private const val MAX_RADIO_RESTART_BACKOFF_SHIFT = 5
+        // 藍牙已開啟、元件卻啟動失敗（例如 advertiser 一時還拿不到）時的重試。
+        private const val RADIO_START_RETRY_DELAY_MS = 3_000L
+        private const val MAX_RADIO_START_RETRIES = 3
+        private const val CLEANUP_DELAY = com.bitchat.android.util.AppConstants.Mesh.CONNECTION_CLEANUP_DELAY_MS
+        /** Advertising restarts once its settings have held this long (P1-6): direct peers may flap. */
+        private const val ADVERTISE_RESTART_DEBOUNCE_MS = 3_000L
     }
     
     // Core Bluetooth components
     private val bluetoothManager: BluetoothManager = 
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+    private val appContext: Context = context.applicationContext ?: context
     
     // Power management
     private val powerManager = PowerManager.getInstance(context.applicationContext)
@@ -40,7 +57,16 @@ class BluetoothConnectionManager(
     // Component managers
     private val permissionManager = BluetoothPermissionManager(context)
     private val connectionTracker = BluetoothConnectionTracker(connectionScope, powerManager, experimentRecorder)
-    private val packetBroadcaster = BluetoothPacketBroadcaster(connectionScope, connectionTracker, fragmentManager, myPeerID, experimentRecorder)
+    private val packetBroadcaster = BluetoothPacketBroadcaster(
+        connectionScope,
+        connectionTracker,
+        fragmentManager,
+        myPeerID,
+        experimentRecorder,
+        isAdapterOn = ::isAdapterOn,
+        onLinkStalled = { address, linkID -> disconnectLinkLocally(address, linkID, "writes refused") },
+        onBluetoothFault = ::onBluetoothFault
+    )
     
     // Delegate for component managers to call back to main manager
     private val componentDelegate = object : BluetoothConnectionManagerDelegate {
@@ -50,6 +76,9 @@ class BluetoothConnectionManager(
             device: BluetoothDevice?,
             ingressLinkID: String
         ) {
+            // 殭屍連線偵測（P0-2）：任何解得開的封包都證明這條鏈路還活著，連自己發出、被轉回來的也算。
+            connectionTracker.noteLinkReceive(ingressLinkID)
+
             device?.let { bluetoothDevice ->
                 // Get current RSSI for this device and update if available
                 val currentRSSI = connectionTracker.getBestRSSI(bluetoothDevice.address)
@@ -95,7 +124,33 @@ class BluetoothConnectionManager(
     )
     
     // Service state
+    // mesh 要 BLE 運作：startServices() 之後、disableTransport()／stopServices() 之前。藍牙關閉期間
+    // 仍為 true，藍牙重新開啟時據此重建元件（P0-1）。
     private var isActive = false
+    
+    // BLE 元件（GATT server／client、掃描、廣播）是否已為這一次藍牙開啟啟動。啟動與拆除都在
+    // radioMutex 裡依 BluetoothRadioPolicy 決定。
+    @Volatile private var radioRunning = false
+    // 每次啟動加一；binder 失效的回報只對回報當下那一代有效，同一次失效不會讓元件重建好幾次。
+    @Volatile private var radioGeneration = 0
+    @Volatile private var radioStartRetries = 0
+    @Volatile private var radioFaultRestarts = 0
+    private val radioMutex = Mutex()
+    private var idleLinkWatchJob: Job? = null
+
+    private val adapterReceiverRegistered = AtomicBoolean(false)
+    private val adapterStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            val stateName = adapterStateName(state)
+            Log.i(TAG, "Bluetooth adapter state changed: $stateName")
+            // 使用者切換藍牙是新的開始，之前累積的重試與退避都歸零。
+            radioStartRetries = 0
+            radioFaultRestarts = 0
+            connectionScope.launch { reconcileRadio("adapter $stateName") }
+        }
+    }
     
     // Delegate for callbacks
     var delegate: BluetoothConnectionManagerDelegate? = null
@@ -129,14 +184,15 @@ class BluetoothConnectionManager(
 
     init {
         connectionScope.launch {
-            var previousMode: PowerManager.PowerMode? = null
+            // Advertising follows whether we have direct peers too, not only the mode (P1-6).
+            var previousAdvertise: PowerManager.AdvertiseProfile? = null
             powerManager.profile.collect { profile ->
-                val modeChanged = previousMode != null && previousMode != profile.mode
-                previousMode = profile.mode
-                if (!isActive || !isBleTransportEnabled()) return@collect
+                val advertiseChanged = previousAdvertise != null && previousAdvertise != profile.advertise
+                previousAdvertise = profile.advertise
+                if (!isActive || !isBleTransportEnabled() || !radioRunning) return@collect
 
-                if (modeChanged && isGattServerEnabled()) {
-                    serverManager.restartAdvertising()
+                if (advertiseChanged && isGattServerEnabled()) {
+                    scheduleAdvertisingRestart()
                 }
                 clientManager.applyPowerProfile(profile)
             }
@@ -185,6 +241,22 @@ class BluetoothConnectionManager(
         } catch (_: Exception) { }
     }
     
+    private var advertisingRestartJob: Job? = null
+
+    /**
+     * Restarts advertising with the current settings once they have stopped changing for
+     * [ADVERTISE_RESTART_DEBOUNCE_MS], so direct peers coming and going cannot cause a restart storm.
+     */
+    private fun scheduleAdvertisingRestart() {
+        advertisingRestartJob?.cancel()
+        advertisingRestartJob = connectionScope.launch {
+            delay(ADVERTISE_RESTART_DEBOUNCE_MS)
+            if (this@BluetoothConnectionManager.isActive && radioRunning && isGattServerEnabled()) {
+                serverManager.restartAdvertising()
+            }
+        }
+    }
+
     /**
      * Centralized connection limit enforcement
      */
@@ -218,6 +290,9 @@ class BluetoothConnectionManager(
     
     /**
      * Start all Bluetooth services with power optimization
+     *
+     * 藍牙關閉時也回傳 true：mesh 進入「等藍牙開啟」，[adapterStateReceiver] 收到 `STATE_ON` 後才啟動
+     * GATT 與掃描廣播。和執行中關閉藍牙是同一個狀態，之後開啟藍牙都會自動入網。
      */
     fun startServices(): Boolean {
         if (!isBleTransportEnabled()) {
@@ -231,13 +306,10 @@ class BluetoothConnectionManager(
             return false
         }
         
-        if (bluetoothAdapter?.isEnabled != true) {
-            Log.e(TAG, "Bluetooth is not enabled")
+        if (!connectionScope.isActive) {
+            Log.e(TAG, "Connection manager was stopped; create a new instance instead of restarting")
             return false
         }
-        
-        try {
-            isActive = true
 
         // set the adapter's name to our 8-character peerID for iOS privacy, TODO: Make this configurable
         // try {
@@ -249,48 +321,15 @@ class BluetoothConnectionManager(
         //     Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to set adapter name.", se)
         // }
 
-            // Start all component managers
-            connectionScope.launch {
-                // Start connection tracker first
-                connectionTracker.start()
-                
-                // Start power manager
-                powerManager.start()
-                
-                // Start server/client based on debug settings
-                val startServer = isGattServerEnabled()
-                val startClient = isGattClientEnabled()
-
-                if (startServer) {
-                    if (!serverManager.start()) {
-                        Log.e(TAG, "Failed to start server manager")
-                        this@BluetoothConnectionManager.isActive = false
-                        return@launch
-                    }
-                } else {
-                    Log.i(TAG, "GATT Server disabled by debug settings; not starting")
-                }
-
-                if (startClient) {
-                    if (!clientManager.start()) {
-                        Log.e(TAG, "Failed to start client manager")
-                        this@BluetoothConnectionManager.isActive = false
-                        return@launch
-                    }
-                } else {
-                    Log.i(TAG, "GATT Client disabled by debug settings; not starting")
-                }
-                
-                Log.i(TAG, "Bluetooth services started successfully")
-            }
-            
-            return true
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start Bluetooth services: ${e.message}")
-            isActive = false
-            return false
+        isActive = true
+        radioStartRetries = 0
+        radioFaultRestarts = 0
+        registerAdapterStateReceiver()
+        if (!isAdapterOn()) {
+            Log.i(TAG, "Bluetooth is not enabled; Bluetooth services will start when it turns on")
         }
+        connectionScope.launch { reconcileRadio("start requested") }
+        return true
     }
 
     /**
@@ -299,11 +338,7 @@ class BluetoothConnectionManager(
     fun disableTransport() {
         Log.i(TAG, "Disabling BLE transport")
         isActive = false
-        connectionScope.launch {
-            clientManager.stop()
-            serverManager.stop()
-            connectionTracker.stop()
-        }
+        connectionScope.launch { reconcileRadio("transport disabled") }
     }
     
     /**
@@ -311,20 +346,217 @@ class BluetoothConnectionManager(
      */
     fun stopServices() {
         isActive = false
+        unregisterAdapterStateReceiver()
 
         connectionScope.launch {
-            // Stop component managers
-            clientManager.stop()
-            serverManager.stop()
-            
-            // Stop connection tracker
-            connectionTracker.stop()
+            // Stop component managers and the connection tracker
+            radioMutex.withLock { stopRadio("services stopped") }
             
             // Cancel the coroutine scope
             connectionScope.cancel()
             
             Log.i(TAG, "All Bluetooth services stopped")
         }
+    }
+
+    /**
+     * 依目前狀態啟動或拆掉 BLE 元件。藍牙狀態改變、啟動或停用傳輸、GATT 呼叫發現 binder 失效時都
+     * 走這裡；每次都重新讀取轉接器狀態，事件晚到或順序顛倒也會收斂到正確的結果。
+     *
+     * @param faultedGeneration binder 失效時回報當下的 [radioGeneration]；那一代已經拆掉就忽略。
+     */
+    private suspend fun reconcileRadio(reason: String, faultedGeneration: Int? = null) {
+        var restartDelayMs = 0L
+        radioMutex.withLock {
+            val faulted = faultedGeneration != null
+            if (faulted && (faultedGeneration != radioGeneration || !radioRunning)) return
+
+            val action = BluetoothRadioPolicy.decide(
+                running = radioRunning,
+                requested = isActive,
+                transportEnabled = isBleTransportEnabled(),
+                adapterOn = isAdapterOn(),
+                faulted = faulted
+            )
+            when (action) {
+                BluetoothRadioPolicy.Action.NONE -> Unit
+                BluetoothRadioPolicy.Action.START -> {
+                    if (startRadio()) {
+                        radioStartRetries = 0
+                    } else {
+                        scheduleRadioStartRetry()
+                    }
+                }
+                BluetoothRadioPolicy.Action.STOP -> {
+                    stopRadio(reason)
+                    if (faulted) {
+                        val shift = radioFaultRestarts.coerceAtMost(MAX_RADIO_RESTART_BACKOFF_SHIFT)
+                        radioFaultRestarts++
+                        restartDelayMs = RADIO_RESTART_DELAY_MS shl shift
+                    }
+                }
+            }
+        }
+        if (restartDelayMs > 0L) {
+            Log.w(TAG, "Bluetooth services torn down after a fault; rebuilding in ${restartDelayMs}ms")
+            delay(restartDelayMs)
+            reconcileRadio("rebuild after fault")
+        }
+    }
+
+    /** 在 [radioMutex] 裡呼叫。任一元件啟動失敗就整組拆掉，回傳 false。 */
+    private fun startRadio(): Boolean {
+        radioGeneration++
+
+        // Start connection tracker first
+        connectionTracker.start()
+
+        // Start power manager
+        powerManager.start()
+
+        // Start server/client based on debug settings
+        if (isGattServerEnabled()) {
+            if (!serverManager.start()) {
+                Log.e(TAG, "Failed to start server manager")
+                stopRadio("server manager failed to start")
+                return false
+            }
+        } else {
+            Log.i(TAG, "GATT Server disabled by debug settings; not starting")
+        }
+
+        if (isGattClientEnabled()) {
+            if (!clientManager.start()) {
+                Log.e(TAG, "Failed to start client manager")
+                stopRadio("client manager failed to start")
+                return false
+            }
+        } else {
+            Log.i(TAG, "GATT Client disabled by debug settings; not starting")
+        }
+
+        radioRunning = true
+        startIdleLinkWatch()
+        Log.i(TAG, "Bluetooth services started successfully")
+        return true
+    }
+
+    /**
+     * 在 [radioMutex] 裡呼叫。停掉掃描、廣播與 GATT server，丟掉每條鏈路的待送佇列，清空連線表，
+     * 並對每一條被移除的鏈路通知上層斷線（試跑中 D 關藍牙後一直沒有 `LINK_DOWN`，殘留連線還讓
+     * 掃描結果被當成「已連上」而跳過）。之後不再對這一代的 GATT 物件發出任何呼叫。
+     */
+    private fun stopRadio(reason: String) {
+        Log.i(TAG, "Stopping Bluetooth services ($reason)")
+        radioRunning = false
+        idleLinkWatchJob?.cancel()
+        idleLinkWatchJob = null
+        clientManager.stop()
+        serverManager.stop()
+        packetBroadcaster.clearPendingSends()
+        connectionTracker.stopAndRemoveAll().forEach { link ->
+            componentDelegate.onDeviceDisconnected(
+                link.connection.device,
+                link.connection.linkID,
+                link.observedPeerID
+            )
+        }
+    }
+
+    /**
+     * 殭屍連線偵測（P0-2）：定期找出超過 [com.bitchat.android.util.AppConstants.Mesh.LINK_IDLE_TIMEOUT_MS]
+     * 沒收到封包的鏈路，在本機斷開讓它重連。不等藍牙堆疊的斷線回呼：試跑中 C 的回呼晚了 4 分鐘。
+     *
+     * `delay` 與閒置時間都用不含深度睡眠的單調時鐘：本機睡著時這個迴圈不會喚醒裝置，醒來後也不會
+     * 把睡著的那段算成閒置。試跑中 C 的 60 s 計時器隔 1–5 分鐘才觸發，就是同一個現象。
+     */
+    private fun startIdleLinkWatch() {
+        idleLinkWatchJob?.cancel()
+        idleLinkWatchJob = connectionScope.launch {
+            while (true) {
+                delay(com.bitchat.android.util.AppConstants.Mesh.LINK_IDLE_CHECK_INTERVAL_MS)
+                if (!radioRunning) break
+                connectionTracker.findIdleLinks().forEach { idle ->
+                    disconnectLinkLocally(
+                        idle.deviceAddress,
+                        idle.linkID,
+                        "no packets received for ${idle.idleForMs / 1000}s"
+                    )
+                }
+            }
+        }
+    }
+
+    private fun scheduleRadioStartRetry() {
+        if (radioStartRetries >= MAX_RADIO_START_RETRIES) {
+            Log.e(TAG, "Bluetooth services failed to start after $radioStartRetries retries; waiting for the next adapter state change")
+            return
+        }
+        radioStartRetries++
+        val attempt = radioStartRetries
+        connectionScope.launch {
+            delay(RADIO_START_RETRY_DELAY_MS)
+            reconcileRadio("start retry $attempt")
+        }
+    }
+
+    /** 送出時發現 binder 已失效，或轉接器不是 ON 時寫入被拒：當作藍牙已重啟，走同一套流程。 */
+    private fun onBluetoothFault(reason: String) {
+        val generation = radioGeneration
+        connectionScope.launch { reconcileRadio("Bluetooth fault: $reason", faultedGeneration = generation) }
+    }
+
+    /**
+     * 在本機立刻拆掉 [linkID] 這一條鏈路，不等藍牙堆疊的斷線回呼：從連線表移除（只移除仍是這一代
+     * 的項目）、通知上層、請堆疊斷線並關閉 GATT。舊 GATT 晚到的回呼經 `*IfCurrent` 檢查後不會
+     * 動到同一位址上的新鏈路。
+     */
+    private fun disconnectLinkLocally(deviceAddress: String, linkID: String, reason: String) {
+        val removed = connectionTracker.removeConnectionIfCurrent(deviceAddress, linkID) ?: return
+        Log.w(TAG, "Dropping link $deviceAddress ($reason)")
+        val connection = removed.connection
+        componentDelegate.onDeviceDisconnected(connection.device, linkID, removed.observedPeerID)
+        if (connection.isClient) {
+            val gatt = connection.gatt ?: return
+            try { gatt.disconnect() } catch (_: Exception) { }
+            connectionScope.launch {
+                delay(CLEANUP_DELAY)
+                try { gatt.close() } catch (_: Exception) { }
+            }
+        } else {
+            serverManager.disconnectLink(connection.device, linkID)
+        }
+    }
+
+    private fun isAdapterOn(): Boolean =
+        try { bluetoothAdapter?.isEnabled == true } catch (_: Exception) { false }
+
+    private fun registerAdapterStateReceiver() {
+        if (!adapterReceiverRegistered.compareAndSet(false, true)) return
+        try {
+            ContextCompat.registerReceiver(
+                appContext,
+                adapterStateReceiver,
+                IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } catch (e: Exception) {
+            adapterReceiverRegistered.set(false)
+            Log.e(TAG, "Failed to register Bluetooth state receiver: ${e.message}")
+        }
+    }
+
+    private fun unregisterAdapterStateReceiver() {
+        if (!adapterReceiverRegistered.compareAndSet(true, false)) return
+        try { appContext.unregisterReceiver(adapterStateReceiver) } catch (_: Exception) { }
+    }
+
+    private fun adapterStateName(state: Int): String = when (state) {
+        BluetoothAdapter.STATE_OFF -> "OFF"
+        BluetoothAdapter.STATE_TURNING_ON -> "TURNING_ON"
+        BluetoothAdapter.STATE_ON -> "ON"
+        BluetoothAdapter.STATE_TURNING_OFF -> "TURNING_OFF"
+        else -> "UNKNOWN($state)"
     }
 
     /**
@@ -403,12 +635,12 @@ class BluetoothConnectionManager(
 
     // Expose role controls for debug UI
     fun startServer() {
-        if (!isActive || !isBleTransportEnabled()) return
+        if (!isActive || !isBleTransportEnabled() || !radioRunning) return
         connectionScope.launch { if (isGattServerEnabled()) serverManager.start() }
     }
     fun stopServer() { connectionScope.launch { serverManager.stop() } }
     fun startClient() {
-        if (!isActive || !isBleTransportEnabled()) return
+        if (!isActive || !isBleTransportEnabled() || !radioRunning) return
         connectionScope.launch { if (isGattClientEnabled()) clientManager.start() }
     }
     fun stopClient() { connectionScope.launch { clientManager.stop() } }
@@ -439,7 +671,7 @@ class BluetoothConnectionManager(
      * Public: connect/disconnect helpers for debug UI
      */
     fun connectToAddress(address: String): Boolean {
-        if (!isActive || !isBleTransportEnabled()) return false
+        if (!isActive || !isBleTransportEnabled() || !radioRunning) return false
         return clientManager.connectToAddress(address)
     }
     fun disconnectAddress(address: String) { connectionTracker.disconnectDevice(address) }
@@ -452,7 +684,7 @@ class BluetoothConnectionManager(
             clientManager.stop()
             serverManager.stop()
             delay(200)
-            if (isActive && isBleTransportEnabled()) {
+            if (isActive && isBleTransportEnabled() && radioRunning) {
                 // Restart managers if service is active
                 if (isGattServerEnabled()) serverManager.start()
                 if (isGattClientEnabled()) clientManager.start()
@@ -474,7 +706,8 @@ class BluetoothConnectionManager(
             appendLine("=== Bluetooth Connection Manager ===")
             appendLine("Bluetooth MAC Address: ${bluetoothAdapter?.address}")
             appendLine("Active: $isActive")
-            appendLine("Bluetooth Enabled: ${bluetoothAdapter?.isEnabled}")
+            appendLine("Bluetooth Services Running: $radioRunning")
+appendLine("Bluetooth Enabled: ${bluetoothAdapter?.isEnabled}")
             appendLine("Has Permissions: ${permissionManager.hasBluetoothPermissions()}")
             appendLine("GATT Server Active: ${serverManager.getGattServer() != null}")
             appendLine()

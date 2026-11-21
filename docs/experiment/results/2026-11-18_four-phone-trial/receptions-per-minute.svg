@@ -1,0 +1,287 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="506" viewBox="0 0 900 506" role="img" aria-label="B、C、D 每分鐘收到 A 的 Health Report 筆數">
+
+<style>
+  svg { font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif; }
+  .surface { fill: #fcfcfb; }
+  .t1 { fill: #0b0b0b; }
+  .t2 { fill: #52514e; }
+  .tm { fill: #898781; }
+  .grid { stroke: #e1e0d9; stroke-width: 1; }
+  .base { stroke: #c3c2b7; stroke-width: 1; }
+  .track { fill: #e1e0d9; }
+  .band { fill: #f0efec; }
+  .evt { stroke: #898781; stroke-width: 1; }
+  .s1 { fill: #2a78d6; stroke: #2a78d6; }
+  .s2 { fill: #eb6834; stroke: #eb6834; }
+  .s3 { fill: #1baf7a; stroke: #1baf7a; }
+  .l1 { stroke: #2a78d6; fill: none; }
+  .l2 { stroke: #eb6834; fill: none; }
+  .l3 { stroke: #1baf7a; fill: none; }
+  .ring { stroke: #fcfcfb; }
+  @media (prefers-color-scheme: dark) {
+    .surface { fill: #1a1a19; }
+    .t1 { fill: #f0efec; }
+    .t2 { fill: #c3c2b7; }
+    .grid { stroke: #2c2c2a; }
+    .base { stroke: #383835; }
+    .track { fill: #383835; }
+    .band { fill: #242423; }
+    .s1 { fill: #3987e5; stroke: #3987e5; }
+    .s2 { fill: #d95926; stroke: #d95926; }
+    .s3 { fill: #199e70; stroke: #199e70; }
+    .l1 { stroke: #3987e5; }
+    .l2 { stroke: #d95926; }
+    .l3 { stroke: #199e70; }
+    .ring { stroke: #1a1a19; }
+  }
+</style>
+<rect class="surface" x="0" y="0" width="900" height="506" rx="8"/>
+<text class="t1" x="64" y="26" font-size="15" font-weight="600">B、C、D 每分鐘收到 A 的 Health Report 筆數</text>
+<text class="t2" x="64" y="46" font-size="12">灰色是 A 該分鐘送出的筆數（每秒 1 筆），彩色是收到的筆數（flood 與同步合計）。P0 期間 A 尚未開始送。</text>
+<rect class="band" x="238.6" y="56" width="165.3" height="20" rx="4"/>
+<text class="t1" x="245.6" y="70" font-size="11">Run 1 單跳距離</text>
+<rect class="band" x="454.0" y="56" width="391.0" height="20" rx="4"/>
+<text class="t1" x="461.0" y="70" font-size="11">Run 2 雙跳距離</text>
+<rect class="band" x="441.3" y="80" width="389.9" height="20" rx="4"/>
+<text class="t1" x="448.3" y="94" font-size="11">Run 3 anti-entropy：D 關藍牙 → 經 C 重新入網</text>
+<rect class="band" x="73.6" y="104" width="163.0" height="20" rx="4"/>
+<text class="t2" x="155.1" y="118" font-size="11" text-anchor="middle">P0</text>
+<rect class="band" x="238.6" y="104" width="69.7" height="20" rx="4"/>
+<text class="t2" x="273.5" y="118" font-size="11" text-anchor="middle">P1</text>
+<rect class="band" x="310.3" y="104" width="93.6" height="20" rx="4"/>
+<text class="t2" x="357.1" y="118" font-size="11" text-anchor="middle">P2</text>
+<rect class="band" x="454.0" y="104" width="44.6" height="20" rx="4"/>
+<text class="t2" x="476.3" y="118" font-size="11" text-anchor="middle">P3</text>
+<rect class="band" x="500.7" y="104" width="42.3" height="20" rx="4"/>
+<text class="t2" x="521.8" y="118" font-size="11" text-anchor="middle">P4</text>
+<rect class="band" x="545.0" y="104" width="233.5" height="20" rx="4"/>
+<text class="t2" x="661.8" y="118" font-size="11" text-anchor="middle">P5</text>
+<rect class="band" x="780.5" y="104" width="64.8" height="20" rx="4"/>
+<text class="t2" x="812.9" y="118" font-size="11" text-anchor="middle">P6</text>
+<line class="grid" x1="133.1" y1="136" x2="133.1" y2="228"/>
+<line class="grid" x1="219.5" y1="136" x2="219.5" y2="228"/>
+<line class="grid" x1="305.9" y1="136" x2="305.9" y2="228"/>
+<line class="grid" x1="392.3" y1="136" x2="392.3" y2="228"/>
+<line class="grid" x1="478.6" y1="136" x2="478.6" y2="228"/>
+<line class="grid" x1="565.0" y1="136" x2="565.0" y2="228"/>
+<line class="grid" x1="651.4" y1="136" x2="651.4" y2="228"/>
+<line class="grid" x1="737.8" y1="136" x2="737.8" y2="228"/>
+<line class="grid" x1="824.2" y1="136" x2="824.2" y2="228"/>
+<text class="tm" x="56" y="232.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">0</text>
+<line class="grid" x1="64" y1="182.0" x2="876" y2="182.0"/>
+<text class="tm" x="56" y="186.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">30</text>
+<line class="grid" x1="64" y1="136.0" x2="876" y2="136.0"/>
+<text class="tm" x="56" y="140.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">60</text>
+<line class="base" x1="64" y1="228" x2="876" y2="228"/>
+<rect class="s1" x="64" y="124" width="10" height="10" rx="2"/>
+<text class="t1" x="80" y="133" font-size="12" font-weight="600">B 收到</text>
+<path class="track" d="M238.8,228 v-83.4 q0,-4 4,-4 h5.3 q4,0 4,4 v83.4 z"><title>18:26 A 送出 57，B 收到 57</title></path>
+<path class="s1" stroke="none" d="M238.8,228 v-83.4 q0,-4 4,-4 h5.3 q4,0 4,4 v83.4 z"><title>18:26 A 送出 57，B 收到 57</title></path>
+<path class="track" d="M256.0,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:27 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M256.0,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:27 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M273.3,228 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:28 A 送出 56，B 收到 56</title></path>
+<path class="s1" stroke="none" d="M273.3,228 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:28 A 送出 56，B 收到 56</title></path>
+<path class="track" d="M290.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:29 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M290.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:29 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M307.9,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:30 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M307.9,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:30 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M325.1,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:31 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M325.1,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:31 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M342.4,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:32 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M342.4,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:32 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M359.7,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:33 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M359.7,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:33 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M377.0,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:34 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M377.0,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:34 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M394.3,228 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:35 A 送出 45，B 收到 45</title></path>
+<path class="s1" stroke="none" d="M394.3,228 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:35 A 送出 45，B 收到 45</title></path>
+<path class="track" d="M446.1,228 v-40.5 q0,-4 4,-4 h5.3 q4,0 4,4 v40.5 z"><title>18:38 A 送出 29，B 收到 29</title></path>
+<path class="s1" stroke="none" d="M446.1,228 v-40.5 q0,-4 4,-4 h5.3 q4,0 4,4 v40.5 z"><title>18:38 A 送出 29，B 收到 29</title></path>
+<path class="track" d="M463.4,228 v-80.3 q0,-4 4,-4 h5.3 q4,0 4,4 v80.3 z"><title>18:39 A 送出 55，B 收到 55</title></path>
+<path class="s1" stroke="none" d="M463.4,228 v-80.3 q0,-4 4,-4 h5.3 q4,0 4,4 v80.3 z"><title>18:39 A 送出 55，B 收到 55</title></path>
+<path class="track" d="M480.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:40 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M480.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:40 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M497.9,228 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:41 A 送出 45，B 收到 45</title></path>
+<path class="s1" stroke="none" d="M497.9,228 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:41 A 送出 45，B 收到 45</title></path>
+<path class="track" d="M515.2,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:42 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M515.2,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:42 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M532.5,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:43 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M532.5,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:43 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M549.7,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:44 A 送出 60，B 收到 35</title></path>
+<path class="s1" stroke="none" d="M549.7,228 v-49.7 q0,-4 4,-4 h5.3 q4,0 4,4 v49.7 z"><title>18:44 A 送出 60，B 收到 35</title></path>
+<path class="track" d="M567.0,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:45 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M584.3,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:46 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M601.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:47 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M618.9,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:48 A 送出 60，B 收到 56</title></path>
+<path class="s1" stroke="none" d="M618.9,228 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:48 A 送出 60，B 收到 56</title></path>
+<path class="track" d="M636.1,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:49 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M636.1,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:49 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M653.4,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:50 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M653.4,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:50 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M670.7,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:51 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M670.7,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:51 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M688.0,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:52 A 送出 60，B 收到 18</title></path>
+<path class="s1" stroke="none" d="M688.0,228 v-23.6 q0,-4 4,-4 h5.3 q4,0 4,4 v23.6 z"><title>18:52 A 送出 60，B 收到 18</title></path>
+<path class="track" d="M705.2,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:53 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M722.5,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:54 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M739.8,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:55 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M757.1,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:56 A 送出 60，B 收到 0</title></path>
+<path class="track" d="M774.3,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:57 A 送出 60，B 收到 35</title></path>
+<path class="s1" stroke="none" d="M774.3,228 v-49.7 q0,-4 4,-4 h5.3 q4,0 4,4 v49.7 z"><title>18:57 A 送出 60，B 收到 35</title></path>
+<path class="track" d="M791.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:58 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M791.6,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:58 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M808.9,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:59 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M808.9,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:59 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M826.2,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>19:00 A 送出 60，B 收到 60</title></path>
+<path class="s1" stroke="none" d="M826.2,228 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>19:00 A 送出 60，B 收到 60</title></path>
+<path class="track" d="M843.4,228 v-22.1 q0,-4 4,-4 h5.3 q4,0 4,4 v22.1 z"><title>19:01 A 送出 17，B 收到 17</title></path>
+<path class="s1" stroke="none" d="M843.4,228 v-22.1 q0,-4 4,-4 h5.3 q4,0 4,4 v22.1 z"><title>19:01 A 送出 17，B 收到 17</title></path>
+<line class="grid" x1="133.1" y1="254" x2="133.1" y2="346"/>
+<line class="grid" x1="219.5" y1="254" x2="219.5" y2="346"/>
+<line class="grid" x1="305.9" y1="254" x2="305.9" y2="346"/>
+<line class="grid" x1="392.3" y1="254" x2="392.3" y2="346"/>
+<line class="grid" x1="478.6" y1="254" x2="478.6" y2="346"/>
+<line class="grid" x1="565.0" y1="254" x2="565.0" y2="346"/>
+<line class="grid" x1="651.4" y1="254" x2="651.4" y2="346"/>
+<line class="grid" x1="737.8" y1="254" x2="737.8" y2="346"/>
+<line class="grid" x1="824.2" y1="254" x2="824.2" y2="346"/>
+<text class="tm" x="56" y="350.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">0</text>
+<line class="grid" x1="64" y1="300.0" x2="876" y2="300.0"/>
+<text class="tm" x="56" y="304.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">30</text>
+<line class="grid" x1="64" y1="254.0" x2="876" y2="254.0"/>
+<text class="tm" x="56" y="258.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">60</text>
+<line class="base" x1="64" y1="346" x2="876" y2="346"/>
+<rect class="s2" x="64" y="242" width="10" height="10" rx="2"/>
+<text class="t1" x="80" y="251" font-size="12" font-weight="600">C 收到</text>
+<path class="track" d="M238.8,346 v-83.4 q0,-4 4,-4 h5.3 q4,0 4,4 v83.4 z"><title>18:26 A 送出 57，C 收到 0</title></path>
+<path class="track" d="M256.0,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:27 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M273.3,346 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:28 A 送出 56，C 收到 0</title></path>
+<path class="track" d="M290.6,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:29 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M307.9,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:30 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M325.1,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:31 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M342.4,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:32 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M359.7,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:33 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M377.0,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:34 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M394.3,346 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:35 A 送出 45，C 收到 1</title></path>
+<path class="s2" stroke="none" d="M394.3,346 v0.0 q0,-4 4,-4 h5.3 q4,0 4,4 v0.0 z"><title>18:35 A 送出 45，C 收到 1</title></path>
+<path class="track" d="M446.1,346 v-40.5 q0,-4 4,-4 h5.3 q4,0 4,4 v40.5 z"><title>18:38 A 送出 29，C 收到 0</title></path>
+<path class="track" d="M463.4,346 v-80.3 q0,-4 4,-4 h5.3 q4,0 4,4 v80.3 z"><title>18:39 A 送出 55，C 收到 0</title></path>
+<path class="track" d="M480.6,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:40 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M497.9,346 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:41 A 送出 45，C 收到 31</title></path>
+<path class="s2" stroke="none" d="M497.9,346 v-43.5 q0,-4 4,-4 h5.3 q4,0 4,4 v43.5 z"><title>18:41 A 送出 45，C 收到 31</title></path>
+<path class="track" d="M515.2,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:42 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M515.2,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:42 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M532.5,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:43 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M532.5,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:43 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M549.7,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:44 A 送出 60，C 收到 35</title></path>
+<path class="s2" stroke="none" d="M549.7,346 v-49.7 q0,-4 4,-4 h5.3 q4,0 4,4 v49.7 z"><title>18:44 A 送出 60，C 收到 35</title></path>
+<path class="track" d="M567.0,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:45 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M584.3,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:46 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M601.6,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:47 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M618.9,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:48 A 送出 60，C 收到 56</title></path>
+<path class="s2" stroke="none" d="M618.9,346 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:48 A 送出 60，C 收到 56</title></path>
+<path class="track" d="M636.1,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:49 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M636.1,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:49 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M653.4,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:50 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M653.4,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:50 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M670.7,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:51 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M670.7,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:51 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M688.0,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:52 A 送出 60，C 收到 18</title></path>
+<path class="s2" stroke="none" d="M688.0,346 v-23.6 q0,-4 4,-4 h5.3 q4,0 4,4 v23.6 z"><title>18:52 A 送出 60，C 收到 18</title></path>
+<path class="track" d="M705.2,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:53 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M722.5,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:54 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M739.8,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:55 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M757.1,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:56 A 送出 60，C 收到 0</title></path>
+<path class="track" d="M774.3,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:57 A 送出 60，C 收到 35</title></path>
+<path class="s2" stroke="none" d="M774.3,346 v-49.7 q0,-4 4,-4 h5.3 q4,0 4,4 v49.7 z"><title>18:57 A 送出 60，C 收到 35</title></path>
+<path class="track" d="M791.6,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:58 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M791.6,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:58 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M808.9,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:59 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M808.9,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:59 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M826.2,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>19:00 A 送出 60，C 收到 60</title></path>
+<path class="s2" stroke="none" d="M826.2,346 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>19:00 A 送出 60，C 收到 60</title></path>
+<path class="track" d="M843.4,346 v-22.1 q0,-4 4,-4 h5.3 q4,0 4,4 v22.1 z"><title>19:01 A 送出 17，C 收到 17</title></path>
+<path class="s2" stroke="none" d="M843.4,346 v-22.1 q0,-4 4,-4 h5.3 q4,0 4,4 v22.1 z"><title>19:01 A 送出 17，C 收到 17</title></path>
+<line class="grid" x1="133.1" y1="372" x2="133.1" y2="464"/>
+<line class="grid" x1="219.5" y1="372" x2="219.5" y2="464"/>
+<line class="grid" x1="305.9" y1="372" x2="305.9" y2="464"/>
+<line class="grid" x1="392.3" y1="372" x2="392.3" y2="464"/>
+<line class="grid" x1="478.6" y1="372" x2="478.6" y2="464"/>
+<line class="grid" x1="565.0" y1="372" x2="565.0" y2="464"/>
+<line class="grid" x1="651.4" y1="372" x2="651.4" y2="464"/>
+<line class="grid" x1="737.8" y1="372" x2="737.8" y2="464"/>
+<line class="grid" x1="824.2" y1="372" x2="824.2" y2="464"/>
+<text class="tm" x="56" y="468.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">0</text>
+<line class="grid" x1="64" y1="418.0" x2="876" y2="418.0"/>
+<text class="tm" x="56" y="422.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">30</text>
+<line class="grid" x1="64" y1="372.0" x2="876" y2="372.0"/>
+<text class="tm" x="56" y="376.0" font-size="11" text-anchor="end" style="font-variant-numeric: tabular-nums">60</text>
+<line class="base" x1="64" y1="464" x2="876" y2="464"/>
+<rect class="s3" x="64" y="360" width="10" height="10" rx="2"/>
+<text class="t1" x="80" y="369" font-size="12" font-weight="600">D 收到</text>
+<path class="track" d="M238.8,464 v-83.4 q0,-4 4,-4 h5.3 q4,0 4,4 v83.4 z"><title>18:26 A 送出 57，D 收到 57</title></path>
+<path class="s3" stroke="none" d="M238.8,464 v-83.4 q0,-4 4,-4 h5.3 q4,0 4,4 v83.4 z"><title>18:26 A 送出 57，D 收到 57</title></path>
+<path class="track" d="M256.0,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:27 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M256.0,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:27 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M273.3,464 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:28 A 送出 56，D 收到 56</title></path>
+<path class="s3" stroke="none" d="M273.3,464 v-81.9 q0,-4 4,-4 h5.3 q4,0 4,4 v81.9 z"><title>18:28 A 送出 56，D 收到 56</title></path>
+<path class="track" d="M290.6,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:29 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M290.6,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:29 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M307.9,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:30 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M307.9,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:30 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M325.1,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:31 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M325.1,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:31 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M342.4,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:32 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M342.4,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:32 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M359.7,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:33 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M359.7,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:33 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M377.0,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:34 A 送出 60，D 收到 60</title></path>
+<path class="s3" stroke="none" d="M377.0,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:34 A 送出 60，D 收到 60</title></path>
+<path class="track" d="M394.3,464 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:35 A 送出 45，D 收到 45</title></path>
+<path class="s3" stroke="none" d="M394.3,464 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:35 A 送出 45，D 收到 45</title></path>
+<path class="track" d="M446.1,464 v-40.5 q0,-4 4,-4 h5.3 q4,0 4,4 v40.5 z"><title>18:38 A 送出 29，D 收到 0</title></path>
+<path class="track" d="M463.4,464 v-80.3 q0,-4 4,-4 h5.3 q4,0 4,4 v80.3 z"><title>18:39 A 送出 55，D 收到 0</title></path>
+<path class="track" d="M480.6,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:40 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M497.9,464 v-65.0 q0,-4 4,-4 h5.3 q4,0 4,4 v65.0 z"><title>18:41 A 送出 45，D 收到 0</title></path>
+<path class="track" d="M515.2,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:42 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M532.5,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:43 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M549.7,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:44 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M567.0,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:45 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M584.3,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:46 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M601.6,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:47 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M618.9,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:48 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M636.1,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:49 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M653.4,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:50 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M670.7,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:51 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M688.0,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:52 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M705.2,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:53 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M722.5,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:54 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M739.8,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:55 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M757.1,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:56 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M774.3,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:57 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M791.6,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:58 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M808.9,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>18:59 A 送出 60，D 收到 0</title></path>
+<path class="track" d="M826.2,464 v-88.0 q0,-4 4,-4 h5.3 q4,0 4,4 v88.0 z"><title>19:00 A 送出 60，D 收到 32</title></path>
+<path class="s3" stroke="none" d="M826.2,464 v-45.1 q0,-4 4,-4 h5.3 q4,0 4,4 v45.1 z"><title>19:00 A 送出 60，D 收到 32</title></path>
+<path class="track" d="M843.4,464 v-22.1 q0,-4 4,-4 h5.3 q4,0 4,4 v22.1 z"><title>19:01 A 送出 17，D 收到 17</title></path>
+<path class="s3" stroke="none" d="M843.4,464 v-22.1 q0,-4 4,-4 h5.3 q4,0 4,4 v22.1 z"><title>19:01 A 送出 17，D 收到 17</title></path>
+<line class="evt" x1="440.3" y1="104" x2="440.3" y2="464"/>
+<text class="t2" x="436.3" y="478" font-size="11" text-anchor="end">D 關藍牙</text>
+<line class="evt" x1="498.8" y1="104" x2="498.8" y2="464"/>
+<text class="t2" x="502.8" y="478" font-size="11" text-anchor="start">C app 重啟</text>
+<line class="evt" x1="765.1" y1="104" x2="765.1" y2="464"/>
+<text class="t2" x="761.1" y="478" font-size="11" text-anchor="end">D 開藍牙</text>
+<text class="tm" x="133.1" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:20</text>
+<text class="tm" x="219.5" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:25</text>
+<text class="tm" x="305.9" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:30</text>
+<text class="tm" x="392.3" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:35</text>
+<text class="tm" x="478.6" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:40</text>
+<text class="tm" x="565.0" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:45</text>
+<text class="tm" x="651.4" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:50</text>
+<text class="tm" x="737.8" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">18:55</text>
+<text class="tm" x="824.2" y="494" font-size="11" text-anchor="middle" style="font-variant-numeric: tabular-nums">19:00</text>
+<rect class="track" x="676" y="17" width="10" height="10" rx="2"/>
+<text class="t2" x="692" y="26" font-size="12">A 送出</text>
+<rect class="s1" x="748" y="17" width="10" height="10" rx="2"/>
+<text class="t2" x="764" y="26" font-size="12">收到（各列顏色）</text>
+</svg>

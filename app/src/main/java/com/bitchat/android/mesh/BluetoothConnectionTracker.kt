@@ -6,8 +6,6 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.util.Log
 import com.bitchat.android.experiment.ExperimentRecorder
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.UUID
@@ -19,12 +17,16 @@ class BluetoothConnectionTracker(
     private val connectionScope: CoroutineScope,
     private val powerManager: PowerManager,
     /** LINK_UP / LINK_DOWN (#70): a link is up once its peer is identified, down when such a link goes away. */
-    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp
+    private val experimentRecorder: ExperimentRecorder = ExperimentRecorder.NoOp,
+    /**
+     * 量測鏈路閒置用的時鐘（P0-2）。Android 上 `System.nanoTime()` 是 CLOCK_MONOTONIC，和
+     * `SystemClock.uptimeMillis()` 一樣不含深度睡眠，本機睡著的那段因此不算閒置。
+     */
+    private val monotonicClockMs: () -> Long = { System.nanoTime() / 1_000_000L }
 ) : MeshConnectionTracker(connectionScope, TAG) {
     
     companion object {
         private const val TAG = "BluetoothConnectionTracker"
-        private const val CLEANUP_DELAY = com.bitchat.android.util.AppConstants.Mesh.CONNECTION_CLEANUP_DELAY_MS
     }
     
     // Connection tracking - reduced memory footprint
@@ -33,8 +35,12 @@ class BluetoothConnectionTracker(
     val addressPeerMap = ConcurrentHashMap<String, String>()
     // Track whether we have seen the first ANNOUNCE on a given device connection
     private val firstAnnounceSeen = ConcurrentHashMap<String, Boolean>()
-    // RSSI tracking from scan results (for devices we discover but may connect as servers)
-    private val scanRSSI = ConcurrentHashMap<String, Int>()
+    // RSSI from scan results, by address and by peer: for devices we may connect as servers, and to
+    // keep connected peers' strength fresh (P1-5).
+    private val scanRSSI = RssiSamples()
+    // 每條鏈路（以 linkID 區分 GATT 世代，位址會被重用）最後一次有動靜的時間，以 monotonicClockMs
+    // 計：連上時寫入，之後每收到一個封包更新，所以就是 max(連上時間, 最後收包時間)（P0-2）。
+    private val lastLinkActivityMs = ConcurrentHashMap<String, Long>()
     private val connectionStateLock = Any()
     
     /**
@@ -52,14 +58,46 @@ class BluetoothConnectionTracker(
         val linkID: String = UUID.randomUUID().toString()
     )
     
+    /** 從連線表移除的一條鏈路；[observedPeerID] 是移除當下這條鏈路已確認的 peer，沒有則為 null。 */
+    data class RemovedLink(
+        val deviceAddress: String,
+        val connection: DeviceConnection,
+        val observedPeerID: String?
+    )
+
+    /** [findIdleLinks] 找到的一條閒置鏈路；[idleForMs] 是已經多久沒有收到封包。 */
+    data class IdleLink(
+        val deviceAddress: String,
+        val linkID: String,
+        val idleForMs: Long
+    )
+
     override fun start() {
         super.start()
     }
     
     override fun stop() {
+        stopAndRemoveAll()
+    }
+
+    /**
+     * 停止追蹤並清空連線表（藍牙關閉、傳輸停用、服務停止）。已確認身分的鏈路記 `LINK_DOWN`，
+     * client 端的 GATT 斷線並關閉。回傳被移除的鏈路，呼叫端據此通知上層每一條斷線：藍牙關閉時
+     * 堆疊不一定會送斷線回呼（試跑中 D 的殘留連線留了 28 分鐘，還擋住了重連）。
+     */
+    fun stopAndRemoveAll(): List<RemovedLink> {
         super.stop()
-        cleanupAllConnections()
-        clearAllConnections()
+        val removed = removeAllConnections()
+        // 之後不會馬上在同一個位址重連，不必等斷線回呼；scope 也可能隨即被取消，所以直接關閉。
+        removed.forEach { link ->
+            link.connection.gatt?.let { gatt ->
+                try { gatt.disconnect() } catch (_: Exception) { }
+                try { gatt.close() } catch (e: Exception) {
+                    Log.w(TAG, "Error closing GATT during cleanup: ${e.message}")
+                }
+            }
+        }
+        return removed
     }
 
     // Abstract implementations
@@ -81,7 +119,11 @@ class BluetoothConnectionTracker(
     fun addDeviceConnection(deviceAddress: String, deviceConn: DeviceConnection) {
         Log.d(TAG, "Tracker: Adding device connection for $deviceAddress (isClient: ${deviceConn.isClient}")
         synchronized(connectionStateLock) {
-            connectedDevices[deviceAddress] = deviceConn
+            val replaced = connectedDevices.put(deviceAddress, deviceConn)
+            if (replaced != null && replaced.linkID != deviceConn.linkID) {
+                lastLinkActivityMs.remove(replaced.linkID)
+            }
+            lastLinkActivityMs[deviceConn.linkID] = monotonicClockMs()
             // A route observation belongs to this GATT generation, not its reusable address.
             reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
         }
@@ -119,6 +161,30 @@ class BluetoothConnectionTracker(
 
     fun getCurrentLinkID(deviceAddress: String): String? =
         connectedDevices[deviceAddress]?.linkID
+
+    /**
+     * [linkID] 這條鏈路收到一個封包（P0-2）。只更新仍在連線表上的鏈路：已移除或被取代的舊 GATT
+     * 晚到的封包不會讓它復活，也不會替同一位址上的新鏈路續命。
+     */
+    fun noteLinkReceive(linkID: String) {
+        lastLinkActivityMs.replace(linkID, monotonicClockMs())
+    }
+
+    /**
+     * 超過 [timeoutMs] 沒收到任何封包的鏈路（P0-2）。基準是連上的時間與最後一次收到封包的時間
+     * 取較晚者，見 [LinkIdlePolicy]。
+     */
+    fun findIdleLinks(timeoutMs: Long = com.bitchat.android.util.AppConstants.Mesh.LINK_IDLE_TIMEOUT_MS): List<IdleLink> {
+        val now = monotonicClockMs()
+        return connectedDevices.mapNotNull { (address, connection) ->
+            val lastActivity = lastLinkActivityMs[connection.linkID] ?: return@mapNotNull null
+            if (LinkIdlePolicy.isIdle(lastActivity, now, timeoutMs)) {
+                IdleLink(address, connection.linkID, now - lastActivity)
+            } else {
+                null
+            }
+        }
+    }
 
     /**
      * Records that the current link delivered a validated, non-relayed ANNOUNCE for [peerID].
@@ -160,22 +226,54 @@ class BluetoothConnectionTracker(
     }
     
     /**
-     * Store RSSI from scan results
+     * Store RSSI from scan results. Called for connected peers too: they keep advertising, and this
+     * is what keeps their strength fresh. [peerID] is the one in the advertisement's service data.
      */
-    fun updateScanRSSI(deviceAddress: String, rssi: Int) {
-        scanRSSI[deviceAddress] = rssi
+    fun updateScanRSSI(deviceAddress: String, rssi: Int, peerID: String? = null) {
+        scanRSSI.record(deviceAddress, peerID, rssi)
     }
     
     /**
-     * Get best available RSSI for a device (connection RSSI preferred, then scan RSSI)
+     * The freshest RSSI known for a device: the one stored on its link at connect time, or a later
+     * scan of the same address or of the link's peer (an inbound link's address differs from the
+     * one its peer advertises with).
      */
     fun getBestRSSI(deviceAddress: String): Int? {
-        // Prefer connection RSSI if available and valid
-        connectedDevices[deviceAddress]?.rssi?.takeIf { it != Int.MIN_VALUE }?.let { return it }
-        
-        // Fall back to scan RSSI
-        return scanRSSI[deviceAddress]
+        val link = connectedDevices[deviceAddress]
+        val linkSample = link?.takeIf { it.rssi != Int.MIN_VALUE }?.let { RssiSamples.Sample(it.rssi, it.connectedAt) }
+        val peerID = addressPeerMap[deviceAddress] ?: link?.peerID
+        return RssiSamples.freshest(
+            linkSample,
+            scanRSSI.byAddress(deviceAddress),
+            peerID?.let(scanRSSI::byPeer)
+        )?.rssi
     }
+
+    /**
+     * Distinct peers on the current links (P1-5). Counts peers, not links: two phones often hold a
+     * link in each role to each other. A link counts once its peer is identified, by the scan's
+     * service data (outbound links) or by its first verified ANNOUNCE; a link still waiting for it
+     * (the first second or so of an inbound link) does not count yet.
+     */
+    fun getDirectPeerCount(): Int =
+        connectedDevices.entries.mapNotNullTo(HashSet()) { (address, link) -> addressPeerMap[address] ?: link.peerID }.size
+
+    /** Whether any current link, in either role, is identified as [peerID]. */
+    fun isPeerDirectlyConnected(peerID: String): Boolean =
+        connectedDevices.entries.any { (address, link) -> (addressPeerMap[address] ?: link.peerID) == peerID }
+
+    /**
+     * The outbound link [getConnectionsToEvict] would give up first, with its freshest RSSI (null
+     * when unknown); null without outbound links. Used to replace a weak link when full (P1-5).
+     */
+    fun getWeakestClientLink(): Pair<DeviceConnection, Int?>? {
+        val strength = linkStrengths()
+        return strength.keys.filter { it.isClient }.sortedWith(weakestFirst(strength)).firstOrNull()
+            ?.let { it to strength[it] }
+    }
+
+    private fun linkStrengths(): Map<DeviceConnection, Int?> =
+        connectedDevices.entries.associate { (address, link) -> link to getBestRSSI(address) }
     
     /**
      * Add a subscribed device
@@ -229,20 +327,25 @@ class BluetoothConnectionTracker(
     /**
      * Calculate which connections should be evicted to satisfy limits.
      * Logic:
-     * 1. Enforce strict role limits (maxClient, maxServer) - evict oldest excess.
-     * 2. Enforce overall limit (maxOverall) - evict oldest remaining, preferring clients.
+     * 1. Enforce strict role limits (maxClient, maxServer) - evict the weakest excess.
+     * 2. Enforce overall limit (maxOverall) - evict the weakest remaining, preferring clients.
+     *
+     * "Weakest" is the freshest RSSI ([getBestRSSI]), oldest first on a tie; links of unknown
+     * strength go after all known ones, oldest first (P1-5: upstream evicted purely the oldest).
      */
     fun getConnectionsToEvict(maxOverall: Int, maxServer: Int, maxClient: Int): List<DeviceConnection> {
         val toEvict = mutableSetOf<DeviceConnection>()
-        val currentDevices = connectedDevices.values.toList()
+        val strength = linkStrengths()
+        val evictionOrder = weakestFirst(strength)
+        val currentDevices = strength.keys.toList()
         
         // 1. Enforce Role Limits
-        val clients = currentDevices.filter { it.isClient }.sortedBy { it.connectedAt }
+        val clients = currentDevices.filter { it.isClient }.sortedWith(evictionOrder)
         if (clients.size > maxClient) {
             toEvict.addAll(clients.take(clients.size - maxClient))
         }
         
-        val servers = currentDevices.filter { !it.isClient }.sortedBy { it.connectedAt }
+        val servers = currentDevices.filter { !it.isClient }.sortedWith(evictionOrder)
         if (servers.size > maxServer) {
             toEvict.addAll(servers.take(servers.size - maxServer))
         }
@@ -254,8 +357,8 @@ class BluetoothConnectionTracker(
             val excessCount = remaining.size - maxOverall
             
             // Explicitly prefer evicting clients first
-            val clientCandidates = remaining.filter { it.isClient }.sortedBy { it.connectedAt }
-            val serverCandidates = remaining.filter { !it.isClient }.sortedBy { it.connectedAt }
+            val clientCandidates = remaining.filter { it.isClient }.sortedWith(evictionOrder)
+            val serverCandidates = remaining.filter { !it.isClient }.sortedWith(evictionOrder)
             
             var needed = excessCount
             
@@ -274,12 +377,18 @@ class BluetoothConnectionTracker(
         return toEvict.toList()
     }
     
+    /** Weakest known RSSI first, oldest first on a tie; unknown strength last, oldest first. */
+    private fun weakestFirst(strength: Map<DeviceConnection, Int?>): Comparator<DeviceConnection> =
+        compareBy<DeviceConnection> { if (strength[it] == null) 1 else 0 }
+            .thenBy { strength[it] ?: 0 }
+            .thenBy { it.connectedAt }
+
     /**
      * Clean up a specific device connection
      */
     fun cleanupDeviceConnection(deviceAddress: String) {
         synchronized(connectionStateLock) {
-            connectedDevices.remove(deviceAddress)
+            connectedDevices.remove(deviceAddress)?.let { lastLinkActivityMs.remove(it.linkID) }
             subscribedDevices.removeAll { it.address == deviceAddress }
             firstAnnounceSeen.remove(deviceAddress)
             reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
@@ -290,57 +399,54 @@ class BluetoothConnectionTracker(
     fun cleanupDeviceConnectionIfCurrent(
         deviceAddress: String,
         expectedLinkID: String
-    ): Boolean {
-        synchronized(connectionStateLock) {
-            val current = connectedDevices[deviceAddress] ?: return false
+    ): Boolean = removeConnectionIfCurrent(deviceAddress, expectedLinkID) != null
+
+    /**
+     * 和 [cleanupDeviceConnectionIfCurrent] 相同，另外回傳被移除的鏈路與它已確認的 peer。peer 在
+     * 同一個鎖裡取出：先讀 [addressPeerMap] 再清理的話，中間換上的新鏈路的 peer 會被當成斷線。
+     */
+    fun removeConnectionIfCurrent(
+        deviceAddress: String,
+        expectedLinkID: String
+    ): RemovedLink? {
+        val removed = synchronized(connectionStateLock) {
+            val current = connectedDevices[deviceAddress] ?: return null
             if (current.linkID != expectedLinkID) {
-                return false
+                return null
             }
             if (!connectedDevices.remove(deviceAddress, current)) {
-                return false
+                return null
             }
+            lastLinkActivityMs.remove(expectedLinkID)
             subscribedDevices.removeAll { it.address == deviceAddress }
-            reportLinkDown(deviceAddress, addressPeerMap.remove(deviceAddress))
+            val observedPeerID = addressPeerMap.remove(deviceAddress)
+            reportLinkDown(deviceAddress, observedPeerID)
             firstAnnounceSeen.remove(deviceAddress)
+            RemovedLink(deviceAddress, current, observedPeerID)
         }
         Log.d(TAG, "Cleaned up device connection for $deviceAddress")
-        return true
+        return removed
     }
-    
-    /**
-     * Clean up all connections
-     */
-    private fun cleanupAllConnections() {
-        connectedDevices.values.forEach { deviceConn ->
-            deviceConn.gatt?.disconnect()
-        }
-        
-        connectionScope.launch {
-            delay(CLEANUP_DELAY)
-            
-            connectedDevices.values.forEach { deviceConn ->
-                try {
-                    deviceConn.gatt?.close()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error closing GATT during cleanup: ${e.message}")
-                }
-            }
-        }
-    }
-    
+
     /**
      * Clear all connection tracking
      */
-    private fun clearAllConnections() {
-        synchronized(connectionStateLock) {
+    private fun removeAllConnections(): List<RemovedLink> {
+        val removed = synchronized(connectionStateLock) {
+            val links = connectedDevices.map { (address, connection) ->
+                RemovedLink(address, connection, addressPeerMap[address])
+            }
             addressPeerMap.forEach { (address, peer) -> reportLinkDown(address, peer) }
             connectedDevices.clear()
+            lastLinkActivityMs.clear()
             subscribedDevices.clear()
             addressPeerMap.clear()
+            links
         }
         pendingConnections.clear()
         scanRSSI.clear()
         firstAnnounceSeen.clear()
+        return removed
     }
 
     /**
@@ -372,9 +478,11 @@ class BluetoothConnectionTracker(
     fun getDebugInfo(): String {
         return buildString {
             appendLine("Connected Devices: ${connectedDevices.size} / ${powerManager.getMaxConnections()}")
+            val nowMonotonic = monotonicClockMs()
             connectedDevices.forEach { (address, deviceConn) ->
                 val age = (System.currentTimeMillis() - deviceConn.connectedAt) / 1000
-                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, RSSI: ${deviceConn.rssi})")
+                val idle = lastLinkActivityMs[deviceConn.linkID]?.let { "${(nowMonotonic - it) / 1000}s" } ?: "?"
+                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, idle $idle, RSSI: ${getBestRSSI(address)})")
             }
             appendLine()
             appendLine("Subscribed Devices (server mode): ${subscribedDevices.size}")
@@ -386,8 +494,9 @@ class BluetoothConnectionTracker(
                 appendLine("  - $address: ${attempt.attempts} attempts, last ${elapsed}s ago")
             }
             appendLine()
-            appendLine("Scan RSSI Cache: ${scanRSSI.size}")
-            scanRSSI.forEach { (address, rssi) ->
+            val scanned = scanRSSI.addressSnapshot()
+            appendLine("Scan RSSI Cache: ${scanned.size}")
+            scanned.forEach { (address, rssi) ->
                 appendLine("  - $address: $rssi dBm")
             }
         }
