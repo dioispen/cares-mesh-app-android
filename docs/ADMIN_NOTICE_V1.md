@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）。sync、取代與撤回、定向解密與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具（只有廣播）已實作（#135）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）。取代與撤回、定向解密與回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -195,7 +195,7 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 
 - 第 3 步只比對 senderID 與 timestamp。外層其他欄位（recipient、裝置簽章、route、severity、version）Inbox 不看，轉送時一律換成正規化的外層封包（`AdminNoticeTraffic.normalizedForRelay`），TTL 與收到的 payload 編碼不變。這些欄位都不在 `PacketIdUtil` 的封包 ID 裡，`SecurityManager` 又在 Inbox 之前就記下封包 ID：如果帶著它們的副本被擋下，攻擊者先送一份加了 recipient 的真公告就能讓後到的正規副本被當成重複；如果原樣轉送，就能把公告擋在指定的收件者、或用 route 導向指定的路徑。
 - `SecurityManager` 在 Inbox 驗簽之前就記下 0x31 的封包 ID，這不違反「先驗簽才記錄」：管理端簽章在 payload 裡，偽造的副本封包 ID 一定和真的不同，佔不住真公告。
-- 去重表的「只從 Firestore 收過」改為「已在 mesh 裡」時，`Inbox.markInMesh` 一併取消待注入；mesh 聽到的與 Gateway 注入的公告都經過這裡，#138 在這裡加入 sync 集合。
+- 去重表的「只從 Firestore 收過」改為「已在 mesh 裡」時，`Inbox.markInMesh` 一併取消待注入；mesh 聽到的與 Gateway 注入的公告都經過這裡，#138 在這裡加入 sync 集合（見「Gossip sync」的實作）。
 - `onMeshPacket` 回傳的 `relay` 就是 `validPacket`。沒有安裝 Inbox、或處理時丟出例外，`AdminNoticeBridge.deliverFromMesh` 一律回傳不轉送。BLE mesh 與 Wi-Fi Aware 的 `MeshCore` 交給同一個 Inbox。
 
 **0x31 的 senderID 不是 peer**（ADR-0011）。把 senderID 當成 peer 的地方都要排除 0x31：
@@ -228,6 +228,14 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 - 被取代的公告立即移除。
 - 定向公告的密文也要同步。中繼看不到內容，但收件者常常正是晚到的那個人。
 - 封包是正規化的，GCS 的封包 ID 在所有節點上都一致，不會因為副本來自不同 Gateway 而一再重送。
+- 實作（#138）：
+  - `GossipSyncManager.onAdminNoticeSeen(packet, expiresAtMs)` 是 0x31 唯一的入口，`onPublicPacketSeen` 照舊不收 0x31，所以沒驗過簽章的副本進不來。`removeAdminNotice(messageId)` 給 #139 移除被取代的公告。expiresAt 到了、定期清理（`CLEANUP_INTERVAL_MS`，1 分鐘）還沒清掉的，不送也不宣告；交進來時已到期的不收。
+  - sync 回應依序送 ANNOUNCE、Health Report、公告、公開訊息；公告前面不送任何東西。
+  - GCS 候選清單照既有規則依 timestamp（公告是 issuedAt）由新到舊取，公告不另外優先。公開訊息很多時，舊公告可能擠不進自己的 filter，鄰居每輪就會再送一次；收到的 Inbox 視為重複、不轉送，只多花頻寬，不會漏送。
+  - Inbox 交給 sync 的 port 是 `AdminNoticeSyncSet`（`add(packet, expiresAtMs)`、`remove(messageId)`），屬於正在跑的 mesh 服務，生命週期與注入出口相同：`BluetoothMeshService` 啟動成功後經 `AdminNoticeBridge.attachMesh(injector, syncSet)` 一起掛上，`stopServices` 與關閉 BLE 傳輸時 `detachMesh` 一起卸下，舊實例較晚才卸下時不影響新實例。
+  - 這個 `GossipSyncManager` 與 Wi-Fi Aware 的 `MeshCore` 共用（`MeshServiceHolder`），Wi-Fi Aware 聽到的公告也經同一個 Inbox 進來，兩邊的 peer 都補得到。除錯設定把 BLE 傳輸關掉時 mesh 服務不會掛上，與注入一樣沒有 sync。
+  - mesh 服務換新的實例：Inbox 與行程同壽，已在 mesh 裡的公告不會重新注入，新實例的 sync 集合卻是空的。所以 Inbox 另外留一份還沒過期、已在 mesh 裡的公告（正規化的外層封包與 expiresAt，上限同 sync 集合 50 則，滿了丟 expiresAt 最早的），新的 sync 集合掛上時一次補給它。這份只放記憶體，App 重開後與 sync 集合一起清空，要等 Firestore 的快取或鄰居的 sync 補回。#139 移除被取代的公告時，這份與 port 都要移除。
+  - 在時鐘誤差容忍內收下、但已過 expiresAt 的公告照常轉送，不加入 sync 集合。
 
 ### 撤回與取代
 
@@ -256,7 +264,7 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
   - `BluetoothMeshService` 啟動成功後經 `AdminNoticeBridge.attachMesh` 成為注入出口；`stopServices` 與關閉 BLE 傳輸時 `detachMesh`，Inbox 隨即取消所有待注入。舊實例較晚才停止時，不會取消新實例的待注入。
   - 注入的封包不簽章、不加 route，經 `broadcastRoutedPacket` 送出（BLE 與橋接的傳輸）。
   - 時間到時沒有 mesh 服務、或交不出去，這次注入就放棄，公告仍是「只從 Firestore 收過」：期間從 BLE 聽到，照「收到 0x31」轉送、不再呈現。
-  - Inbox 與行程同壽（#136），去重表會撐過 mesh 服務重開，所以上一段的「再注入一次」只適用於還沒進 mesh 的公告：「只從 Firestore 收過」、待注入已被取消或放棄的公告，再從 Firestore 收到時重新排注入，不再呈現。已在 mesh 裡的公告不會重新注入；mesh 服務換新的實例後，sync 集合要怎麼補回這些公告由 #138 決定。
+  - Inbox 與行程同壽（#136），去重表會撐過 mesh 服務重開，所以上一段的「再注入一次」只適用於還沒進 mesh 的公告：「只從 Firestore 收過」、待注入已被取消或放棄的公告，再從 Firestore 收到時重新排注入，不再呈現。已在 mesh 裡的公告不會重新注入；mesh 服務換新的實例後，由 Inbox 把它們補回新的 sync 集合（#138，見「Gossip sync」的實作）。
 - 來自 Firestore 本機快取的文件（`isFromCache`），例如重開時還沒有網路，照樣處理與注入：安全性由簽章保證，不靠文件從哪裡來。App 重開後只放記憶體的 sync 集合已經清空，也能靠快取補回來。
 - listener 出錯就會終止，要重新掛上：
   - `RESOURCE_EXHAUSTED`（Spark 額度用完）、`UNAVAILABLE`：從 1 分鐘開始指數退避，最長 30 分鐘。**不可以立即重試**，否則會把剩下的額度燒光，連 Health Report 都讀不到。其他錯誤碼也照這樣退避。
@@ -432,7 +440,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 ## 實作前待驗證
 
-1. **超過 512 bytes 的 0x31 能不能完整走過 gossip sync。** 讀程式的結果是可以：重組後的封包經 `handleMessage` 交給 `onPublicPacketSeen`，sync 回應經 `sendPacketToPeer` 的 `fragmentingSender` 切片。但還沒有任何類型實際這樣跑過，main 上也沒有切片 sync 的測試，實作時寫單元測試確認。
+1. **超過 512 bytes 的 0x31 能不能完整走過 gossip sync。** 已確認可以（#138）：`AdminNoticeFragmentedSyncTest` 的「V5 sent as a sync reply is fragmented, reassembled by the late arrival and accepted by its Inbox」以附錄的 V5（外層封包 683 bytes）走過整條路。sync 回應經 transport 共用的 `FragmentingPacketSender` 切成 2 片（TTL 0）；收到的一方由 `PacketProcessor` 重組，重組後的 0x31 不經 `handleMessage`，而是交給 0x31 的 handler，Inbox 驗過管理端簽章，再加入它自己的 sync 集合。
 2. **舊版 App 會不會轉送 0x31。** 已從 main 的程式碼確認會：未知類型的廣播封包 `validPacket` 維持 true，交給 `PacketRelayManager` 轉送；`updatePeerLastSeen` 只更新已存在的 peer。實機驗收時順便觀察即可。
 3. **Doze 模式與小米、OPPO 等廠商的省電機制下，前景服務與 listener 能不能保持連線。** 併入實機驗收，與 MESH_GATEWAY.md 第 10 節用同一組手機。
 4. **App 被系統終止後重開，離線佇列裡的回條什麼時候送出。** 佇列本身會寫磁碟（ADR-0009）；要確認的是沒有 Flutter 畫面時，Kotlin 端有沒有啟動 Firestore 實例把它送出。
