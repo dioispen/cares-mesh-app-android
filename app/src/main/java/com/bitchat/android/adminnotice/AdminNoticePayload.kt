@@ -68,6 +68,13 @@ class AdminNoticePayload private constructor(
     /** The payload exactly as received: what a Gateway injects and gossip sync carries. */
     val wire: ByteArray get() = bytes.copyOf()
 
+    /**
+     * 純撤回: a broadcast with no text that names the notice it withdraws. Anything else that
+     * replaces a notice corrects it; a targeted notice always carries (encrypted) content.
+     */
+    val isPureRevoke: Boolean
+        get() = replaces != null && (body as? AdminNoticeBody.Broadcast)?.content?.isEmpty() == true
+
     /** The 36-byte header, the aad of a targeted body. */
     val header: ByteArray get() = bytes.copyOfRange(0, HEADER_SIZE)
 

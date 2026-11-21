@@ -204,7 +204,8 @@ internal object TestAdminNotices {
         recipients: List<ByteArray>,
         content: String,
         messageId: String = "2233445566778899",
-        expiresAt: Long = VECTOR_ISSUED_AT + 3_600_000L
+        expiresAt: Long = VECTOR_ISSUED_AT + 3_600_000L,
+        replaces: String = "0000000000000000"
     ): ByteArray {
         val random = SecureRandom()
         val ephemeral = X25519PrivateKeyParameters(random)
@@ -213,7 +214,7 @@ internal object TestAdminNotices {
         val nonce = ByteArray(12).also(random::nextBytes)
         val header = ByteBuffer.allocate(36)
             .put(0x01).put(0x02).put(0x01).put(0x02)
-            .put(hex(messageId)).putLong(VECTOR_ISSUED_AT).putLong(expiresAt).put(ByteArray(8))
+            .put(hex(messageId)).putLong(VECTOR_ISSUED_AT).putLong(expiresAt).put(hex(replaces))
             .array()
         val entries = recipients.fold(ByteArray(0)) { acc, recipient ->
             val shared = ByteArray(32)

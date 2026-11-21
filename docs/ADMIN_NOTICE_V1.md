@@ -1,6 +1,6 @@
 # 管理端公告 v1（ADMIN_NOTICE）
 
-> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具已實作（#135 廣播；#141 定向公告）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）；定向公告的解密與呈現（#141）。取代與撤回、回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
+> 狀態：草案。Firestore 規則（`admin_notices`、`admin_notice_records`）與 Python 發送工具已實作（#135 廣播；#141 定向公告；#139 更正與撤回）。App 端已實作 Firestore 這條路的廣播：Gateway 的 listener、`AdminNoticeInbox` 的驗證與去重、本機儲存與通知（#136）；mesh 收件與 Gateway 注入（#137）；App 內的公告列表與首頁未讀數（#142）；gossip sync（#138）；定向公告的解密與呈現（#141）；取代與撤回（#139）。回條尚未實作。管理後台的發送頁面與 Dart 加解密是否由另一組實作，確認中；若不接，改由本專案以 `tools/admin-notice/` 的 Python 工具發送（[操作手冊](../tools/admin-notice/README.md)）。
 > 決策紀錄：[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)（只信任管理端簽章、新封包類型 0x31）。
 > 前提：ADR-0006（驗簽 key 快取只用於 Health Report）、ADR-0009（Administrator、Kotlin 端的 Firestore）、[MESH_GATEWAY.md](MESH_GATEWAY.md)（Gateway 送出 mesh 的方向、`reporter_handles`）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Admin Notice**（下稱公告），並用到雙向的 **Gateway**。
@@ -223,8 +223,9 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 ### 去重表與撤回紀錄
 
 - 去重表：以 messageId 為鍵，保留到 `expiresAt + 10 分鐘`，上限 1000 筆，存在記憶體。不能只靠 `SecurityManager` 的封包去重，因為它只保留幾分鐘，而公告經 sync 補送時可能已經過了好幾個小時。
-- 撤回紀錄：被取代的 messageId，保留到取代它的那則公告的 `expiresAt`，上限 1000 筆，存在記憶體。
-- 這兩份紀錄在 App 重開後會消失。重開後再收到舊公告，會照第一次收到的流程處理；本機儲存以 messageId 去重，不會重複通知。
+- 撤回紀錄：被取代的 messageId，保留到取代它的那則公告的 `expiresAt` 加 10 分鐘，上限 1000 筆，滿了先丟最早到期的，存在記憶體。多出的 10 分鐘是時鐘誤差容忍（#139 定案）：節點在原公告 `expiresAt` 之後 10 分鐘內仍會收下它，取代它的那則又不會比它早到期，只保留到 `expiresAt` 的話，先收到取代的手機會在這段期間把晚到的原公告當成新公告。
+- 這兩份紀錄在 App 重開後會消失。重開後再收到舊公告，會照第一次收到的流程處理；本機儲存以 messageId 去重，不會重複通知。已更正、已撤回的狀態存在本機儲存裡，重開後再收到原公告也不會退回「有效」。
+  - 例外（#139）：重開前先收到取代、原公告在第 7 步被丟棄、從沒存進本機儲存的手機，重開後若先收到原公告，會把它當成新公告呈現並通知，等取代到了才標示並收回通知。listener 重新掛上時會一次送來兩者，這段時間通常很短；只從 mesh 收到原公告、取代卻沒再傳來的話，原公告就一直有效到它過期，與已知限制 7 相同。
 
 ### Gossip sync
 
@@ -237,12 +238,12 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 - 定向公告的密文也要同步。中繼看不到內容，但收件者常常正是晚到的那個人。
 - 封包是正規化的，GCS 的封包 ID 在所有節點上都一致，不會因為副本來自不同 Gateway 而一再重送。
 - 實作（#138）：
-  - `GossipSyncManager.onAdminNoticeSeen(packet, expiresAtMs)` 是 0x31 唯一的入口，`onPublicPacketSeen` 照舊不收 0x31，所以沒驗過簽章的副本進不來。`removeAdminNotice(messageId)` 給 #139 移除被取代的公告。expiresAt 到了、定期清理（`CLEANUP_INTERVAL_MS`，1 分鐘）還沒清掉的，不送也不宣告；交進來時已到期的不收。
+  - `GossipSyncManager.onAdminNoticeSeen(packet, expiresAtMs)` 是 0x31 唯一的入口，`onPublicPacketSeen` 照舊不收 0x31，所以沒驗過簽章的副本進不來。`removeAdminNotice(messageId)` 移除被取代的公告（#139 在第 9 步呼叫）。expiresAt 到了、定期清理（`CLEANUP_INTERVAL_MS`，1 分鐘）還沒清掉的，不送也不宣告；交進來時已到期的不收。
   - sync 回應依序送 ANNOUNCE、Health Report、公告、公開訊息；公告前面不送任何東西。
   - GCS 候選清單照既有規則依 timestamp（公告是 issuedAt）由新到舊取，公告不另外優先。公開訊息很多時，舊公告可能擠不進自己的 filter，鄰居每輪就會再送一次；收到的 Inbox 視為重複、不轉送，只多花頻寬，不會漏送。
   - Inbox 交給 sync 的 port 是 `AdminNoticeSyncSet`（`add(packet, expiresAtMs)`、`remove(messageId)`），屬於正在跑的 mesh 服務，生命週期與注入出口相同：`BluetoothMeshService` 啟動成功後經 `AdminNoticeBridge.attachMesh(injector, syncSet)` 一起掛上，`stopServices` 與關閉 BLE 傳輸時 `detachMesh` 一起卸下，舊實例較晚才卸下時不影響新實例。
   - 這個 `GossipSyncManager` 與 Wi-Fi Aware 的 `MeshCore` 共用（`MeshServiceHolder`），Wi-Fi Aware 聽到的公告也經同一個 Inbox 進來，兩邊的 peer 都補得到。除錯設定把 BLE 傳輸關掉時 mesh 服務不會掛上，與注入一樣沒有 sync。
-  - mesh 服務換新的實例：Inbox 與行程同壽，已在 mesh 裡的公告不會重新注入，新實例的 sync 集合卻是空的。所以 Inbox 另外留一份還沒過期、已在 mesh 裡的公告（正規化的外層封包與 expiresAt，上限同 sync 集合 50 則，滿了丟 expiresAt 最早的），新的 sync 集合掛上時一次補給它。這份只放記憶體，App 重開後與 sync 集合一起清空，要等 Firestore 的快取或鄰居的 sync 補回。#139 移除被取代的公告時，這份與 port 都要移除。
+  - mesh 服務換新的實例：Inbox 與行程同壽，已在 mesh 裡的公告不會重新注入，新實例的 sync 集合卻是空的。所以 Inbox 另外留一份還沒過期、已在 mesh 裡的公告（正規化的外層封包與 expiresAt，上限同 sync 集合 50 則，滿了丟 expiresAt 最早的），新的 sync 集合掛上時一次補給它。這份只放記憶體，App 重開後與 sync 集合一起清空，要等 Firestore 的快取或鄰居的 sync 補回。被取代的公告在第 9 步從這份與 port 一起移除（#139）。
   - 在時鐘誤差容忍內收下、但已過 expiresAt 的公告照常轉送，不加入 sync 集合。
 
 ### 撤回與取代
@@ -254,6 +255,13 @@ tag 由 ECDH 推出，每則公告都不同：只有收件者自己算得出來�
 - 先收到取代、後收到原公告時，原公告在第 7 步就被丟棄，不轉送也不呈現。
 - 原公告已發出的系統通知要一併更新或取消。
 - **刪除 Firestore 文件不算撤回。** 公告已經進到 mesh，只有撤回公告能讓中繼停止補送。Gateway 的 listener 收到刪除事件時不做任何事。
+- 實作（#139）：
+  - 第 7 步與第 9 步兩個來源都適用。第 7 步丟棄的公告，`AdminNoticeInbox` 回 `Rejected(REVOKED)`：不轉送、不注入、不呈現、不加入 sync 集合。第 9 步只在驗過簽章、第一次收到時做一次（重複的副本、從 Firestore 收過後又從 mesh 聽到的都不再做）：寫入撤回紀錄，取消被取代那則的待注入，從 sync 集合（`AdminNoticeSyncSet.remove`）與 Inbox 給新 mesh 服務的那份移除，再交給本機呈現（`AdminNoticePresenter.correct` 或 `withdraw`），最後才呈現新公告本身。
+  - 什麼是純撤回看公告本身：廣播 kind、空 body、replaces 不為 0（`AdminNoticePayload.isPureRevoke`）。其他帶 replaces 的都是更正，包括這台裝置解不開的定向更正：原公告照樣標示「已更正」，新公告照常轉送但不呈現。
+  - 本機儲存（`AdminNoticeStore.markCorrected`、`markWithdrawn`）：只有「有效」的公告能標成「已更正」；「已撤回」是最終狀態，已更正的仍可再撤回。被取代的公告連內容一起從儲存清掉，不只是畫面不顯示：Administrator 收回的內容不該留在手機上，定向公告解密後的內容更是如此；明文留存在 `admin_notice_records`，列表也不再顯示它。bridge 傳給 Dart 的 `content` 因此是空字串。`insertIfAbsent` 不覆寫，重開後再收到原公告也不會把狀態或內容帶回來。
+  - 一則公告被多則更正（定向更正拆成多則，每則都帶同一個 replaces；或更正只加密給別的裝置）時，`replacedBy` 先連到先收到的那則；它不在本機儲存裡（這台裝置解不開）時，之後收到的更正會把連結移過去，所以只要有一則讀得到，畫面就連得到它。
+  - 通知：原公告的通知以 messageId 為 tag 取消（`AdminNoticeNotifier.cancel`），撤回與更正都一樣，存不進儲存時也照樣取消。更正不改寫舊通知，而是新公告照第一次收到的流程，以自己的 messageId 通知、依它的 level 再響一次：要使用者照做的事已經變了；改寫舊通知的話，tag 與新公告對不上，下一次更正就找不到它。
+  - 發送工具（`tools/admin-notice/`）：`send --replaces <messageId>` 發更正，`revoke <messageId>` 發純撤回，`revoke --batch <batchId>` 對批次裡的每一則各發一則撤回、一次 commit 寫入。都先以 Administrator 讀 `admin_notice_records` 檢查：被取代的那則要存在、不是撤回、還沒被取代過（App 上「已撤回」是最終狀態，「已更正」只連到一則，要再改的是取代它的那則）；更正的 expiresAt 不早於它；定向公告只能用定向公告更正。純撤回的 level 沿用原公告，與原公告同時到期；原公告已經或快要過期時至少保留 1 小時，讓列表裡還留著它的手機（保留到過期後 7 天）也收得到。更正拆成多則的批次中的一則時，工具提醒操作者其他則不受影響，要整批收回就用 `revoke --batch` 再重發。
 
 ### Gateway：從 Firestore 注入 mesh
 
@@ -400,6 +408,11 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 **取代與撤回**：見「撤回與取代」。新公告的 expiresAt 至少等於被取代的那則；撤回一個拆成多則的批次，每一則都要各發一則撤回。不要用刪除 `admin_notices` 文件代替撤回。
 
+- 更正與撤回的 `admin_notice_records` 都填 `replaces`；純撤回的 `kind` 是 `broadcast`、`content` 是空字串，`batchId` 是它自己的 messageId。
+- 已經被取代或撤回的公告不要再取代或撤回，撤回本身也不要（App 上「已撤回」是最終狀態，「已更正」只連到一則新公告）。要改已更正的內容，就取代或撤回那則更正。`admin_notice_records` 以 `replaces` 查得到某則是否已被取代。
+- 定向更正拆成多則時，每一則的 replaces 都填同一則被取代的公告。
+- Python 工具的做法（#139）：純撤回與原公告同時到期，原公告已經或快要過期時至少保留 1 小時；level 沿用原公告。
+
 **回條**：定向公告的收件裝置會寫 `admin_notices/{messageId}/receipts/{uid}`（`deliveredAt`、`readAt`、`via`）。時間來自手機時鐘；`via == 'ble'` 代表收件者是經 mesh 收到的。廣播沒有回條。
 
 ## 收件端呈現
@@ -407,8 +420,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 - 收到的公告存在 Kotlin 端的本機儲存，以 messageId 去重，只在第一次寫入時發通知。定向公告解密後的內容要加密儲存（本機儲存從 #136 起就整份加密，#141 以測試確認）。保留到 `expiresAt` 後 7 天，期間標示為「已過期」。
   - 實作是 EncryptedSharedPreferences（與身分金鑰相同的做法），廣播也一起加密，不另分兩種儲存。寫入用 `commit`，通知發出後行程立刻被殺也不會漏記。
   - 寫不進本機儲存時照樣通知：撤離令比重開後重複一次重要，同一個行程內仍有去重表擋著。
-  - 純撤回沒有內容，不呈現也不通知；被撤回的公告怎麼標示見「撤回與取代」。
-  - 每筆另記 `readAt`（第一次在 App 裡讀到的手機時間）與 `replacedBy`（更正它的那則，#139 寫入）。寫入、列出與標記已讀時，順手刪掉已過保留期的那幾筆（#142）。
+  - 純撤回沒有內容，不呈現也不通知；被撤回或更正的公告怎麼標示、內容與通知怎麼處理見「撤回與取代」的實作。
+  - 每筆另記 `readAt`（第一次在 App 裡讀到的手機時間）與 `replacedBy`（更正它的那則，#139）。寫入、列出與標記已讀時，順手刪掉已過保留期的那幾筆（#142）。
 - 通知由 Kotlin 端發出，每個 level 一個 notification channel：
 
   | level | channel 重要度 | 行為 |
@@ -425,7 +438,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
   - 「沒有權限」看 `system_status` 的 `notificationGranted`，判斷與 notifier 相同：App 的通知沒被關掉，Android 13 起再加上權限。權限是在系統設定裡改的，原生不推事件，首頁出現與回到前景時重讀。
   - 卡片放最新一則未讀、未過期、沒被更正或撤回的公告，點了開列表（#142）。
 - Flutter 端新增「管理端公告」列表畫面，首頁顯示未讀數量，資料經 bridge 從 Kotlin 取得。建議的介面：EventChannel 推送 `type: "admin_notice"`；MethodChannel 照 `chat_`、`settings_` 的慣例命名，提供 `adminNotice_getAll` 與 `adminNotice_markRead(messageId)`，後者同時寫入 `readAt` 回條。收件者金鑰用的 `adminNotice_getPublicKey(uid)`、`adminNotice_clearKey` 見「收件者加密金鑰」。
-  - bridge（#142 定案）：`adminNotice_getAll` 回傳保留期內所有公告，新的在前，每則是 `{messageId, kind: broadcast|targeted, level: info|important|urgent, content, issuedAt, expiresAt（毫秒）, status: active|corrected|withdrawn, replacedBy, read}`。「已過期」不在裡面，由 Dart 以 `expiresAt` 與自己的時鐘判斷，畫面開著時也會變。`admin_notice` 事件是 `{type, notices}`，`notices` 與 `getAll` 的回傳相同；儲存有變（新公告、第一次讀到、#139 的更正與撤回）就推，只在 Flutter engine 接著時。`adminNotice_markRead({messageId})` 對已讀或已刪除的公告也正常回 null。儲存讀不到時回 `NOTICE_STORE_UNAVAILABLE`，messageId 缺少或為空時回 `INVALID_ARGUMENT`。
+  - bridge（#142 定案）：`adminNotice_getAll` 回傳保留期內所有公告，新的在前，每則是 `{messageId, kind: broadcast|targeted, level: info|important|urgent, content, issuedAt, expiresAt（毫秒）, status: active|corrected|withdrawn, replacedBy, read}`。「已過期」不在裡面，由 Dart 以 `expiresAt` 與自己的時鐘判斷，畫面開著時也會變。`admin_notice` 事件是 `{type, notices}`，`notices` 與 `getAll` 的回傳相同；儲存有變（新公告、第一次讀到、更正與撤回）就推，只在 Flutter engine 接著時。已更正、已撤回的公告 `content` 是空字串（#139 從儲存清掉）。`adminNotice_markRead({messageId})` 對已讀或已刪除的公告也正常回 null。儲存讀不到時回 `NOTICE_STORE_UNAVAILABLE`，messageId 缺少或為空時回 `INVALID_ARGUMENT`。
   - readAt 回條的接點：Kotlin `flutter/AdminNoticeBridge` 建構子的 `onFirstRead`，只在一則公告第一次被讀到時呼叫一次，帶著已寫入 `readAtMs` 的那筆；廣播也會呼叫，由回條那一側只對定向公告寫回條（#143）。
   - 什麼算「讀了」：列表沒有詳情頁，攤開就是全文，所以列表畫面在前景、在最上面時，列出的未讀公告都標成已讀（畫面開著時新到的也是）；這次開著期間它們仍標「未讀」。未讀數包含已過期、已更正、已撤回的未讀公告。已更正、已撤回的不顯示原內容；已更正的若新公告也在列表上，可以捲過去。
 

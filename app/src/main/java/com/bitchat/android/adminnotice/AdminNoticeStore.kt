@@ -13,10 +13,10 @@ enum class AdminNoticeStatus {
     /** Shown as received. */
     ACTIVE,
 
-    /** 已更正: a newer notice replaced it ([StoredAdminNotice.replacedBy]); its content is hidden. Set by #139. */
+    /** 已更正: a newer notice replaced it ([StoredAdminNotice.replacedBy]); its content is erased. */
     CORRECTED,
 
-    /** 已撤回: a pure revoke withdrew it; its content is hidden. Set by #139. */
+    /** 已撤回: a pure revoke withdrew it; its content is erased. Final: nothing changes it again. */
     WITHDRAWN
 }
 
@@ -54,6 +54,22 @@ interface AdminNoticeStore {
      */
     fun markRead(messageId: String): StoredAdminNotice?
 
+    /**
+     * 已更正 (撤回與取代): [messageId] was replaced by [correctedBy]; its content is erased. Returns
+     * the notice as it is stored now; null when nothing changed, so a caller acts once: it is not
+     * stored, withdrawn, or already corrected by a notice stored here. A corrected notice whose
+     * [StoredAdminNotice.replacedBy] is not stored (a correction this device cannot read, such as
+     * the part of a split targeted correction encrypted to other devices) moves its link to
+     * [correctedBy], so it ends up pointing at a correction listed here whenever there is one.
+     */
+    fun markCorrected(messageId: String, correctedBy: String): StoredAdminNotice?
+
+    /**
+     * 已撤回 (撤回與取代): a pure revoke withdrew [messageId]; its content is erased. A corrected
+     * notice can still be withdrawn. Null when it is not stored or already withdrawn.
+     */
+    fun markWithdrawn(messageId: String): StoredAdminNotice?
+
     /** [listener] hears of every notice stored and every change to one, until removed. */
     fun addChangeListener(listener: AdminNoticeChangeListener)
 
@@ -61,7 +77,7 @@ interface AdminNoticeStore {
 }
 
 /**
- * Something in the store changed: a notice was stored, read, or (#139) corrected or withdrawn.
+ * Something in the store changed: a notice was stored, read, corrected or withdrawn.
  * Called on the writer's thread (the Inbox's, or the bridge's store thread) after the write is on
  * disk; it may read the store but should hand any slow work elsewhere.
  */
@@ -108,6 +124,40 @@ class EncryptedAdminNoticeStore internal constructor(
         }
         if (read != null) notifyChanged()
         return read
+    }
+
+    override fun markCorrected(messageId: String, correctedBy: String): StoredAdminNotice? =
+        replace(messageId) { stored ->
+            val linkable = when (stored.status) {
+                AdminNoticeStatus.ACTIVE -> true
+                AdminNoticeStatus.CORRECTED -> stored.replacedBy != correctedBy && stored.replacedBy?.let(prefs::contains) != true
+                AdminNoticeStatus.WITHDRAWN -> false
+            }
+            stored.takeIf { linkable }
+                ?.copy(status = AdminNoticeStatus.CORRECTED, replacedBy = correctedBy, content = "")
+        }
+
+    override fun markWithdrawn(messageId: String): StoredAdminNotice? =
+        replace(messageId) { stored ->
+            stored.takeIf { it.status != AdminNoticeStatus.WITHDRAWN }
+                ?.copy(status = AdminNoticeStatus.WITHDRAWN, content = "")
+        }
+
+    /**
+     * Rewrites [messageId] as [change] makes it, unless that is null. The content goes for good:
+     * the list never shows it again, the Administrator keeps the plaintext in
+     * `admin_notice_records`, and what the Administrator took back should not linger on the phone,
+     * least of all a targeted notice's decrypted text. [insertIfAbsent] never overwrites, so a
+     * copy of the original received again, after an App restart too, does not bring it back.
+     */
+    private fun replace(messageId: String, change: (StoredAdminNotice) -> StoredAdminNotice?): StoredAdminNotice? {
+        val changed = synchronized(lock) {
+            prune().firstOrNull { it.messageId == messageId }
+                ?.let(change)
+                ?.takeIf { prefs.edit().putString(messageId, encode(it).toString()).commit() }
+        }
+        if (changed != null) notifyChanged()
+        return changed
     }
 
     override fun addChangeListener(listener: AdminNoticeChangeListener) {

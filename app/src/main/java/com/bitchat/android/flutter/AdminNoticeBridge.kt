@@ -160,8 +160,8 @@ class AdminNoticeBridge(
 /**
  * One notice as Dart's list reads it. 已過期 is not here: Dart derives it from `expiresAt` with
  * its own clock, so the label appears while the screen stays open. `replacedBy` is the notice
- * that corrected this one; `content` is sent even for a corrected or withdrawn notice, which the
- * screen does not show.
+ * that corrected this one; a corrected or withdrawn notice's `content` is empty, its text erased
+ * from the store (#139).
  */
 internal fun StoredAdminNotice.toBridgeMap(): Map<String, Any?> = mapOf(
     "messageId" to messageId,

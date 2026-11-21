@@ -30,5 +30,11 @@ enum class AdminNoticeRejection {
     BAD_VALIDITY,
 
     /** Step 6: the notice names itself in replaces. */
-    REPLACES_ITSELF
+    REPLACES_ITSELF,
+
+    /**
+     * Step 7: a verified notice already corrected or withdrew this messageId (撤回紀錄), so it is
+     * dropped: not relayed, injected, presented or offered to sync.
+     */
+    REVOKED
 }

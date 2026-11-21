@@ -60,6 +60,20 @@ interface AdminNoticeRecipientKey {
  */
 interface AdminNoticePresenter {
     fun present(notice: ReceivedAdminNotice)
+
+    /**
+     * 已更正 (撤回與取代, step 9): the verified notice [correctedBy] replaced [messageId], whose
+     * content is not to be acted on any more. Called before [correctedBy] itself is presented, if
+     * this device can read it. [messageId] may never have been presented here; then there is
+     * nothing to mark. By default nothing is shown, so nothing changes.
+     */
+    fun correct(messageId: String, correctedBy: String) {}
+
+    /**
+     * 已撤回 (撤回與取代, step 9): a verified pure revoke withdrew [messageId]. As for [correct],
+     * [messageId] may never have been presented here.
+     */
+    fun withdraw(messageId: String) {}
 }
 
 /**

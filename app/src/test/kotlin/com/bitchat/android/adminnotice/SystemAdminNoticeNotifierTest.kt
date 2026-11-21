@@ -127,6 +127,28 @@ class SystemAdminNoticeNotifierTest {
     }
 
     @Test
+    fun `a notice's notification is cancelled by its messageId, the others stay`() {
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val notifier = notifier()
+        notifier.notify(notice(AdminNoticeLevel.URGENT))
+        notifier.notify(notice(AdminNoticeLevel.INFO, messageId = OTHER_MESSAGE_ID))
+
+        notifier.cancel(MESSAGE_ID)
+
+        assertNull(shadowOf(system).getNotification(MESSAGE_ID, SystemAdminNoticeNotifier.NOTIFICATION_ID))
+        assertNotNull(shadowOf(system).getNotification(OTHER_MESSAGE_ID, SystemAdminNoticeNotifier.NOTIFICATION_ID))
+    }
+
+    @Test
+    fun `cancelling a notice that was never posted does nothing`() {
+        shadowOf(application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        notifier().cancel(MESSAGE_ID)
+
+        assertTrue(shadowOf(system).allNotifications.isEmpty())
+    }
+
+    @Test
     fun `without POST_NOTIFICATIONS nothing is posted and nothing breaks`() {
         shadowOf(application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
@@ -166,5 +188,6 @@ class SystemAdminNoticeNotifierTest {
 
     private companion object {
         const val MESSAGE_ID = TestAdminNotices.V1_MESSAGE_ID
+        const val OTHER_MESSAGE_ID = "1122334455667788"
     }
 }

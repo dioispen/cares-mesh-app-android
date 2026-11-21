@@ -4,6 +4,8 @@
   keygen  產生管理端 Ed25519 金鑰對：私鑰寫進權限 0600 的檔案，只印出公鑰。
   send    以 Administrator 帳號登入，把簽好章的公告寫進 Firestore：廣播，或以 --uid、
           --handle 指定收件對象的定向公告（加密給收件裝置，超過 5 台拆成同一個 batchId 的多則）。
+          加上 --replaces 就是更正一則已發出的公告。
+  revoke  撤回一則公告，或以 --batch 撤回整批：每一則各發一則純撤回（廣播 kind、空 body）。
 
 需要 `pip install cryptography`。其他只用標準函式庫。
 """
@@ -164,7 +166,7 @@ def notice_record(*, kind: int, level: int, content: str, issued_at: int, expire
 
 
 def targeted_record(*, level: int, content: str, issued_at: int, expires_at: int, batch_id: bytes,
-                    uids: list, handles: list, devices: list) -> dict:
+                    uids: list, handles: list, devices: list, replaces: bytes = nf.NO_REPLACES) -> dict:
     """定向公告的留存：notice_record 加上收件對象（docs/ADMIN_NOTICE_V1.md「Firestore」）。
 
     recipientUids、recipientHandles 是操作者指定的收件對象，同一批的每一則都一樣；
@@ -172,7 +174,7 @@ def targeted_record(*, level: int, content: str, issued_at: int, expires_at: int
     """
     return {
         **notice_record(kind=nf.KIND_TARGETED, level=level, content=content, issued_at=issued_at,
-                        expires_at=expires_at, replaces=nf.NO_REPLACES, batch_id=batch_id),
+                        expires_at=expires_at, replaces=replaces, batch_id=batch_id),
         "recipientUids": list(uids),
         "recipientHandles": list(handles),
         "recipientCount": len(devices),
@@ -301,43 +303,78 @@ def duration_ms(text: str) -> int:
     return (hours * 60 + minutes) * 60_000
 
 
+def duration_text(ms: int) -> str:
+    """duration_ms 的反向，無條件進位到分鐘：5h、90m → 1h30m。"""
+    minutes = -(-ms // 60_000)
+    hours, minutes = divmod(minutes, 60)
+    return (f"{hours}h" if hours else "") + (f"{minutes}m" if minutes or not hours else "")
+
+
 def local_time(epoch_ms: int) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
 
 
-def cmd_send(args, deps: Deps) -> int:
+def connect(args, deps: Deps):
+    """(endpoints, project_id, Web API key)：emulator 或正式環境，專案預設讀 google-services.json。"""
     try:
         endpoints = fb.Endpoints.from_env(deps.env)
     except ValueError as e:
         raise ToolError(str(e)) from None
     project_id, api_key = fb.load_app_config(deps.google_services_path)
-    project_id = args.project or project_id
+    return endpoints, args.project or project_id, api_key
 
+
+def sign_in(args, deps: Deps, endpoints, api_key) -> tuple[str, str]:
+    """以 Administrator 帳號登入，回傳 (ID token, uid)。密碼從環境變數讀，沒有就在終端機詢問。"""
+    password = deps.env.get(PASSWORD_ENV) or deps.getpass(f"{args.email} 的密碼：")
+    try:
+        return fb.sign_in_with_password(deps.post, endpoints, api_key, args.email, password)
+    except fb.FirebaseError as e:
+        raise ToolError(f"登入失敗：{e}") from None
+
+
+def warner(deps: Deps) -> Callable[[str], None]:
+    return lambda message: deps.stderr.write(f"警告：{message}\n")
+
+
+def cmd_send(args, deps: Deps) -> int:
+    endpoints, project_id, api_key = connect(args, deps)
     key = load_private_key(Path(args.key) if args.key else default_key_path(args.key_id))
     level = LEVEL_NAMES[args.level]
     issued_at = deps.now_ms()
     expires_at = issued_at + args.valid_for
+    replaces = bytes.fromhex(args.replaces) if args.replaces else nf.NO_REPLACES
     if args.uid or args.handle:
         return send_targeted(args, deps, endpoints=endpoints, project_id=project_id, api_key=api_key,
-                             key=key, level=level, issued_at=issued_at, expires_at=expires_at)
+                             key=key, level=level, issued_at=issued_at, expires_at=expires_at, replaces=replaces)
     message_id = nf.new_message_id()
     try:
         wire = nf.build_broadcast(key, key_id=args.key_id, level=level, message_id=message_id,
-                                  issued_at=issued_at, expires_at=expires_at, content=args.content)
+                                  issued_at=issued_at, expires_at=expires_at, content=args.content,
+                                  replaces=replaces)
     except nf.NoticeError as e:
         raise ToolError(str(e)) from None
     check_signed_by_published_key(wire, args.key_id, deps.public_keys_path)
 
+    session = original = None
+    if args.replaces:
+        # 被取代的那則只有 Administrator 讀得到，所以更正連 --dry-run 也要登入。
+        session = sign_in(args, deps, endpoints, api_key)
+        original = check_correction(Records(deps, endpoints, project_id, session[0]), args.replaces,
+                                    issued_at=issued_at, expires_at=expires_at, targeted=False, warn=warner(deps))
+
     out = deps.stdout
-    out.write("Admin Notice（廣播）\n"
-              f"  等級       {LEVEL_LABELS[level]}（{args.level}）\n"
+    out.write(("Admin Notice（廣播）\n" if original is None else "Admin Notice（廣播，更正）\n")
+              + (f"  取代       {original.describe()}\n" if original else "")
+              + f"  等級       {LEVEL_LABELS[level]}（{args.level}）\n"
               f"  內容       {len(args.content.encode('utf-8'))} bytes：{args.content}\n"
               f"  messageId  {message_id.hex()}\n"
               f"  發出       {local_time(issued_at)}\n"
               f"  到期       {local_time(expires_at)}\n"
               f"  寫入       {'emulator' if endpoints.emulated else '正式環境'}的 Firestore（{project_id}）\n")
     if args.dry_run:
-        out.write(f"wire（{len(wire)} bytes）：{wire.hex()}\n--dry-run：沒有登入，也沒有寫入。\n")
+        done = "查過被取代的那則，沒有寫入。" if session else "沒有登入，也沒有寫入。"
+        out.write(f"wire（{len(wire)} bytes）：{wire.hex()}\n--dry-run：{done}\n")
         return 0
     if not args.yes:
         out.write("實地實驗進行中不要發公告（見 README.md）。這則公告會送到所有裝置，送出後收不回來，只能再發撤回。\n")
@@ -345,14 +382,9 @@ def cmd_send(args, deps: Deps) -> int:
             out.write("沒有送出。\n")
             return 1
 
-    password = deps.env.get(PASSWORD_ENV) or deps.getpass(f"{args.email} 的密碼：")
-    try:
-        id_token, uid = fb.sign_in_with_password(deps.post, endpoints, api_key, args.email, password)
-    except fb.FirebaseError as e:
-        raise ToolError(f"登入失敗：{e}") from None
-
+    id_token, uid = session or sign_in(args, deps, endpoints, api_key)
     record = notice_record(kind=nf.KIND_BROADCAST, level=level, content=args.content, issued_at=issued_at,
-                           expires_at=expires_at, replaces=nf.NO_REPLACES, batch_id=message_id)
+                           expires_at=expires_at, replaces=replaces, batch_id=message_id)
     writes = notice_writes(project_id, message_id=message_id, wire=wire, record=record, uid=uid)
     try:
         fb.commit(deps.post, endpoints, project_id, id_token, writes)
@@ -362,12 +394,17 @@ def cmd_send(args, deps: Deps) -> int:
     return 0
 
 
-def send_targeted(args, deps: Deps, *, endpoints, project_id, api_key, key, level, issued_at, expires_at) -> int:
-    """定向公告：查出收件裝置、每 5 台以內一則加密並簽章，一次 commit 寫入整批。"""
+def send_targeted(args, deps: Deps, *, endpoints, project_id, api_key, key, level, issued_at, expires_at,
+                  replaces=nf.NO_REPLACES) -> int:
+    """定向公告：查出收件裝置、每 5 台以內一則加密並簽章，一次 commit 寫入整批。
+
+    更正（replaces）拆成多則時，每一則都帶同一個 replaces：每台裝置都會收到整批，先到的那則
+    就把原公告標成已更正，App 再把連結移到它解得開的那則。
+    """
     # App 會丟掉的公告與選錯的私鑰，在登入之前就擋下。
     try:
         nf.check_header_fields(key_id=args.key_id, level=level, message_id=nf.new_message_id(),
-                               issued_at=issued_at, expires_at=expires_at, replaces=nf.NO_REPLACES)
+                               issued_at=issued_at, expires_at=expires_at, replaces=replaces)
         if not nf.encode_content(args.content):
             raise nf.NoticeError("定向公告的內容不能是空的")
     except nf.NoticeError as e:
@@ -386,11 +423,11 @@ def send_targeted(args, deps: Deps, *, endpoints, project_id, api_key, key, leve
               f"  寫入       {'emulator' if endpoints.emulated else '正式環境'}的 Firestore（{project_id}）\n")
 
     # 收件裝置的公鑰只有 Administrator 讀得到，所以 --dry-run 也要登入。
-    password = deps.env.get(PASSWORD_ENV) or deps.getpass(f"{args.email} 的密碼：")
-    try:
-        id_token, uid = fb.sign_in_with_password(deps.post, endpoints, api_key, args.email, password)
-    except fb.FirebaseError as e:
-        raise ToolError(f"登入失敗：{e}") from None
+    id_token, uid = sign_in(args, deps, endpoints, api_key)
+    if args.replaces:
+        original = check_correction(Records(deps, endpoints, project_id, id_token), args.replaces,
+                                    issued_at=issued_at, expires_at=expires_at, targeted=True, warn=warner(deps))
+        out.write(f"  取代       {original.describe()}\n")
 
     def query(parent, structured_query):
         return fb.run_query(deps.post, endpoints, project_id, id_token, parent, structured_query)
@@ -413,7 +450,7 @@ def send_targeted(args, deps: Deps, *, endpoints, project_id, api_key, key, leve
         try:
             wire = nf.build_targeted(key, key_id=args.key_id, level=level, message_id=message_id,
                                      issued_at=issued_at, expires_at=expires_at, content=args.content,
-                                     recipients=[d.notice_public_key for d in group])
+                                     recipients=[d.notice_public_key for d in group], replaces=replaces)
         except nf.NoticeError as e:
             raise ToolError(f"{e}（收件裝置 {'、'.join(f'{d.uid}/{d.handle}' for d in group)}）") from None
         check_signed_by_published_key(wire, args.key_id, deps.public_keys_path)
@@ -438,7 +475,7 @@ def send_targeted(args, deps: Deps, *, endpoints, project_id, api_key, key, leve
     writes = []
     for message_id, group, wire in notices:
         record = targeted_record(level=level, content=args.content, issued_at=issued_at, expires_at=expires_at,
-                                 batch_id=batch_id, uids=uids, handles=handles, devices=group)
+                                 batch_id=batch_id, uids=uids, handles=handles, devices=group, replaces=replaces)
         writes += notice_writes(project_id, message_id=message_id, wire=wire, record=record, uid=uid)
     try:
         fb.commit(deps.post, endpoints, project_id, id_token, writes)
@@ -446,6 +483,214 @@ def send_targeted(args, deps: Deps, *, endpoints, project_id, api_key, key, leve
         raise ToolError(f"寫入失敗：{e}{commit_hint(e)}") from None
     for message_id, _, _ in notices:
         out.write(f"已寫入 admin_notices/{message_id.hex()} 與 admin_notice_records/{message_id.hex()}。\n")
+    return 0
+
+
+# ---- 取代與撤回（docs/ADMIN_NOTICE_V1.md「撤回與取代」）------------------------------
+
+RECORDS = "admin_notice_records"
+
+# 純撤回至少保留這麼久：原公告已經或快要過期時，列表裡還留著它的手機（本機保留到過期後
+# 7 天）也收得到撤回。
+MIN_REVOKE_VALIDITY_MS = 3600_000
+
+
+@dataclass(frozen=True)
+class NoticeRecord:
+    """admin_notice_records/{messageId} 讀回來的留存（欄位見 docs/ADMIN_NOTICE_V1.md「集合」）。"""
+    message_id: str
+    kind: str
+    level: str
+    content: str
+    issued_at_ms: int
+    expires_at_ms: int
+    replaces: str | None
+    batch_id: str
+
+    @property
+    def is_revoke(self) -> bool:
+        """純撤回：廣播 kind、沒有內容、replaces 不為 null。"""
+        return self.kind == KIND_NAMES[nf.KIND_BROADCAST] and not self.content and self.replaces is not None
+
+    def describe(self) -> str:
+        kind = "廣播" if self.kind == KIND_NAMES[nf.KIND_BROADCAST] else "定向"
+        return (f"{self.message_id}（{kind}，{LEVEL_LABELS[LEVEL_NAMES[self.level]]}，"
+                f"{local_time(self.expires_at_ms)} 到期）：{self.content}")
+
+
+def as_notice_record(message_id: str, fields: dict) -> NoticeRecord:
+    try:
+        found = NoticeRecord(message_id=message_id, kind=fields["kind"], level=fields["level"],
+                             content=fields["content"], issued_at_ms=fields["issuedAt"].epoch_ms,
+                             expires_at_ms=fields["expiresAt"].epoch_ms, replaces=fields.get("replaces"),
+                             batch_id=fields["batchId"])
+    except (KeyError, AttributeError):
+        found = None
+    if found is None or found.kind not in KIND_NAMES.values() or found.level not in LEVEL_NAMES:
+        raise ToolError(f"{RECORDS}/{message_id} 的欄位不完整或看不懂，無法檢查取代與撤回")
+    return found
+
+
+class Records:
+    """以 Administrator 的身分讀 admin_notice_records：rules 只讓 Administrator 讀它。"""
+
+    def __init__(self, deps: Deps, endpoints, project_id: str, id_token: str):
+        self.deps, self.endpoints, self.project_id, self.id_token = deps, endpoints, project_id, id_token
+
+    def get(self, message_id: str) -> NoticeRecord:
+        try:
+            (fields,) = fb.get_documents(self.deps.post, self.endpoints, self.project_id, self.id_token,
+                                         [f"{RECORDS}/{message_id}"])
+        except fb.FirebaseError as e:
+            raise ToolError(f"讀取 {RECORDS}/{message_id} 失敗：{e}{query_hint(e)}") from None
+        if fields is None:
+            raise ToolError(f"找不到 {RECORDS}/{message_id}：messageId 打錯了，或不是發到這個專案的公告")
+        return as_notice_record(message_id, fields)
+
+    def where(self, field_path: str, value: str) -> list:
+        """field_path == value 的每一則，依 messageId 排序。"""
+        try:
+            found = fb.run_query(self.deps.post, self.endpoints, self.project_id, self.id_token, "", {
+                "from": [{"collectionId": RECORDS}],
+                "where": {"fieldFilter": {"field": {"fieldPath": field_path}, "op": "EQUAL",
+                                          "value": fb.encode_value(value)}},
+            })
+        except fb.FirebaseError as e:
+            raise ToolError(f"查詢 {RECORDS} 失敗：{e}{query_hint(e)}") from None
+        return sorted((as_notice_record(path.rsplit("/", 1)[1], fields) for path, fields in found),
+                      key=lambda r: r.message_id)
+
+
+def replace_problem(records: Records, original: NoticeRecord) -> str | None:
+    """original 還能被取代或撤回嗎？可以就回傳 None。
+
+    撤回本身不能：撤回它不會讓被撤回的那則回來。已經被取代過的也不能：App 上「已撤回」是
+    最終狀態，「已更正」只連到一則新公告，要再改的是取代它的那一則。
+    """
+    if original.is_revoke:
+        return f"{original.message_id} 本身是一則撤回（撤回 {original.replaces}），不能再取代或撤回"
+    later = records.where("replaces", original.message_id)
+    if not later:
+        return None
+    names = "、".join(r.message_id for r in later)
+    if any(r.is_revoke for r in later):
+        return f"{original.message_id} 已經撤回過了（{names}）"
+    return f"{original.message_id} 已經被 {names} 更正；要再改，請取代或撤回 {names}"
+
+
+def check_correction(records: Records, replaces: str, *, issued_at: int, expires_at: int, targeted: bool,
+                     warn: Callable[[str], None]) -> NoticeRecord:
+    """send --replaces 的所有檢查都在這裡，寫入之前、--dry-run 也做。回傳被取代的那則。
+
+    - 被取代的那則要存在、還沒被取代過，而且不是撤回（replace_problem）。
+    - 定向公告只能由定向公告更正，內容才會加密（「撤回與取代」）；廣播由定向公告更正時提醒操作者。
+    - 新公告的 expiresAt 不早於被取代的那則，撤回紀錄才撐得到原公告過期。
+    - 被取代的那則屬於拆成多則的批次時，提醒操作者其他則不受影響。
+    """
+    original = records.get(replaces)
+    problem = replace_problem(records, original)
+    if problem:
+        raise ToolError(problem)
+    if original.kind == KIND_NAMES[nf.KIND_TARGETED] and not targeted:
+        raise ToolError(f"{replaces} 是定向公告：更正它的新公告也必須是定向的，內容才會加密。"
+                        "請用 --uid 或 --handle 指定收件對象（通常與原公告相同），或改用 revoke 撤回")
+    if original.kind == KIND_NAMES[nf.KIND_BROADCAST] and targeted:
+        warn(f"{replaces} 是廣播，更正卻是定向公告：只有收件裝置看得到新內容，其他裝置只會看到原公告「已更正」")
+    if expires_at < original.expires_at_ms:
+        raise ToolError(f"新公告 {local_time(expires_at)} 到期，早於被取代的 {replaces}"
+                        f"（{local_time(original.expires_at_ms)}）。新公告的 expiresAt 至少要等於被取代的那則，"
+                        "撤回紀錄才撐得到原公告過期：至少要 "
+                        f"--valid-for {duration_text(original.expires_at_ms - issued_at)}")
+    siblings = [r.message_id for r in records.where("batchId", original.batch_id) if r.message_id != replaces]
+    if siblings:
+        warn(f"{replaces} 與 {'、'.join(siblings)} 是同一批（batchId {original.batch_id}），這次只更正 {replaces}，"
+             f"其他則照舊有效、不會標成已更正。要整批收回，請用 revoke --batch {original.batch_id} 再重發")
+    return original
+
+
+def revoke_expiry(original: NoticeRecord, issued_at: int) -> int:
+    """純撤回的 expiresAt：與原公告同時到期（附錄的 V3 與 V1 相同），撤回紀錄才撐得到原公告過期；
+    原公告已經或快要過期時，至少保留 MIN_REVOKE_VALIDITY_MS。"""
+    expires_at = max(original.expires_at_ms, issued_at + MIN_REVOKE_VALIDITY_MS)
+    if expires_at > issued_at + nf.MAX_VALIDITY_MS:
+        raise ToolError(f"{original.message_id} 要到 {local_time(original.expires_at_ms)} 才過期，超過現在起 24 小時的"
+                        "有效期上限，撤回撐不到那時：發它的電腦時鐘是不是快了？")
+    return expires_at
+
+
+def cmd_revoke(args, deps: Deps) -> int:
+    """純撤回（「撤回與取代」）：一律是廣播 kind、空 body，replaces 填被撤回的那則，不論它是廣播
+    還是定向。--batch 撤回整批時每一則各發一則，一次 commit 寫入。不刪除任何 admin_notices 文件：
+    公告已經進到 mesh，刪除文件不算撤回。"""
+    endpoints, project_id, api_key = connect(args, deps)
+    key = load_private_key(Path(args.key) if args.key else default_key_path(args.key_id))
+    check_key_is_published(key, args.key_id, deps.public_keys_path)
+    id_token, uid = sign_in(args, deps, endpoints, api_key)
+    records = Records(deps, endpoints, project_id, id_token)
+    warn = warner(deps)
+    if args.batch:
+        originals = records.where("batchId", args.batch)
+        if not originals:
+            raise ToolError(f"{RECORDS} 裡找不到 batchId {args.batch} 的公告")
+    else:
+        originals = [records.get(args.message_id)]
+
+    issued_at = deps.now_ms()
+    revokes, message_ids = [], set()
+    for original in originals:
+        problem = replace_problem(records, original)
+        if problem:
+            if not args.batch:
+                raise ToolError(problem)
+            warn(f"略過：{problem}")
+            continue
+        message_id = nf.new_message_id()
+        while message_id in message_ids or message_id.hex() == original.message_id:
+            message_id = nf.new_message_id()
+        message_ids.add(message_id)
+        expires_at = revoke_expiry(original, issued_at)
+        try:
+            wire = nf.build_broadcast(key, key_id=args.key_id, level=LEVEL_NAMES[original.level],
+                                      message_id=message_id, issued_at=issued_at, expires_at=expires_at,
+                                      content="", replaces=bytes.fromhex(original.message_id))
+        except nf.NoticeError as e:
+            raise ToolError(f"{original.message_id}：{e}") from None
+        check_signed_by_published_key(wire, args.key_id, deps.public_keys_path)
+        revokes.append((original, message_id, expires_at, wire))
+    if not revokes:
+        raise ToolError(f"batchId {args.batch} 的 {len(originals)} 則公告都已經被取代或撤回，沒有要撤回的")
+
+    out = deps.stdout
+    out.write("Admin Notice 純撤回（廣播 kind、空 body）\n")
+    for original, message_id, expires_at, _ in revokes:
+        out.write(f"  撤回       {original.describe()}\n"
+                  f"             撤回的 messageId {message_id.hex()}，{local_time(expires_at)} 到期\n")
+    out.write(f"  發出       {local_time(issued_at)}\n"
+              f"  寫入       {'emulator' if endpoints.emulated else '正式環境'}的 Firestore（{project_id}）\n")
+    if args.dry_run:
+        for _, message_id, _, wire in revokes:
+            out.write(f"wire {message_id.hex()}（{len(wire)} bytes）：{wire.hex()}\n")
+        out.write("--dry-run：查過要撤回的公告，沒有寫入。\n")
+        return 0
+    if not args.yes:
+        out.write("實地實驗進行中不要發公告（見 README.md）。撤回會送到所有裝置；沒收到的人會一直看到原公告到它過期。\n")
+        if deps.input("確定撤回？輸入 yes 送出：").strip() != "yes":
+            out.write("沒有送出。\n")
+            return 1
+
+    writes = []
+    for original, message_id, expires_at, wire in revokes:
+        record = notice_record(kind=nf.KIND_BROADCAST, level=LEVEL_NAMES[original.level], content="",
+                               issued_at=issued_at, expires_at=expires_at,
+                               replaces=bytes.fromhex(original.message_id), batch_id=message_id)
+        writes += notice_writes(project_id, message_id=message_id, wire=wire, record=record, uid=uid)
+    try:
+        fb.commit(deps.post, endpoints, project_id, id_token, writes)
+    except fb.FirebaseError as e:
+        raise ToolError(f"寫入失敗：{e}{commit_hint(e)}") from None
+    for original, message_id, _, _ in revokes:
+        out.write(f"已寫入 admin_notices/{message_id.hex()} 與 {RECORDS}/{message_id.hex()}"
+                  f"（撤回 {original.message_id}）。\n")
     return 0
 
 
@@ -491,6 +736,16 @@ def uid_arg(text: str) -> str:
     return text
 
 
+MESSAGE_ID_HEX = re.compile(r"^[0-9a-f]{16}$")
+
+
+def message_id_arg(text: str) -> str:
+    # 會拼進 Firestore 路徑（admin_notice_records/{messageId}），格式同 rules 檢查的文件 ID。
+    if not MESSAGE_ID_HEX.match(text):
+        raise argparse.ArgumentTypeError("messageId 是 16 個小寫十六進位字元，例如 admin_notices 的文件 ID")
+    return text
+
+
 def handle_arg(text: str) -> str:
     handle = text.strip().lower()
     if not HANDLE.match(handle):
@@ -521,13 +776,33 @@ def parser() -> argparse.ArgumentParser:
                       help="定向公告的收件帳號：加密給它登記過的每台裝置。可以重複")
     send.add_argument("--handle", action="append", type=handle_arg, metavar="REPORTER_HANDLE",
                       help="定向公告的收件 Reporter Handle（一台裝置，例如 mesh_reports 上看到的）。可以重複")
+    send.add_argument("--replaces", type=message_id_arg, metavar="MESSAGE_ID",
+                      help="更正這則公告：它在 App 上標成「已更正」並連到新公告。新公告的到期不能早於它；"
+                           "定向公告只能用定向公告（--uid／--handle）更正")
     send.add_argument("--key-id", type=key_id_arg, default=0x01, help="私鑰的 keyId，預設 0x01")
     send.add_argument("--key", help="私鑰檔路徑，預設 ~/.config/cares-mesh/admin-notice/admin-ed25519-<keyId>.key")
     send.add_argument("--project", help="Firestore 專案，預設讀 app/google-services.json")
     send.add_argument("--yes", action="store_true", help="不詢問，直接送出")
     send.add_argument("--dry-run", action="store_true",
-                      help="只組包、簽章並印出，不寫入。廣播不登入；定向公告會登入查收件裝置")
+                      help="只組包、簽章並印出，不寫入。廣播不登入；定向公告與更正會登入查收件裝置與被取代的那則")
     send.set_defaults(run=cmd_send)
+
+    revoke = sub.add_parser("revoke", help="撤回一則公告，或以 --batch 撤回整批",
+                            description="每一則各發一則純撤回：廣播 kind、空 body、replaces 填被撤回的那則，"
+                                        "與它同時到期（快過期的至少留 1 小時）。不刪除任何 admin_notices 文件。"
+                                        f"密碼從環境變數 {PASSWORD_ENV} 讀取，沒有設定就在終端機詢問。")
+    revoke.add_argument("--email", required=True, help="Administrator 帳號的 email")
+    target = revoke.add_mutually_exclusive_group(required=True)
+    target.add_argument("message_id", nargs="?", type=message_id_arg, metavar="MESSAGE_ID",
+                        help="要撤回的公告（admin_notices 的文件 ID）")
+    target.add_argument("--batch", type=message_id_arg, metavar="BATCH_ID",
+                        help="撤回 admin_notice_records 裡 batchId 相同的每一則（拆成多則的定向公告）")
+    revoke.add_argument("--key-id", type=key_id_arg, default=0x01, help="私鑰的 keyId，預設 0x01")
+    revoke.add_argument("--key", help="私鑰檔路徑，預設 ~/.config/cares-mesh/admin-notice/admin-ed25519-<keyId>.key")
+    revoke.add_argument("--project", help="Firestore 專案，預設讀 app/google-services.json")
+    revoke.add_argument("--yes", action="store_true", help="不詢問，直接送出")
+    revoke.add_argument("--dry-run", action="store_true", help="登入查過要撤回的公告、簽好章並印出，不寫入")
+    revoke.set_defaults(run=cmd_revoke)
     return p
 
 
