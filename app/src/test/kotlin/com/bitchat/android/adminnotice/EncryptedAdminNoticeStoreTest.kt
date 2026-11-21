@@ -6,6 +6,7 @@ import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,10 +36,11 @@ class EncryptedAdminNoticeStoreTest {
         issuedAtMs: Long = VECTOR_ISSUED_AT,
         expiresAtMs: Long = issuedAtMs + HOUR,
         status: AdminNoticeStatus = AdminNoticeStatus.ACTIVE,
-        replacedBy: String? = null
+        replacedBy: String? = null,
+        kind: AdminNoticeKind = AdminNoticeKind.BROADCAST
     ) = StoredAdminNotice(
         messageId = messageId,
-        kind = AdminNoticeKind.BROADCAST,
+        kind = kind,
         level = AdminNoticeLevel.IMPORTANT,
         issuedAtMs = issuedAtMs,
         expiresAtMs = expiresAtMs,
@@ -181,6 +183,77 @@ class EncryptedAdminNoticeStoreTest {
         assertEquals(AdminNoticeStatus.WITHDRAWN, stored.status)
         assertEquals("", stored.content)
         assertTrue("read state is kept", stored.isRead)
+    }
+
+    // ── 登出與緊急清除（#140）───────────────────────────────────────────────
+
+    @Test
+    fun `deleting the targeted notices keeps the broadcasts and tells the listeners once`() {
+        store.insertIfAbsent(notice("1111111111111111"))
+        store.insertIfAbsent(notice("2222222222222222", kind = AdminNoticeKind.TARGETED))
+        store.insertIfAbsent(notice("3333333333333333", kind = AdminNoticeKind.TARGETED, status = AdminNoticeStatus.WITHDRAWN))
+        store.markRead("2222222222222222")
+        var changes = 0
+        store.addChangeListener { changes++ }
+
+        val deleted = store.deleteTargeted()
+
+        assertEquals(setOf("2222222222222222", "3333333333333333"), deleted.toSet())
+        assertEquals(listOf("1111111111111111"), store.all().map { it.messageId })
+        assertEquals("gone from the file, not only hidden", setOf("1111111111111111"), prefs.all.keys)
+        assertEquals(1, changes)
+    }
+
+    @Test
+    fun `a deleted targeted notice stays gone after a restart`() {
+        store.insertIfAbsent(notice("2222222222222222", kind = AdminNoticeKind.TARGETED))
+
+        store.deleteTargeted()
+
+        assertEquals(emptyList<StoredAdminNotice>(), openStore().all())
+    }
+
+    @Test
+    fun `without a targeted notice nothing is deleted and nobody is told`() {
+        store.insertIfAbsent(notice("1111111111111111"))
+        var changes = 0
+        store.addChangeListener { changes++ }
+
+        assertEquals(emptyList<String>(), store.deleteTargeted())
+        assertEquals(setOf("1111111111111111"), prefs.all.keys)
+        assertEquals(0, changes)
+    }
+
+    @Test
+    fun `an entry it cannot read is deleted too, since it may be a targeted notice`() {
+        // Fail closed: a notice written by a later version, or a damaged one, is not known to be public.
+        store.insertIfAbsent(notice("1111111111111111"))
+        prefs.edit()
+            .putString("8888888888888888", "{not json")
+            .putString("9999999999999999", """{"kind":"SOMETHING_NEW","content":"給你的公告"}""")
+            .commit()
+
+        val deleted = store.deleteTargeted()
+
+        assertEquals(setOf("8888888888888888", "9999999999999999"), deleted.toSet())
+        assertEquals(setOf("1111111111111111"), prefs.all.keys)
+    }
+
+    @Test
+    fun `a deletion that does not reach the disk fails, and nobody is told`() {
+        store.insertIfAbsent(notice("2222222222222222", kind = AdminNoticeKind.TARGETED))
+        val unwritable = object : SharedPreferences by prefs {
+            override fun edit(): SharedPreferences.Editor = object : SharedPreferences.Editor by prefs.edit() {
+                override fun commit() = false
+            }
+        }
+        val failing = EncryptedAdminNoticeStore(openPrefs = { unwritable }, nowMs = { now })
+        var changes = 0
+        failing.addChangeListener { changes++ }
+
+        assertThrows(IllegalStateException::class.java) { failing.deleteTargeted() }
+        assertEquals(setOf("2222222222222222"), prefs.all.keys)
+        assertEquals(0, changes)
     }
 
     @Test
