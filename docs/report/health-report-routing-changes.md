@@ -315,7 +315,7 @@ flowchart TD
 |---|---|
 | `GossipSyncManager` | 每個發送者只留時間戳最新的封包 |
 | `MessageHandler`（`HealthReportRepeatFilter`，分支） | 同一則陳述只交給聊天一次，避免重發時每 30 分鐘震動一次；晚到的舊回報不算新的 |
-| Flutter Health 畫面、Mutual-aid Task（`mergeBleReport`） | 每個 Handle 一筆，依 `reportTime` 只留最新的，晚到的舊回報不會蓋掉新的 |
+| Flutter Health 畫面、Mutual-aid Task（`mergeBleReport`、`MutualAidTaskBoard`） | 每個 Handle 一筆，依 `reportTime` 只留最新的，晚到的舊回報不會蓋掉新的；只有 `reportTime` 較新時才套用任務的重開規則，重發不會讓已完成的任務重開 |
 | Gateway（`MeshGateway`） | `reportTime` 比該 Handle 已上傳的新才上傳 |
 
 ### 6.6 三層送達的比較
@@ -461,7 +461,7 @@ flowchart TD
 | 重發 | `StandingReportRebroadcasterTest` |
 | Gateway | `MeshGatewayTest`、`MeshGatewayRuntimeTest` |
 | 連線層 | `BluetoothRadioRecoveryPolicyTest`、`BluetoothConnectionTrackerIdleLinkTest`、`ConnectionRssiThresholdTest`、`EdgeConnectGuardTest`、`WeakLinkReplacementTest`、`PowerProfileResolverTest` |
-| Flutter 端合併 | `mutual_aid_tasks_test.dart` |
+| Flutter 端合併與任務重開 | `mutual_aid_tasks_test.dart`、`mutual_aid_task_board_test.dart` |
 
 ---
 

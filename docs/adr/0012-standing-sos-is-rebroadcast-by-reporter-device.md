@@ -11,7 +11,7 @@ SOS 依定義會一直舉著，直到撤回或宣告安全（ADR-0004）；輕�
 - **在 `MeshForegroundService` 裡跑**（`StandingReportRebroadcaster`），不依賴 Flutter 畫面。下一次發送排在「上一次發送的封包時間戳 + 30 分鐘」：app 或服務重啟既不會連發、也不會漏掉一次；Reporter 手動送出一筆就是重新起算。平時只有一個 delay；保存的回報一變就從新的那筆重算，沒有輪詢。只有該發卻因為 mesh 沒在跑而送不出去時，才每 5 分鐘再試一次。
 - **何時停止**：最新一筆是「安全」且沒有 SOS（Reporter 送出新的一筆就取代舊的，每次醒來都重新判斷），或保存的回報被清除（panic 換身分）。成立中的回報保存到超過 2 小時也不刪，手機關機數小時後重新開機，仍會馬上重發一次；其餘回報照 P0-3 到期就刪。
 - **實驗 Handle 的回報不重發**：背後沒有人在等救援，重發只會干擾下一場量測。
-- **接收端以（Reporter Handle、`reportTime`）認出同一則陳述**：重發是新的封包 ID、同一份 payload。`MessageHandler` 只把同一則陳述交給聊天 delegate 一次（聊天列本來就依 id 去重，但每交一次都會再震動一次）；Flutter 的 Health 畫面本來就依 Handle 與 `reportTime` 合併（`mergeBleReport`），Mutual-aid Task 清單每個 Handle 一筆，Rescuer 已接下的狀態也依 Handle 保留，所以重發照轉，第一份送達時沒開著的畫面要靠它才看得到；Gateway 依 `reportTime` 自行略過已上傳的。Health Report 本來就不觸發通知：Android 只通知私訊與提及，Flutter 端沒有回報通知。
+- **接收端以（Reporter Handle、`reportTime`）認出同一則陳述**：重發是新的封包 ID、同一份 payload。`MessageHandler` 只把同一則陳述交給聊天 delegate 一次（聊天列本來就依 id 去重，但每交一次都會再震動一次）；Flutter 的 Health 畫面本來就依 Handle 與 `reportTime` 合併（`mergeBleReport`），Mutual-aid Task 清單每個 Handle 一筆，Rescuer 的進度也依 Handle 保留，而且 `MutualAidTaskBoard` 只在 `reportTime` 較新時套用重開規則，已完成的任務不會因重發而重開，所以重發照轉，第一份送達時沒開著的畫面要靠它才看得到；Gateway 依 `reportTime` 自行略過已上傳的。Health Report 本來就不觸發通知：Android 只通知私訊與提及，Flutter 端沒有回報通知。
 
 一併處理時鐘：各機用自己的時鐘判斷到期，時鐘快了幾小時的手機送出的回報，會在別人的同步暫存裡多留幾小時，而且作為該 Reporter 最新的一筆，會蓋住他之後真正的回報。同步暫存因此**拒收時間戳比本機時鐘快超過 10 分鐘的 Health Report**（`HEALTH_REPORT_MAX_FUTURE_SKEW_MS`）。試跑量到四支手機之間最多差 1.3 s；10 分鐘與 ANNOUNCE 的時間差上限（`AnnouncementIdentityValidator`）、`mesh_reports` 規則對 `reportTime` 的容忍相同，任何回報最多留 2 小時 10 分鐘。這個檢查**只在同步暫存**，不在接收與轉發路徑：即時 flood 有 TTL 與去重，壞時鐘的害處只在暫存裡留太久；在接收端丟掉，等於因為手機時鐘錯了就不顯示一個真實的 SOS。
 
