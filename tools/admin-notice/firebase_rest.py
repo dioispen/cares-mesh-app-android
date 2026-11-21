@@ -181,6 +181,20 @@ def commit(post, endpoints: Endpoints, project_id: str, id_token: str, writes: l
                 {"writes": writes}, {"Authorization": f"Bearer {id_token}"})
 
 
+def get_documents(post, endpoints: Endpoints, project_id: str, id_token: str, paths: list) -> list:
+    """documents:batchGet，依 paths 的順序回傳每份文件解碼後的欄位；不存在的是 None。
+
+    paths 是 documents/ 之後的路徑。讀取同樣經過 security rules。
+    """
+    names = [document_name(project_id, path) for path in paths]
+    response = post(f"{endpoints.firestore}/v1/projects/{project_id}/databases/(default)/documents:batchGet",
+                    {"documents": names}, {"Authorization": f"Bearer {id_token}"})
+    # 回應是一串結果，每份文件一筆 found 或 missing，順序不保證。
+    found = {item["found"]["name"]: {k: decode_value(v) for k, v in item["found"].get("fields", {}).items()}
+             for item in response if "found" in item}
+    return [found.get(name) for name in names]
+
+
 def run_query(post, endpoints: Endpoints, project_id: str, id_token: str, parent: str,
               structured_query: dict) -> list[tuple[str, dict]]:
     """documents:runQuery，回傳每份文件的 (路徑, 解碼後的欄位)；路徑從 documents/ 之後算起。

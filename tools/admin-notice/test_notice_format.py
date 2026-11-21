@@ -194,6 +194,17 @@ class BuildTargetedTest(unittest.TestCase):
     def test_header_limits_apply_as_for_a_broadcast(self):
         with self.assertRaises(nf.NoticeError):
             targeted([RECIPIENT_1], expires_at=ISSUED_AT + 24 * HOUR + 1)
+        with self.assertRaises(nf.NoticeError):
+            targeted([RECIPIENT_1], replaces=bytes.fromhex("0f1e2d3c4b5a6978"))  # 取代自己
+
+    def test_a_targeted_correction_names_the_notice_it_replaces_in_the_signed_header(self):
+        # 取代一則定向公告時，新公告必須是定向的（「撤回與取代」）。
+        replaced = bytes.fromhex("a1b2c3d4e5f60718")
+        payload = targeted([RECIPIENT_1], replaces=replaced)
+
+        nf.verify(TEST_ADMIN_PUBLIC, payload)
+        self.assertEqual(replaced, payload[28:36])
+        self.assertEqual(V2_CONTENT.encode(), nf.open_as_recipient(payload, RECIPIENT_1))  # header 是 aad
 
 
 def entry_position(payload: bytes, recipient: X25519PrivateKey) -> int:
