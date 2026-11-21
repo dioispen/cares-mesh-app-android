@@ -1,6 +1,6 @@
-"""以 Firebase Auth 與 Firestore 的 REST API 寫入，只用標準函式庫。
+"""以 Firebase Auth 與 Firestore 的 REST API 讀寫，只用標準函式庫。
 
-刻意不用 service account 或 firebase-admin：用 Administrator 帳號的 ID token 寫入，
+刻意不用 service account 或 firebase-admin：用 Administrator 帳號的 ID token 讀寫，
 Firestore security rules 才會套用，與管理後台走同一條路（docs/ADMIN_NOTICE_V1.md「Firestore」）。
 
 設定 FIRESTORE_EMULATOR_HOST 與 FIREBASE_AUTH_EMULATOR_HOST 時改連 emulator（兩個要一起設）。
@@ -8,6 +8,7 @@ Firestore security rules 才會套用，與管理後台走同一條路（docs/AD
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -85,15 +86,34 @@ def sign_in_with_password(post, endpoints: Endpoints, api_key: str, email: str, 
 
 # ---- Firestore 文件 ----------------------------------------------------------
 
+RFC3339 = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$")
+
+
 class Timestamp:
     """Firestore 的 timestamp 欄位，精度到毫秒。"""
 
     def __init__(self, epoch_ms: int):
         self.epoch_ms = epoch_ms
 
+    def __eq__(self, other):
+        return isinstance(other, Timestamp) and other.epoch_ms == self.epoch_ms
+
+    def __repr__(self):
+        return f"Timestamp({self.rfc3339()})"
+
     def rfc3339(self) -> str:
         t = datetime.fromtimestamp(self.epoch_ms / 1000, tz=timezone.utc)
         return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{self.epoch_ms % 1000:03d}Z"
+
+    @staticmethod
+    def parse(text: str) -> "Timestamp":
+        """Firestore 回傳的 RFC 3339（UTC、小數 0–9 位），捨去到毫秒。"""
+        match = RFC3339.match(text)
+        if not match:
+            raise ValueError(f"看不懂的時間 {text!r}")
+        seconds = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        millis = int((match.group(2) or "0").ljust(3, "0")[:3])
+        return Timestamp(int(seconds.timestamp()) * 1000 + millis)
 
 
 def encode_value(value) -> dict:
@@ -109,7 +129,31 @@ def encode_value(value) -> dict:
         return {"bytesValue": base64.b64encode(value).decode("ascii")}
     if isinstance(value, Timestamp):
         return {"timestampValue": value.rfc3339()}
+    if isinstance(value, list):
+        return {"arrayValue": {"values": [encode_value(v) for v in value]}}
+    if isinstance(value, dict):
+        return {"mapValue": {"fields": {k: encode_value(v) for k, v in value.items()}}}
     raise TypeError(f"不支援的欄位型別 {type(value).__name__}")
+
+
+def decode_value(value: dict):
+    """encode_value 的反向：Firestore REST 的 Value 轉回 Python 值。"""
+    (kind, raw), = value.items()
+    if kind == "nullValue":
+        return None
+    if kind == "integerValue":
+        return int(raw)
+    if kind == "bytesValue":
+        return base64.b64decode(raw)
+    if kind == "timestampValue":
+        return Timestamp.parse(raw)
+    if kind == "arrayValue":
+        return [decode_value(v) for v in raw.get("values", [])]
+    if kind == "mapValue":
+        return {k: decode_value(v) for k, v in raw.get("fields", {}).items()}
+    if kind in ("booleanValue", "stringValue", "doubleValue"):
+        return raw
+    raise TypeError(f"不支援的欄位型別 {kind}")
 
 
 def document_name(project_id: str, path: str) -> str:
@@ -135,3 +179,20 @@ def commit(post, endpoints: Endpoints, project_id: str, id_token: str, writes: l
     """一次 commit 寫入所有 writes：全部成功或全部失敗，每份文件都經過 security rules。"""
     return post(f"{endpoints.firestore}/v1/projects/{project_id}/databases/(default)/documents:commit",
                 {"writes": writes}, {"Authorization": f"Bearer {id_token}"})
+
+
+def run_query(post, endpoints: Endpoints, project_id: str, id_token: str, parent: str,
+              structured_query: dict) -> list[tuple[str, dict]]:
+    """documents:runQuery，回傳每份文件的 (路徑, 解碼後的欄位)；路徑從 documents/ 之後算起。
+
+    parent 是 documents/ 之後的路徑，空字串代表資料庫的根（collection group 查詢從這裡開始）。
+    查詢同樣經過 security rules。
+    """
+    root = f"projects/{project_id}/databases/(default)/documents"
+    name = f"{root}/{parent}" if parent else root
+    response = post(f"{endpoints.firestore}/v1/{name}:runQuery", {"structuredQuery": structured_query},
+                    {"Authorization": f"Bearer {id_token}"})
+    # 回應是一串結果；沒有任何文件時只有一筆只帶 readTime 的結果。
+    return [(item["document"]["name"].split("/documents/", 1)[1],
+             {k: decode_value(v) for k, v in item["document"].get("fields", {}).items()})
+            for item in response if "document" in item]
