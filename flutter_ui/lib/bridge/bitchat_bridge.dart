@@ -164,7 +164,7 @@ abstract final class ChatEvents {
   static const unread = 'chat_unread';
 
   /// `{type, navigation: Map?}`：使用者點了聊天通知、Dart 還沒處理的目的地（#57），沒有時
-  /// `navigation` 為 null（見 `models/chat_navigation.dart`）。它只是提醒：要導航前一定先以
+  /// `navigation` 為 null（見 `models/app_navigation.dart`）。它只是提醒：要導航前一定先以
   /// [ChatMethods.takePendingNavigation] 取走，照取到的去，每個點擊只處理一次。
   static const pendingNavigation = 'chat_pending_navigation';
 
@@ -296,7 +296,7 @@ class BitchatBridge {
   /// 取走使用者點聊天通知要去的地方（#57）：`{target: privateChat, peerID, senderNickname}` 或
   /// `{target: publicChat}`；沒有（或已被取走）時回傳 null。取走後原生不再持有它。只取、不開啟：
   /// 私訊畫面照一般流程呼叫 [startPrivateChat]。bridge 錯誤會往上拋。
-  static Future<Map<dynamic, dynamic>?> takePendingChatNavigation() =>
+  static Future<Map<dynamic, dynamic>?> takePendingAppNavigation() =>
       _method.invokeMethod<Map>(ChatMethods.takePendingNavigation);
 
   /// 切換我的最愛（原生 `ChatViewModel.toggleFavorite`，原生私訊標頭星號做的事）：加入或移出，

@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config
 /**
  * Upstream's chat notifications as the Flutter entry receives them (#57): every one opens
  * [FlutterChatActivity], never upstream's Compose `MainActivity`, and carries extras that
- * [ChatNavigation.fromNotification] turns into the right Flutter screen. Also pins upstream's rule
+ * [AppNavigation.fromNotification] turns into the right Flutter screen. Also pins upstream's rule
  * for when a private message notification is posted at all, as the Flutter entry drives it
  * (`ForegroundMeshDelegate` decides which [NotificationManager] posts; `chat_startPrivateChat` /
  * `chat_endPrivateChat` set the chat in view).
@@ -61,7 +61,7 @@ class ChatNotificationTargetTest {
         val tap = tapOf(posted(ALICE.hashCode()))
 
         assertEquals(FlutterChatActivity::class.java.name, tap.component?.className)
-        assertEquals(ChatNavigation.PrivateChat(ALICE, "alice"), ChatNavigation.fromNotification(tap))
+        assertEquals(AppNavigation.PrivateChat(ALICE, "alice"), AppNavigation.fromNotification(tap))
     }
 
     @Test
@@ -83,7 +83,7 @@ class ChatNotificationTargetTest {
         val shortcut = ShortcutManagerCompat.getDynamicShortcuts(context).single()
 
         assertEquals(FlutterChatActivity::class.java.name, shortcut.intent.component?.className)
-        assertEquals(ChatNavigation.PrivateChat(CONTACT, "alice"), ChatNavigation.fromNotification(shortcut.intent))
+        assertEquals(AppNavigation.PrivateChat(CONTACT, "alice"), AppNavigation.fromNotification(shortcut.intent))
     }
 
     @Test
@@ -95,7 +95,7 @@ class ChatNotificationTargetTest {
         val tap = tapOf(posted(MESH_MENTION_NOTIFICATION_ID))
 
         assertEquals(FlutterChatActivity::class.java.name, tap.component?.className)
-        assertEquals(ChatNavigation.PublicChat, ChatNavigation.fromNotification(tap))
+        assertEquals(AppNavigation.PublicChat, AppNavigation.fromNotification(tap))
     }
 
     @Test
@@ -106,7 +106,7 @@ class ChatNotificationTargetTest {
         val tap = tapOf(posted(DM_SUMMARY_NOTIFICATION_ID))
 
         assertEquals(FlutterChatActivity::class.java.name, tap.component?.className)
-        assertNull("no single chat to open", ChatNavigation.fromNotification(tap))
+        assertNull("no single chat to open", AppNavigation.fromNotification(tap))
     }
 
     @Test
@@ -116,7 +116,7 @@ class ChatNotificationTargetTest {
         val tap = tapOf(shadowOf(system).allNotifications.single())
 
         assertEquals(FlutterChatActivity::class.java.name, tap.component?.className)
-        assertEquals(ChatNavigation.PrivateChat(ALICE, "alice"), ChatNavigation.fromNotification(tap))
+        assertEquals(AppNavigation.PrivateChat(ALICE, "alice"), AppNavigation.fromNotification(tap))
     }
 
     @Test
@@ -130,7 +130,7 @@ class ChatNotificationTargetTest {
             val tap = tapOf(posted(id))
 
             assertEquals(FlutterChatActivity::class.java.name, tap.component?.className)
-            assertNull(ChatNavigation.fromNotification(tap))
+            assertNull(AppNavigation.fromNotification(tap))
         }
     }
 
@@ -140,7 +140,7 @@ class ChatNotificationTargetTest {
         val relaunch = Intent(tapOf(posted(ALICE.hashCode())))
             .addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)
 
-        assertNull(ChatNavigation.fromNotification(relaunch))
+        assertNull(AppNavigation.fromNotification(relaunch))
     }
 
     // --- when a private message notification is posted ---------------------------------------
@@ -186,7 +186,7 @@ class ChatNotificationTargetTest {
         val tap = tapOf(posted(ALICE.hashCode()))
 
         assertEquals(FlutterChatActivity::class.java.name, tap.component?.className)
-        assertEquals(ChatNavigation.PrivateChat(ALICE, "alice"), ChatNavigation.fromNotification(tap))
+        assertEquals(AppNavigation.PrivateChat(ALICE, "alice"), AppNavigation.fromNotification(tap))
     }
 
     @Test

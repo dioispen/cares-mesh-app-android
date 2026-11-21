@@ -7,7 +7,7 @@ import 'package:flutter_ui/screens/chat_screen.dart';
 import 'package:flutter_ui/screens/private_chat_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
-import 'package:flutter_ui/widgets/chat_navigation_host.dart';
+import 'package:flutter_ui/widgets/app_navigation_host.dart';
 
 /// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
 Map<String, dynamic> focusEvent(String? peerID) => {
@@ -30,7 +30,7 @@ void main() {
   /// Every call that reaches Kotlin and decides where the user ends up, in order.
   late List<String> calls;
 
-  /// What Kotlin's PendingChatNavigation holds; taken (and emptied) by chat_takePendingNavigation.
+  /// What Kotlin's PendingAppNavigation holds; taken (and emptied) by chat_takePendingNavigation.
   Map<String, Object?>? nativePending;
   late Future<Object?> Function() take;
 
@@ -81,7 +81,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Widget host() => ChatNavigationHost(chatService: service, child: const Scaffold(body: Text('home')));
+  Widget host() => AppNavigationHost(chatService: service, child: const Scaffold(body: Text('home')));
 
   /// Subscribes from inside the widget test, so what the service does on an event (the host's
   /// take and navigation) runs in the test's fake-async zone and settles with the frames.

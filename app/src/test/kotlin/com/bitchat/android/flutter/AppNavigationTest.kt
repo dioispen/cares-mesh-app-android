@@ -12,9 +12,9 @@ import org.mockito.kotlin.verifyNoMoreInteractions
 
 /**
  * A tapped chat notification, as the Flutter entry reads it (#57): upstream's intent extras become
- * a [ChatNavigation] that waits in [PendingChatNavigation] until Dart takes it.
+ * a [AppNavigation] that waits in [PendingAppNavigation] until Dart takes it.
  */
-class ChatNavigationTest {
+class AppNavigationTest {
 
     // --- reading upstream's notification extras ---------------------------------------------
 
@@ -26,7 +26,7 @@ class ChatNavigationTest {
             NotificationManager.EXTRA_SENDER_NICKNAME to "alice"
         )
 
-        assertEquals(ChatNavigation.PrivateChat(CONTACT, "alice"), navigation)
+        assertEquals(AppNavigation.PrivateChat(CONTACT, "alice"), navigation)
     }
 
     @Test
@@ -36,7 +36,7 @@ class ChatNavigationTest {
             NotificationManager.EXTRA_PEER_ID to ALICE
         )
 
-        assertEquals(ChatNavigation.PrivateChat(ALICE, null), navigation)
+        assertEquals(AppNavigation.PrivateChat(ALICE, null), navigation)
     }
 
     @Test
@@ -55,7 +55,7 @@ class ChatNavigationTest {
 
     @Test
     fun `a mesh mention notification opens the public chat`() {
-        assertEquals(ChatNavigation.PublicChat, parse(NotificationManager.EXTRA_OPEN_MESH_CHAT to true))
+        assertEquals(AppNavigation.PublicChat, parse(NotificationManager.EXTRA_OPEN_MESH_CHAT to true))
     }
 
     @Test
@@ -66,7 +66,7 @@ class ChatNavigationTest {
             NotificationManager.EXTRA_OPEN_MESH_CHAT to true
         )
 
-        assertEquals(ChatNavigation.PrivateChat(ALICE, null), navigation)
+        assertEquals(AppNavigation.PrivateChat(ALICE, null), navigation)
     }
 
     @Test
@@ -100,7 +100,7 @@ class ChatNavigationTest {
     fun `a private chat request clears that sender's notifications`() {
         val viewModel = mock<ChatViewModel>()
 
-        ChatNavigation.PrivateChat(ALICE, "alice").clearNotifications(viewModel)
+        AppNavigation.PrivateChat(ALICE, "alice").clearNotifications(viewModel)
 
         verify(viewModel).clearNotificationsForSender(ALICE)
         verify(viewModel, never()).clearMeshMentionNotifications()
@@ -110,7 +110,7 @@ class ChatNavigationTest {
     fun `a public chat request clears the mention notifications`() {
         val viewModel = mock<ChatViewModel>()
 
-        ChatNavigation.PublicChat.clearNotifications(viewModel)
+        AppNavigation.PublicChat.clearNotifications(viewModel)
 
         verify(viewModel).clearMeshMentionNotifications()
         verifyNoMoreInteractions(viewModel)
@@ -120,7 +120,7 @@ class ChatNavigationTest {
 
     @Test
     fun `nothing is pending at first`() {
-        val pending = PendingChatNavigation()
+        val pending = PendingAppNavigation()
 
         assertNull(pending.pending.value)
         assertNull(pending.take())
@@ -128,23 +128,23 @@ class ChatNavigationTest {
 
     @Test
     fun `a request is taken exactly once`() {
-        val pending = PendingChatNavigation()
-        pending.offer(ChatNavigation.PrivateChat(ALICE, "alice"))
+        val pending = PendingAppNavigation()
+        pending.offer(AppNavigation.PrivateChat(ALICE, "alice"))
 
-        assertEquals(ChatNavigation.PrivateChat(ALICE, "alice"), pending.pending.value)
-        assertEquals(ChatNavigation.PrivateChat(ALICE, "alice"), pending.take())
+        assertEquals(AppNavigation.PrivateChat(ALICE, "alice"), pending.pending.value)
+        assertEquals(AppNavigation.PrivateChat(ALICE, "alice"), pending.take())
         assertNull(pending.pending.value)
         assertNull(pending.take())
     }
 
     @Test
     fun `the latest tap wins over one Dart has not taken yet`() {
-        val pending = PendingChatNavigation()
-        pending.offer(ChatNavigation.PrivateChat(ALICE, "alice"))
+        val pending = PendingAppNavigation()
+        pending.offer(AppNavigation.PrivateChat(ALICE, "alice"))
 
-        pending.offer(ChatNavigation.PublicChat)
+        pending.offer(AppNavigation.PublicChat)
 
-        assertEquals(ChatNavigation.PublicChat, pending.take())
+        assertEquals(AppNavigation.PublicChat, pending.take())
         assertNull(pending.take())
     }
 
@@ -154,13 +154,13 @@ class ChatNavigationTest {
     fun `navigation maps carry the target and upstream's extras`() {
         assertEquals(
             mapOf("target" to "privateChat", "peerID" to ALICE, "senderNickname" to "alice"),
-            ChatSerialization.navigation(ChatNavigation.PrivateChat(ALICE, "alice"))
+            ChatSerialization.navigation(AppNavigation.PrivateChat(ALICE, "alice"))
         )
         assertEquals(
             mapOf("target" to "privateChat", "peerID" to ALICE, "senderNickname" to null),
-            ChatSerialization.navigation(ChatNavigation.PrivateChat(ALICE, null))
+            ChatSerialization.navigation(AppNavigation.PrivateChat(ALICE, null))
         )
-        assertEquals(mapOf("target" to "publicChat"), ChatSerialization.navigation(ChatNavigation.PublicChat))
+        assertEquals(mapOf("target" to "publicChat"), ChatSerialization.navigation(AppNavigation.PublicChat))
         assertNull(ChatSerialization.navigation(null))
     }
 
@@ -168,7 +168,7 @@ class ChatNavigationTest {
     fun `the pending navigation event wraps the request, null when none`() {
         assertEquals(
             mapOf("type" to "chat_pending_navigation", "navigation" to mapOf("target" to "publicChat")),
-            ChatSerialization.pendingNavigationEvent(ChatNavigation.PublicChat)
+            ChatSerialization.pendingNavigationEvent(AppNavigation.PublicChat)
         )
         assertEquals(
             mapOf("type" to "chat_pending_navigation", "navigation" to null),
@@ -176,9 +176,9 @@ class ChatNavigationTest {
         )
     }
 
-    private fun parse(vararg extras: Pair<String, Any?>, launchedFromHistory: Boolean = false): ChatNavigation? {
+    private fun parse(vararg extras: Pair<String, Any?>, launchedFromHistory: Boolean = false): AppNavigation? {
         val values = extras.toMap()
-        return ChatNavigation.fromNotification(
+        return AppNavigation.fromNotification(
             launchedFromHistory = launchedFromHistory,
             flag = { values[it] as? Boolean ?: false },
             text = { values[it] as? String }

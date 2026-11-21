@@ -120,7 +120,7 @@ class ChatBridgeTest {
         whenever(vm.conversationDraft(anyOrNull())).thenAnswer { drafts[it.arguments[0]] ?: "" }
         whenever(vm.resolvePeerDisplayNameForFingerprint(any())).thenAnswer { (it.arguments[0] as String).take(8) }
     }
-    private val pendingNavigation = PendingChatNavigation()
+    private val pendingNavigation = PendingAppNavigation()
     private val bridge = ChatBridge(viewModel, events, scope, snapshotWork, wifiAwarePeers, pendingNavigation, records) { id ->
         contacts[id] ?: ChatPrivateChat.Contact(id, meshPeerID = null, displayName = null, favoriteNickname = null)
     }
@@ -1276,7 +1276,7 @@ class ChatBridgeTest {
 
     @Test
     fun `takePendingNavigation hands Dart the tapped notification's destination once`() {
-        pendingNavigation.offer(ChatNavigation.PrivateChat(ALICE, "alice"))
+        pendingNavigation.offer(AppNavigation.PrivateChat(ALICE, "alice"))
         val first = RecordingResult()
         val second = RecordingResult()
 
@@ -1295,7 +1295,7 @@ class ChatBridgeTest {
     @Test
     fun `taking the destination opens nothing upstream by itself`() {
         // Dart opens its private chat screen, which starts the chat like any other.
-        pendingNavigation.offer(ChatNavigation.PrivateChat(ALICE, "alice"))
+        pendingNavigation.offer(AppNavigation.PrivateChat(ALICE, "alice"))
 
         bridge.handle(MethodCall(ChatBridge.METHOD_TAKE_PENDING_NAVIGATION, null), RecordingResult())
 
@@ -1306,7 +1306,7 @@ class ChatBridgeTest {
     @Test
     fun `Dart subscribing learns of a tap that came before the engine`() {
         // Cold start: the Activity reads the notification before Dart runs.
-        pendingNavigation.offer(ChatNavigation.PublicChat)
+        pendingNavigation.offer(AppNavigation.PublicChat)
 
         events.onListen(null, sink)
         dispatcher.scheduler.runCurrent()
@@ -1319,7 +1319,7 @@ class ChatBridgeTest {
     fun `a tap while running is pushed after the debounce, and its taking too`() {
         settleAndClear()
 
-        pendingNavigation.offer(ChatNavigation.PrivateChat(ALICE, null))
+        pendingNavigation.offer(AppNavigation.PrivateChat(ALICE, null))
         dispatcher.scheduler.advanceUntilIdle()
         poster.runAll()
         bridge.handle(MethodCall(ChatBridge.METHOD_TAKE_PENDING_NAVIGATION, null), RecordingResult())
@@ -1335,7 +1335,7 @@ class ChatBridgeTest {
     @Test
     fun `requestSnapshot pushes the pending destination`() {
         settleAndClear()
-        pendingNavigation.offer(ChatNavigation.PublicChat)
+        pendingNavigation.offer(AppNavigation.PublicChat)
 
         bridge.handle(MethodCall(ChatBridge.METHOD_REQUEST_SNAPSHOT, null), RecordingResult())
         dispatcher.scheduler.runCurrent()
@@ -1791,7 +1791,7 @@ class ChatBridgeTest {
             CoroutineScope(bridgeDispatcher + Job()),
             builders.asCoroutineDispatcher(),
             wifiAwarePeers,
-            PendingChatNavigation(),
+            PendingAppNavigation(),
             slowRecords
         ) { id -> ChatPrivateChat.Contact(id, meshPeerID = null, displayName = null, favoriteNickname = null) }
         /** Lets every build but the stalled one finish, and the bridge emit what they built. */

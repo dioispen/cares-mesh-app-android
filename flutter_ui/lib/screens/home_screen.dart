@@ -8,8 +8,8 @@ import '../services/admin_notice_service.dart';
 import '../services/mascot_service.dart';
 import '../services/profile_store.dart';
 import '../widgets/admin_notice_style.dart';
+import '../widgets/app_navigation_host.dart';
 import '../widgets/background_operation_notice.dart';
-import '../widgets/chat_navigation_host.dart';
 import '../widgets/user_avatar.dart';
 import 'admin_notice_screen.dart';
 import 'knowledge_screen.dart';
@@ -102,7 +102,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _navigateTo(Widget screen) {
-    // 聊天室用它的具名 route，點通知時（ChatNavigationHost）才認得出它已經開著。
+    // 聊天室用它的具名 route，點通知時（AppNavigationHost）才認得出它已經開著。
     final route = screen is ChatScreen ? ChatScreen.route() : MaterialPageRoute<void>(builder: (_) => screen);
     Navigator.push(context, route);
   }
@@ -131,7 +131,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   /// 首頁出現代表已走完 setup 與登入：點了的聊天通知從這裡帶到聊天畫面（#57）。
   @override
-  Widget build(BuildContext context) => ChatNavigationHost(child: _buildHome(context));
+  Widget build(BuildContext context) => AppNavigationHost(child: _buildHome(context));
 
   Widget _buildHome(BuildContext context) {
     final features = [

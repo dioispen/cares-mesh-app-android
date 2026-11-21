@@ -2,14 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../models/chat_navigation.dart';
+import '../models/app_navigation.dart';
 import '../screens/chat_screen.dart';
 import '../screens/private_chat_screen.dart';
 import '../services/chat_service.dart';
 
-/// 把點了的聊天通知帶到正確的畫面（#57）。放在登入後的首頁（`HomeScreen`）裡，包住它的內容。
+/// 把點了的通知帶到正確的畫面（#57）。放在登入後的首頁（`HomeScreen`）裡，包住它的內容。
 ///
-/// 原生收到通知點擊後只記下目的地（[ChatService.pendingNavigation]），由這裡在「可以導航」時取走
+/// 原生收到通知點擊後只記下目的地（[ChatService.pendingNavigation]：點擊經聊天的 bridge 傳來），
+/// 由這裡在「可以導航」時取走
 /// （[ChatService.takePendingNavigation]，每個點擊只處理一次）：這個 widget 掛上就代表 Dart 已走完
 /// setup 與登入、[ChatService] 也已啟動。所以 App 被通知冷啟動時，目的地會等到首頁出現才處理；
 /// 使用者還沒登入時就一直等到登入後（同一個 Activity 內；Activity 結束就丟棄）。首頁被其他畫面
@@ -24,8 +25,8 @@ import '../services/chat_service.dart';
 ///
 /// 依靠 [ChatScreen.routeName] 與 [PrivateChatScreen.routeName] 認出聊天畫面：聊天室只能以
 /// [ChatScreen.route] 開啟，私訊畫面只由聊天室開啟，所以聊天室若在 stack 上，一定在最上面或私訊畫面下面。
-class ChatNavigationHost extends StatefulWidget {
-  const ChatNavigationHost({super.key, required this.child, this.chatService});
+class AppNavigationHost extends StatefulWidget {
+  const AppNavigationHost({super.key, required this.child, this.chatService});
 
   final Widget child;
 
@@ -33,10 +34,10 @@ class ChatNavigationHost extends StatefulWidget {
   final ChatService? chatService;
 
   @override
-  State<ChatNavigationHost> createState() => _ChatNavigationHostState();
+  State<AppNavigationHost> createState() => _AppNavigationHostState();
 }
 
-class _ChatNavigationHostState extends State<ChatNavigationHost> {
+class _AppNavigationHostState extends State<AppNavigationHost> {
   /// 正在取走或處理一個點擊；期間到的新點擊等它完成後再處理。
   bool _busy = false;
 
@@ -51,7 +52,7 @@ class _ChatNavigationHostState extends State<ChatNavigationHost> {
   }
 
   @override
-  void didUpdateWidget(ChatNavigationHost oldWidget) {
+  void didUpdateWidget(AppNavigationHost oldWidget) {
     super.didUpdateWidget(oldWidget);
     final old = oldWidget.chatService ?? ChatService.instance;
     if (old != _chat) {
@@ -70,11 +71,11 @@ class _ChatNavigationHostState extends State<ChatNavigationHost> {
     if (_busy || !mounted || _chat.pendingNavigation.value == null) return;
     _busy = true;
     try {
-      final ChatNavigation? navigation;
+      final AppNavigation? navigation;
       try {
         navigation = await _chat.takePendingNavigation();
       } catch (e) {
-        debugPrint('ChatNavigationHost: takePendingNavigation failed: $e');
+        debugPrint('AppNavigationHost: takePendingNavigation failed: $e');
         return;
       }
       // null：別人已取走，或這個 app 不認得的目的地。
@@ -86,7 +87,7 @@ class _ChatNavigationHostState extends State<ChatNavigationHost> {
     if (mounted && _chat.pendingNavigation.value != null) unawaited(_onPending());
   }
 
-  Future<void> _navigate(ChatNavigation navigation) async {
+  Future<void> _navigate(AppNavigation navigation) async {
     final navigator = Navigator.of(context);
     String? top;
     navigator.popUntil((route) {
@@ -109,7 +110,7 @@ class _ChatNavigationHostState extends State<ChatNavigationHost> {
           await _chat.startPrivateChat(peerID);
         } catch (e) {
           // 留在聊天室；使用者可以從 peer 列表再開一次。
-          debugPrint('ChatNavigationHost: startPrivateChat failed: $e');
+          debugPrint('AppNavigationHost: startPrivateChat failed: $e');
         }
     }
   }

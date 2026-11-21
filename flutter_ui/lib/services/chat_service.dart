@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../bridge/bitchat_bridge.dart';
+import '../models/app_navigation.dart';
 import '../models/chat_conversation.dart';
 import '../models/chat_message.dart';
-import '../models/chat_navigation.dart';
 import '../models/chat_peer.dart';
 import '../models/chat_suggestions.dart';
 import '../models/chat_unread.dart';
@@ -47,7 +47,7 @@ class ChatService {
         _startPrivateChat = startPrivateChat ?? BitchatBridge.startPrivateChat,
         _endPrivateChat = endPrivateChat ?? BitchatBridge.endPrivateChat,
         _openLatestUnread = openLatestUnreadPrivateChat ?? BitchatBridge.openLatestUnreadPrivateChat,
-        _takePendingNavigation = takePendingNavigation ?? BitchatBridge.takePendingChatNavigation,
+        _takePendingNavigation = takePendingNavigation ?? BitchatBridge.takePendingAppNavigation,
         _toggleFavorite = toggleFavorite ?? BitchatBridge.toggleFavorite;
 
   static final ChatService instance = ChatService();
@@ -75,7 +75,7 @@ class ChatService {
   final ValueNotifier<Map<String, List<ChatMessage>>> _privateChats =
       ValueNotifier<Map<String, List<ChatMessage>>>(const {});
   final ValueNotifier<ChatUnread> _unread = ValueNotifier<ChatUnread>(ChatUnread.none);
-  final ValueNotifier<ChatNavigation?> _pendingNavigation = ValueNotifier<ChatNavigation?>(null);
+  final ValueNotifier<AppNavigation?> _pendingNavigation = ValueNotifier<AppNavigation?>(null);
   final ValueNotifier<ChatConversationList?> _conversations = ValueNotifier<ChatConversationList?>(null);
 
   StreamSubscription<Map<String, dynamic>>? _subscription;
@@ -123,10 +123,10 @@ class ChatService {
   /// 在線 peer 的未讀數也在 [peerList] 的列上。
   ValueListenable<ChatUnread> get unread => _unread;
 
-  /// 使用者點了聊天通知、還沒處理的目的地（#57，原生 `PendingChatNavigation` 的投影）；沒有時 null。
-  /// App 被通知冷啟動時，它在 Dart 走完 setup／登入前就會出現，等可以導航的畫面（`ChatNavigationHost`）
+  /// 使用者點了聊天通知、還沒處理的目的地（#57，原生 `PendingAppNavigation` 的投影）；沒有時 null。
+  /// App 被通知冷啟動時，它在 Dart 走完 setup／登入前就會出現，等可以導航的畫面（`AppNavigationHost`）
   /// 來處理。只是提醒：導航前一定先 [takePendingNavigation]，照取到的去。
-  ValueListenable<ChatNavigation?> get pendingNavigation => _pendingNavigation;
+  ValueListenable<AppNavigation?> get pendingNavigation => _pendingNavigation;
 
   /// 開始接收聊天快照。可重複呼叫，只有第一次有效。
   ///
@@ -170,8 +170,8 @@ class ChatService {
 
   /// 取走使用者點聊天通知要去的地方（原生同時不再持有它），沒有或已被取走時回傳 null；
   /// [pendingNavigation] 隨即清為 null。只取、不導航。bridge 錯誤會往上拋。
-  Future<ChatNavigation?> takePendingNavigation() async {
-    final taken = ChatNavigation.fromMap(await _takePendingNavigation());
+  Future<AppNavigation?> takePendingNavigation() async {
+    final taken = AppNavigation.fromMap(await _takePendingNavigation());
     _pendingNavigation.value = null;
     return taken;
   }
@@ -238,7 +238,7 @@ class ChatService {
           return;
         }
         // 這個 app 不認得的目的地當作沒有：它留在原生，等下一次點擊取代。
-        _pendingNavigation.value = ChatNavigation.fromMap(event['navigation']);
+        _pendingNavigation.value = AppNavigation.fromMap(event['navigation']);
       case ChatEvents.conversations:
         _replace(_conversations, type, ChatConversationList.fromEvent(event));
     }

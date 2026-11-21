@@ -44,8 +44,8 @@ import kotlinx.coroutines.launch
  * 通知點擊（#57）：上游的聊天通知點下去都開這個 Activity（manifest `singleTop`、通知 intent 帶
  * `SINGLE_TOP | CLEAR_TOP`）。App 還在時由 [onNewIntent] 收到，App 已關閉（只剩前景服務）時由
  * [onCreate] 冷啟動收到。兩者都照 `MainActivity.handleNotificationIntent` 讀 intent extras
- * （[ChatNavigation.fromNotification]）並清掉該對話的通知，但不直接開畫面：只有 Dart 知道何時可以
- * 導航（走完自己的 setup 與登入之後），所以把目的地交給 [PendingChatNavigation]，由 Dart 以
+ * （[AppNavigation.fromNotification]）並清掉該對話的通知，但不直接開畫面：只有 Dart 知道何時可以
+ * 導航（走完自己的 setup 與登入之後），所以把目的地交給 [PendingAppNavigation]，由 Dart 以
  * `chat_takePendingNavigation` 取走。
  */
 class FlutterChatActivity : FlutterFragmentActivity() {
@@ -64,7 +64,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     }
 
     /** The notification tap Dart has yet to act on; kept across Activity recreation. */
-    private val pendingNavigation: PendingChatNavigation by viewModels()
+    private val pendingNavigation: PendingAppNavigation by viewModels()
 
     /** 大頭貼選圖；registerForActivityResult 必須在 STARTED 之前，所以在欄位初始化時建立。 */
     private val avatarPhotoPicker = AvatarPhotoPicker(this)
@@ -149,7 +149,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
      * mesh service's notification) only brings the app to the front.
      */
     private fun receiveNotificationTap(intent: Intent) {
-        val navigation = ChatNavigation.fromNotification(intent) ?: return
+        val navigation = AppNavigation.fromNotification(intent) ?: return
         navigation.clearNotifications(chatViewModel)
         pendingNavigation.offer(navigation)
     }

@@ -42,7 +42,7 @@ object ChatSerialization {
     /** Snapshot of upstream's unread private messages (see [ChatUnread]). */
     const val EVENT_UNREAD = "chat_unread"
 
-    /** Snapshot of the tapped notification Dart has yet to act on (see [PendingChatNavigation]). */
+    /** Snapshot of the tapped notification Dart has yet to act on (see [PendingAppNavigation]). */
     const val EVENT_PENDING_NAVIGATION = "chat_pending_navigation"
 
     /** Snapshot of the native sheet's conversations section (see [ChatConversations]). */
@@ -297,16 +297,16 @@ object ChatSerialization {
     /**
      * Where a tapped notification asks to go: `{target: "privateChat", peerID, senderNickname}`
      * (`senderNickname` may be null) or `{target: "publicChat"}`; null for nowhere. Answers
-     * `chat_takePendingNavigation`. Dart mirrors it in `flutter_ui/lib/models/chat_navigation.dart`.
+     * `chat_takePendingNavigation`. Dart mirrors it in `flutter_ui/lib/models/app_navigation.dart`.
      */
-    fun navigation(navigation: ChatNavigation?): Map<String, Any?>? = when (navigation) {
+    fun navigation(navigation: AppNavigation?): Map<String, Any?>? = when (navigation) {
         null -> null
-        is ChatNavigation.PrivateChat -> mapOf(
+        is AppNavigation.PrivateChat -> mapOf(
             "target" to "privateChat",
             "peerID" to navigation.peerID,
             "senderNickname" to navigation.senderNickname
         )
-        ChatNavigation.PublicChat -> mapOf("target" to "publicChat")
+        AppNavigation.PublicChat -> mapOf("target" to "publicChat")
     }
 
     /**
@@ -314,7 +314,7 @@ object ChatSerialization {
      * ([navigation] map, null when none). It only tells Dart there is one: Dart navigates on what
      * `chat_takePendingNavigation` answers, so each tap is acted on once.
      */
-    fun pendingNavigationEvent(navigation: ChatNavigation?): Map<String, Any?> = mapOf(
+    fun pendingNavigationEvent(navigation: AppNavigation?): Map<String, Any?> = mapOf(
         "type" to EVENT_PENDING_NAVIGATION,
         "navigation" to navigation(navigation)
     )
