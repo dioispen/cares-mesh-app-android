@@ -56,8 +56,11 @@ interface AdminNoticeStore {
 
     /**
      * 已更正 (撤回與取代): [messageId] was replaced by [correctedBy]; its content is erased. Returns
-     * the notice as it is stored now; null when it is not stored or not [AdminNoticeStatus.ACTIVE]
-     * (a second correction does not move [StoredAdminNotice.replacedBy]), so a caller acts once.
+     * the notice as it is stored now; null when nothing changed, so a caller acts once: it is not
+     * stored, withdrawn, or already corrected by a notice stored here. A corrected notice whose
+     * [StoredAdminNotice.replacedBy] is not stored (a correction this device cannot read, such as
+     * the part of a split targeted correction encrypted to other devices) moves its link to
+     * [correctedBy], so it ends up pointing at a correction listed here whenever there is one.
      */
     fun markCorrected(messageId: String, correctedBy: String): StoredAdminNotice?
 
@@ -125,7 +128,12 @@ class EncryptedAdminNoticeStore internal constructor(
 
     override fun markCorrected(messageId: String, correctedBy: String): StoredAdminNotice? =
         replace(messageId) { stored ->
-            stored.takeIf { it.status == AdminNoticeStatus.ACTIVE }
+            val linkable = when (stored.status) {
+                AdminNoticeStatus.ACTIVE -> true
+                AdminNoticeStatus.CORRECTED -> stored.replacedBy != correctedBy && stored.replacedBy?.let(prefs::contains) != true
+                AdminNoticeStatus.WITHDRAWN -> false
+            }
+            stored.takeIf { linkable }
                 ?.copy(status = AdminNoticeStatus.CORRECTED, replacedBy = correctedBy, content = "")
         }
 

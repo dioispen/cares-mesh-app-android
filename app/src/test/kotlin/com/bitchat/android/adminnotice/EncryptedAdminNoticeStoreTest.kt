@@ -127,6 +127,7 @@ class EncryptedAdminNoticeStoreTest {
     fun `only an active notice can be corrected, and anything but a withdrawn one withdrawn`() {
         store.insertIfAbsent(notice("1111111111111111"))
         store.markCorrected("1111111111111111", correctedBy = "2222222222222222")
+        store.insertIfAbsent(notice("2222222222222222", issuedAtMs = VECTOR_ISSUED_AT + 60_000L))
         var changes = 0
         store.addChangeListener { changes++ }
 
@@ -135,10 +136,24 @@ class EncryptedAdminNoticeStoreTest {
         assertNull("already withdrawn", store.markWithdrawn("1111111111111111"))
         assertNull("a withdrawn notice is not corrected", store.markCorrected("1111111111111111", "3333333333333333"))
 
-        val stored = store.all().single()
+        val stored = store.all().single { it.messageId == "1111111111111111" }
         assertEquals(AdminNoticeStatus.WITHDRAWN, stored.status)
         assertEquals("it was corrected before it was withdrawn", "2222222222222222", stored.replacedBy)
         assertEquals("one change: the withdrawal", 1, changes)
+    }
+
+    @Test
+    fun `a correction moves the link while the one it points to is not listed here`() {
+        // A targeted correction split into several notices, or sent to other devices: this device
+        // may hear first one it cannot open, and only later the one it can.
+        store.insertIfAbsent(notice("1111111111111111"))
+        store.markCorrected("1111111111111111", correctedBy = "2222222222222222")
+
+        assertEquals("3333333333333333", store.markCorrected("1111111111111111", "3333333333333333")?.replacedBy)
+        store.insertIfAbsent(notice("3333333333333333", issuedAtMs = VECTOR_ISSUED_AT + 60_000L))
+        assertNull("now it points to one listed here", store.markCorrected("1111111111111111", "4444444444444444"))
+
+        assertEquals("3333333333333333", store.all().single { it.messageId == "1111111111111111" }.replacedBy)
     }
 
     @Test
