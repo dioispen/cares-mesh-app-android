@@ -4,14 +4,15 @@
 
 這支工具是**開發用**的，也是**管理後台組不接發送頁面時的備案**。後台組接下的話，日常發送改用管理後台，這支工具留給開發與測試。
 
-目前只支援**廣播**。取代、撤回與定向公告由之後的票補上。
+支援**廣播**與**定向公告**（以 uid 或 Reporter Handle 指定收件對象）。取代與撤回由之後的票（#139）補上。
 
 ## 發公告之前
 
 - **實地實驗進行中不發公告。** 公告會在 mesh 上洪泛、經 gossip sync 一路補送到到期為止，會干擾實驗的量測（docs/ADMIN_NOTICE_V1.md「處理規則」）。發之前先向實驗負責人確認現在沒有實驗在跑。
 - **送出後收不回來。** 公告一進到 mesh 就會被一路轉送，刪除 Firestore 文件**不是**撤回。這支工具還不能撤回，寫錯了只能等它過期，所以有效期不要設得比需要的長。
+- 定向公告的內容只有收件裝置解得開，但 `admin_notice_records` 留有明文與收件對象，只有 Administrator 讀得到。
 - **內容最多 300 bytes**（UTF-8，大約 100 個中文字）；**有效期最長 24 小時**。超過的話工具會拒絕，不會送出。
-- 寫進 `admin_notices` 的只有簽好章的 `wire`。所有登入帳號都讀得到它，任何 Gateway 都會把它注入 mesh，所以內容要當成公開的。
+- 寫進 `admin_notices` 的只有簽好章的 `wire`。所有登入帳號都讀得到它，任何 Gateway 都會把它注入 mesh，所以廣播的內容要當成公開的；定向公告的 `wire` 只看得出有幾個收件裝置。
 
 ## 管理端私鑰
 
@@ -88,7 +89,9 @@
 | `--key` | 私鑰檔路徑，預設 `~/.config/cares-mesh/admin-notice/admin-ed25519-<keyId>.key` |
 | `--project` | Firestore 專案，預設是 `app/google-services.json` 的 `bitchat-android-disaster-app` |
 | `--yes` | 不詢問，直接送出 |
-| `--dry-run` | 只組包、簽章並印出，不登入也不寫入 |
+| `--uid` | 定向公告的收件帳號，可以重複，見「發一則定向公告」 |
+| `--handle` | 定向公告的收件 Reporter Handle，可以重複，見「發一則定向公告」 |
+| `--dry-run` | 只組包、簽章並印出，不寫入。廣播不登入；定向公告要登入查收件裝置 |
 
 ### 工具做了什麼
 
@@ -108,10 +111,69 @@
 | 寫入失敗：`ALREADY_EXISTS` | messageId 撞號（機率極低），什麼都沒有寫入；重新執行即可 |
 | 私鑰檔與 admin_public_keys.json 登記的公鑰不符 | 選錯私鑰檔，或 `--key-id` 不對 |
 
+## 發一則定向公告
+
+定向公告只有收件裝置解得開：轉送它的人看不到內容，也看不出是發給誰的。需要的東西與廣播相同，再加上收件對象。
+
+### 收件對象
+
+- `--uid <uid>`：一個帳號。加密給它在 `reporter_handles/{uid}/installations` 底下登記過的**每一台**裝置。
+- `--handle <Reporter Handle>`：一台裝置，例如在 `mesh_reports` 上看到的 Handle（12 個十六進位字元）。只經由 mesh 求救、從沒自己上傳過的 Reporter，用這個指定。
+- 兩者都可以重複、可以混用；同一台裝置被指定兩次只算一次。
+- 每份有 `noticePublicKey` 的登記是一台收件裝置。舊版 App 寫的登記沒有它，收不到定向公告。
+
+### 步驟
+
+1. 先用 `--dry-run` 看一次。定向公告要讀收件裝置的公鑰，只有 Administrator 讀得到，所以 `--dry-run` 也會登入；它只查詢，不寫入。
+
+   ```bash
+   python3 tools/admin-notice/admin_notice_tool.py send --dry-run \
+     --email you@example.org --level important --valid-for 2h \
+     --uid <uid> --handle <reporter handle> \
+     --content "救援人員約 10 分鐘內抵達，請留在原地"
+   ```
+
+2. 看清楚印出的收件裝置與警告，拿掉 `--dry-run` 再執行一次。工具列出收件裝置之後才問要不要送出，輸入 `yes` 才寫入。
+3. 看到每一則的「已寫入 admin_notices/… 與 admin_notice_records/…」就完成了。
+
+### 警告與錯誤
+
+| 訊息 | 原因與處理 |
+|---|---|
+| 找不到收件裝置，什麼都沒有送出 | 列出的收件對象沒有任何可加密的裝置：帳號從未在有網路時登入過新版 App、Handle 沒有人登記，或最新的登記是舊版 App。任何一個對象找不到就整批不送；改正或拿掉它再送 |
+| 警告：Reporter Handle … 有 N 個帳號宣稱 | 同一個 Handle 登記在幾個 uid 底下。只加密給 `registeredAt` 最新的那份。可能是同一支手機換過帳號，也可能是有人把聽到的 Handle 登記在自己底下（冒領，docs/ADMIN_NOTICE_V1.md 已知限制 10）。不確定時改用 `--uid` |
+| 警告：收件裝置 … 的登記超過 30 天 | 那支手機可能已經換帳號、重裝或不再使用。照樣加密給它，只是它可能收不到 |
+| 查詢收件裝置失敗：`PERMISSION_DENIED` | 帳號不是 Administrator |
+| 查詢收件裝置失敗：`FAILED_PRECONDITION` | 正式環境還沒建立 `installations.reporterHandle` 的 collection group 索引（docs/MESH_GATEWAY.md 第 8 節）。emulator 不需要索引 |
+
+### 超過 5 台收件裝置
+
+每則定向公告最多 5 台收件裝置。超過時工具自動拆成最少的幾則，每則的裝置數盡量平均（6 台拆成 3 + 3，不是 5 + 1：收件裝置越少 payload 越小，4 台以內、內容 169 bytes 以內的公告不必切片）。每則有自己的 messageId，`admin_notice_records` 以同一個 `batchId`（第一則的 messageId）串起來，整批在同一次 commit 寫入，不會只送出一半。
+
+撤回一個拆成多則的批次時，每一則都要各發一則撤回。這支工具還不能撤回（#139）；到時以 `batchId` 查出同一批的每一則。
+
+### 工具做了什麼
+
+1. 和廣播一樣先檢查內容、有效期與私鑰，任何一項不對就在登入前拒絕。
+2. 登入後以 Firestore REST `runQuery` 查收件裝置：`--uid` 查 `reporter_handles/{uid}/installations`；`--handle` 以 collection group 查詢（`allDescendants`）找 `reporterHandle == handle` 的登記。查詢都經過 security rules。
+3. 每則用新的一次性 X25519 金鑰、contentKey 與 nonce 加密，收件條目以隨機順序排列（`notice_format.build_targeted`，docs/ADMIN_NOTICE_V1.md「定向 body」），再簽章並用 `admin_public_keys.json` 驗一次。
+4. 一次 `documents:commit` 建立每一則的 `admin_notices/{messageId}`（只有 `wire`，沒有收件者）與 `admin_notice_records/{messageId}`。
+
+### `admin_notice_records` 的收件欄位
+
+廣播的欄位之外，定向公告的紀錄多了這幾個（docs/ADMIN_NOTICE_V1.md「Firestore」）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `recipientUids` | array of string | 操作者以 `--uid` 指定的帳號，依指定的順序；同一批的每一則都一樣 |
+| `recipientHandles` | array of string | 操作者以 `--handle` 指定的 Reporter Handle；同一批的每一則都一樣 |
+| `recipientCount` | integer | 這一則加密給的收件裝置數，即 `wire` 的 recipientCount |
+| `recipientDevices` | array of map | 這一則加密給的每台收件裝置：`uid`、`reporterHandle`（登記文件的路徑）與 `noticePublicKey`（當時用的公鑰）。順序與 `wire` 裡的條目無關 |
+
 ## 測試
 
 - 單元測試，不連任何網路：在本目錄執行 `python3 -m unittest`。Firebase 在 HTTP 邊界換成假的；emulator 整合測試會被略過。
-- 對著 Firebase emulator 跑整合測試（需要 Java），確認 REST commit 真的通得過 `firestore.rules`：
+- 對著 Firebase emulator 跑整合測試（需要 Java），確認 REST 查詢與 commit 真的通得過 `firestore.rules`：
 
   ```bash
   cd firestore-tests && npm ci && npm run test:admin-notice-tool
@@ -124,9 +186,9 @@
 
 | 檔案 | 用途 |
 |---|---|
-| `admin_notice_tool.py` | 命令列：`keygen`、`send` |
-| `notice_format.py` | payload 的組包、簽章與檢查，與產生器共用 |
-| `firebase_rest.py` | Firebase Auth 與 Firestore 的 REST 呼叫，只用標準函式庫 |
+| `admin_notice_tool.py` | 命令列：`keygen`、`send`（廣播與定向公告） |
+| `notice_format.py` | payload 的組包、簽章、定向加密與檢查，與產生器共用 |
+| `firebase_rest.py` | Firebase Auth 與 Firestore 的 REST 呼叫（登入、commit、runQuery），只用標準函式庫 |
 | `gen_test_vectors.py` | 產生規格書附錄的 test vectors |
 | `admin_public_keys.json` | keyId → 正式公鑰，App 內建公鑰表的來源 |
 | `test_*.py` | 單元測試與 emulator 整合測試 |
