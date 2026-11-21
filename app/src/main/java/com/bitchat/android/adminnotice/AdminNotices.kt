@@ -29,12 +29,27 @@ object AdminNotices {
                 .also { store = it }
         }
 
-    fun install(context: Context) {
+    /**
+     * Where this process's receipts go (#143): the delivery receipts the Inbox's presenter writes,
+     * and the read receipts `FlutterChatActivity` wires into its bridge. [AdminNoticeReceipts.NONE]
+     * until [install].
+     */
+    @Volatile
+    var receipts: AdminNoticeReceipts = AdminNoticeReceipts.NONE
+        private set
+
+    /**
+     * [receipts] is passed in, not built here: its Firestore implementation lives in `gateway/`,
+     * the only Kotlin package that uses Firebase.
+     */
+    fun install(context: Context, receipts: AdminNoticeReceipts) {
         val appContext = context.applicationContext
+        this.receipts = receipts
         val presenter = LocalAdminNoticePresenter(
             store = store(appContext),
             notifier = SystemAdminNoticeNotifier(appContext),
-            nowMs = System::currentTimeMillis
+            nowMs = System::currentTimeMillis,
+            receipts = receipts
         )
         AdminNoticeBridge.install(
             AdminNoticeInbox(

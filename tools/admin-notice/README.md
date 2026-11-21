@@ -170,6 +170,12 @@
 | `recipientCount` | integer | 這一則加密給的收件裝置數，即 `wire` 的 recipientCount |
 | `recipientDevices` | array of map | 這一則加密給的每台收件裝置：`uid`、`reporterHandle`（登記文件的路徑）與 `noticePublicKey`（當時用的公鑰）。順序與 `wire` 裡的條目無關 |
 
+### 回條
+
+收件裝置解開定向公告後會寫回條，這支工具不讀它。以 Administrator 帳號在 Firebase 主控台或管理後台查看 `admin_notices/{messageId}/receipts`：每個收件帳號一份（文件 ID 是 uid），`deliveredAt` 是解開的時間、`via` 是 `firestore`（從 Firestore 收到）或 `ble`（經 mesh 收到）、`readAt` 是第一次在 App 裡讀到的時間（還沒讀就沒有）。時間來自手機時鐘。經 mesh 收到的人要等連上網路回條才會出現，所以還沒有回條不代表沒收到。拆成多則的批次，每一則各有自己的回條。欄位的完整說明見 docs/ADMIN_NOTICE_V1.md「給管理後台的介面契約」。
+
+刪除 `admin_notices/{messageId}` 不會刪掉已經寫進來的回條，但之後的回條會被擋下：要收回條就不要提早刪公告文件。
+
 ## 更正與撤回
 
 公告送出後就收不回來，只能再發一則**取代**它的公告（docs/ADMIN_NOTICE_V1.md「撤回與取代」）。收到的手機會把原公告標成「已更正」或「已撤回」、清掉它的內容、收回它的通知，中繼也不再補送它。**不要**用刪除 `admin_notices` 文件代替撤回：公告已經在 mesh 上，刪除文件攔不住它。

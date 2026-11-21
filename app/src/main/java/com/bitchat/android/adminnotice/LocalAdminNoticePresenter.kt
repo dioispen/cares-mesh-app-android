@@ -12,7 +12,8 @@ interface AdminNoticeNotifier {
 
 /**
  * The Inbox's [AdminNoticePresenter] on a phone: store the notice, and notify only when it was not
- * stored before, so neither a second path nor an App restart notifies twice (收件端呈現).
+ * stored before, so neither a second path nor an App restart notifies twice (收件端呈現). A
+ * targeted notice stored for the first time also gets its delivery receipt (#143).
  *
  * A corrected or withdrawn notice (撤回與取代) is marked so in the store, which erases its content,
  * and its notification is cancelled: a stale order must not stay in the notification shade. A
@@ -22,10 +23,12 @@ interface AdminNoticeNotifier {
 class LocalAdminNoticePresenter(
     private val store: AdminNoticeStore,
     private val notifier: AdminNoticeNotifier,
-    private val nowMs: () -> Long
+    private val nowMs: () -> Long,
+    private val receipts: AdminNoticeReceipts = AdminNoticeReceipts.NONE
 ) : AdminNoticePresenter {
 
     override fun present(notice: ReceivedAdminNotice) {
+        val now = nowMs()
         val firstTime = try {
             store.insertIfAbsent(
                 StoredAdminNotice(
@@ -37,7 +40,7 @@ class LocalAdminNoticePresenter(
                     replaces = notice.replaces,
                     content = notice.content,
                     status = AdminNoticeStatus.ACTIVE,
-                    receivedAtMs = nowMs()
+                    receivedAtMs = now
                 )
             )
         } catch (e: Exception) {
@@ -46,7 +49,23 @@ class LocalAdminNoticePresenter(
             Log.w(TAG, "Could not store Admin Notice ${notice.messageId}; notifying anyway: ${e.message}")
             true
         }
-        if (firstTime) notifier.notify(notice)
+        if (!firstTime) return
+        notifier.notify(notice)
+        // Only on the first insert: after a restart the listener reads every unexpired notice
+        // again, and a second receipt would move deliveredAt and could turn `ble` into `firestore`.
+        if (notice.kind == AdminNoticeKind.TARGETED) deliveredReceipt(notice, now)
+    }
+
+    /**
+     * An exception here would reach the mesh as "do not relay", for a notice already recorded as in
+     * the mesh: a receipt that cannot be written is only logged.
+     */
+    private fun deliveredReceipt(notice: ReceivedAdminNotice, now: Long) {
+        try {
+            receipts.delivered(notice.messageId, notice.source, now)
+        } catch (e: Exception) {
+            Log.w(TAG, "No delivery receipt for Admin Notice ${notice.messageId}: ${e.message}")
+        }
     }
 
     override fun correct(messageId: String, correctedBy: String) =

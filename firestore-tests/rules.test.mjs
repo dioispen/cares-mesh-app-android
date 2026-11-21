@@ -34,6 +34,10 @@
 //   - admin_notice_records：管理端留存的明文與操作者，只有 Administrator 能讀與建立
 //   最關鍵的兩條是「非 Administrator 不能建立」與「createdBy 必須是寫入者自己」——共用私鑰之下，
 //   createdBy 是唯一能追查操作者的依據。
+//
+//   issue #143
+//   - admin_notices/{messageId}/receipts：定向公告的回條，只有本人能寫自己的那份，只有 Administrator 讀得到
+//   最關鍵的兩條是「不能寫別人的回條」與「本人也讀不到」——via == 'ble' 會透露收件者當時沒有網路。
 
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -1417,6 +1421,148 @@ describe('admin_notices（#135：只有 Administrator 能發 Admin Notice，所�
         await assertFails(deleteDoc(noticeRef(db)));
       }
       await assertSucceeds(deleteDoc(noticeRef(dbFor(ADMIN))));
+    });
+  });
+
+  // admin_notices/{messageId}/receipts/{uid}（#143、docs/ADMIN_NOTICE_V1.md「回條」）：定向公告的收件者
+  // 自己申報的送達與已讀。情境：Alice 是收件者，沒有網路時經 mesh 收到，回條在離線佇列裡等到連上網路
+  // 才送出，所以時間是幾小時前的手機時間。
+  describe('receipts（#143：只有本人能寫自己的回條，只有 Administrator 讀得到）', () => {
+    const hoursAgo = (h) => Timestamp.fromMillis(Date.now() - h * 3_600_000);
+    const receiptRef = (db, uid = ALICE, id = MESSAGE_ID) => doc(db, `admin_notices/${id}/receipts/${uid}`);
+    // App 的寫法（FirestoreAdminNoticeReceipts）：送達與已讀分兩次 merge 寫入同一份。
+    const deliver = (fields = {}, uid = ALICE, owner = uid) =>
+      setDoc(receiptRef(dbFor(uid), owner), { deliveredAt: hoursAgo(3), via: 'ble', ...fields }, { merge: true });
+    const markRead = (uid = ALICE) => setDoc(receiptRef(dbFor(uid), uid), { readAt: hoursAgo(2) }, { merge: true });
+    const storedReceipt = async (uid = ALICE) => {
+      let data;
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        data = (await getDoc(receiptRef(ctx.firestore(), uid))).data();
+      });
+      return data;
+    };
+
+    it('★ 收件者寫得進自己的回條：送達與之後的已讀合在同一份', async () => {
+      await seed();
+      await assertSucceeds(deliver());
+      await assertSucceeds(markRead());
+
+      const receipt = await storedReceipt();
+      if (receipt.via !== 'ble' || !receipt.deliveredAt || !receipt.readAt) {
+        throw new Error(`回條內容不對：${JSON.stringify(receipt)}`);
+      }
+    });
+
+    it('★ 經 Firestore 收到的回條 via 是 firestore', async () => {
+      await seed();
+      await assertSucceeds(deliver({ via: 'firestore' }));
+    });
+
+    it('★ 不能寫別人的回條，Administrator、Verified Rescuer、未登入都不行', async () => {
+      await seed();
+      for (const uid of [BOB, ADMIN, RESCUER]) {
+        await assertFails(deliver({}, uid, ALICE));
+      }
+      await assertFails(setDoc(receiptRef(anonDb()), { deliveredAt: hoursAgo(3), via: 'ble' }, { merge: true }));
+    });
+
+    it('★ 公告文件不存在時被擋', async () => {
+      await assertFails(deliver());
+      await seed();
+      await assertFails(setDoc(
+        receiptRef(dbFor(ALICE), ALICE, 'ffffffffffffffff'),
+        { deliveredAt: hoursAgo(3), via: 'ble' },
+        { merge: true },
+      ));
+    });
+
+    it('★ via 只能是 firestore 或 ble', async () => {
+      await seed();
+      for (const via of ['wifi', 'mesh', 'BLE', 'Firestore', '', null, 1]) {
+        await assertFails(deliver({ via }));
+      }
+    });
+
+    it('★ 缺 deliveredAt 或 via 被擋', async () => {
+      await seed();
+      await assertFails(setDoc(receiptRef(dbFor(ALICE)), { via: 'ble' }, { merge: true }));
+      await assertFails(setDoc(receiptRef(dbFor(ALICE)), { deliveredAt: hoursAgo(3) }, { merge: true }));
+    });
+
+    it('★ 多餘欄位被擋', async () => {
+      await seed();
+      await assertFails(deliver({ reporterHandle: 'abcdef012345' }));
+      await assertFails(deliver({ content: '救援人員約 10 分鐘內抵達' }));
+      await assertSucceeds(deliver());
+      await assertFails(updateDoc(receiptRef(dbFor(ALICE)), { readAt: hoursAgo(1), uid: ALICE }));
+    });
+
+    it('deliveredAt 與 readAt 必須是 timestamp', async () => {
+      await seed();
+      await assertFails(deliver({ deliveredAt: Date.now() }));
+      await assertFails(deliver({ deliveredAt: new Date().toISOString() }));
+      await assertFails(deliver({ readAt: Date.now() }));
+      await assertFails(deliver({ readAt: null }));
+    });
+
+    // 送達那次沒寫成，或同一支手機換帳號後讀到前一個帳號收的公告：已讀只能補在已有的回條上。
+    it('★ 沒有送達紀錄時，只有 readAt 的寫入被擋', async () => {
+      await seed();
+      await assertFails(markRead());
+      await assertFails(markRead(BOB));
+    });
+
+    // 離線佇列可能隔了很久才送出；手機時鐘也可能快幾分鐘。規則不拿 request.time 比對。
+    it('時間用手機時鐘：一天前的送達、比伺服器快的已讀都收', async () => {
+      await seed();
+      await assertSucceeds(deliver({ deliveredAt: hoursAgo(30) }));
+      await assertSucceeds(setDoc(
+        receiptRef(dbFor(ALICE)),
+        { readAt: Timestamp.fromMillis(Date.now() + 5 * 60_000) },
+        { merge: true },
+      ));
+    });
+
+    it('★ 同一帳號的另一台裝置再寫一次，以最後寫入的為準', async () => {
+      await seed();
+      await assertSucceeds(deliver({ via: 'ble' }));
+      await assertSucceeds(deliver({ via: 'firestore', deliveredAt: hoursAgo(1) }));
+
+      const receipt = await storedReceipt();
+      if (receipt.via !== 'firestore') throw new Error(`via 應該是最後寫入的 firestore，卻是 ${receipt.via}`);
+    });
+
+    const seedReceipt = async () => {
+      await seed();
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(receiptRef(ctx.firestore()), { deliveredAt: hoursAgo(3), via: 'ble', readAt: hoursAgo(2) });
+      });
+    };
+
+    it('★ 只有 Administrator 讀得到（單筆與整個 receipts），本人也讀不到', async () => {
+      await seedReceipt();
+      await assertSucceeds(getDoc(receiptRef(dbFor(ADMIN))));
+      const snap = await assertSucceeds(getDocs(collection(dbFor(ADMIN), `admin_notices/${MESSAGE_ID}/receipts`)));
+      if (snap.size !== 1) throw new Error(`查到 ${snap.size} 份回條，預期 1 份`);
+      for (const db of [dbFor(ALICE), dbFor(BOB), dbFor(RESCUER), anonDb()]) {
+        await assertFails(getDoc(receiptRef(db)));
+        await assertFails(getDocs(collection(db, `admin_notices/${MESSAGE_ID}/receipts`)));
+      }
+    });
+
+    it('★ 不能刪除，本人與 Administrator 都不行', async () => {
+      await seedReceipt();
+      await assertFails(deleteDoc(receiptRef(dbFor(ALICE))));
+      await assertFails(deleteDoc(receiptRef(dbFor(ADMIN))));
+    });
+
+    // Firestore 刪除文件不會連帶刪掉子集合。
+    it('Administrator 刪掉公告文件後，回條仍讀得到，但不能再寫', async () => {
+      await seedReceipt();
+      await assertSucceeds(deleteDoc(noticeRef(dbFor(ADMIN))));
+
+      await assertSucceeds(getDoc(receiptRef(dbFor(ADMIN))));
+      await assertFails(markRead());
     });
   });
 

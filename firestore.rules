@@ -353,6 +353,37 @@ service cloud.firestore {
       allow update: if false;
       // 刪除只是清理 Firestore，不算撤回：Gateway 收到刪除事件時什麼都不做。
       allow delete: if isAdmin();
+
+      // receipts/{uid}：定向公告的回條（#143、docs/ADMIN_NOTICE_V1.md「回條」）。收件帳號每個一份，
+      // 同一帳號的多台裝置共用，以最後寫入的為準。App 由 Kotlin 端的 Firestore SDK 分兩次 merge 寫入：
+      // 解密成功時寫 deliveredAt 與 via，第一次在 App 裡讀到時寫 readAt。沒有網路時寫入留在 SDK 的
+      // 離線佇列，連上網路才送到這裡。
+      //
+      // 回條是收件者自己申報的：規則只認得是本人寫自己的那份，不知道他是不是真的收件者。規則能做的是：
+      //   - 身分：只能寫在自己的 uid 底下，而且公告文件要存在（exists() 每次寫入多算一次讀取）。
+      //   - 格式：deliveredAt 與 via 一定要有，readAt 可有可無。所以只有 readAt 的寫入，只能補在這個
+      //     帳號已有的回條上：送達那次沒有寫成、或同一支手機換了帳號後讀到前一個帳號的公告，都不會
+      //     憑空多出一份沒有送達紀錄的回條。
+      //   - 時間：用手機時鐘，不比對 request.time。離線排隊的寫入，伺服器時間是連上網那一刻。
+      //
+      // 只有 Administrator 讀得到，本人也讀不到：App 只寫不讀。via == 'ble' 會透露收件者當時沒有網路。
+      // 不能刪除；Administrator 刪掉公告文件時，這裡的回條仍留著、仍讀得到，只是之後不能再寫。
+      match /receipts/{uid} {
+        function validReceipt() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['deliveredAt', 'readAt', 'via'])
+              && data.keys().hasAll(['deliveredAt', 'via'])
+              && data.deliveredAt is timestamp
+              && data.via in ['firestore', 'ble']
+              && (!('readAt' in data) || data.readAt is timestamp);
+        }
+
+        allow read: if isAdmin();
+        allow create, update: if isOwner(uid)
+                              && exists(/databases/$(database)/documents/admin_notices/$(messageId))
+                              && validReceipt();
+        allow delete: if false;
+      }
     }
 
     // admin_notice_records/{messageId}：管理端留存每則 Admin Notice 的明文內容、收件對象、kind、
