@@ -45,6 +45,18 @@ object AppConstants {
         // packet timestamp. Long enough for a Rescuer to walk into range within tens of minutes,
         // short enough that reports from people who left or changed Status don't linger (#91).
         const val HEALTH_REPORT_RETENTION_MS: Long = 2 * 60 * 60 * 1000L
+        // How far ahead of our clock a Health Report's timestamp may be and still enter the sync
+        // set. Its age is counted by our own clock, so a report from a phone whose clock runs
+        // hours fast would otherwise stay that much longer than the retention period. The
+        // 2026-11-18 trial measured at most 1.3 s between four phones; 10 min matches the ANNOUNCE
+        // skew limit (AnnouncementIdentityValidator) and the mesh_reports rule for reportTime,
+        // and keeps any report at most 2 h 10 min.
+        const val HEALTH_REPORT_MAX_FUTURE_SKEW_MS: Long = 10 * 60 * 1000L
+        // A standing Health Report (SOS raised, or Status 輕傷/重傷) is sent again, newly signed
+        // and timestamped, this long after the last send (ADR-0010). Must stay well below
+        // HEALTH_REPORT_RETENTION_MS: four sends per retention period, so the report outlives a
+        // re-send that reached nobody or a wait that Doze stretched.
+        const val STANDING_REPORT_RESEND_INTERVAL_MS: Long = 30 * 60 * 1000L
         // Upper bound on senders whose signing key is remembered, after they leave, for verifying
         // their synced Health Reports (#95). Well above the sync set's per-sender capacity.
         const val MAX_HEALTH_REPORT_SIGNING_KEYS: Int = 1_000

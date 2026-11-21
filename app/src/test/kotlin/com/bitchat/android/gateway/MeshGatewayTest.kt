@@ -116,6 +116,20 @@ class MeshGatewayTest {
     }
 
     @Test
+    fun `a standing report re-sent in a new packet is not uploaded again`() = runTest {
+        val gateway = gateway()
+        val report = heard()
+
+        gateway.onReport(report)
+        // ADR-0010：Reporter 的裝置 30 分鐘後重新簽章、換了封包時間戳，payload 原封不動
+        now += 30 * 60_000L
+        gateway.onReport(heard(reportTimeMs = report.reportTimeMs, rawPacket = byteArrayOf(0x01, 0x30, 0x02)))
+        runCurrent()
+
+        assertEquals(listOf(report), uploader.uploads.map { it.first })
+    }
+
+    @Test
     fun `an older report of the same Reporter is not uploaded after a newer one`() = runTest {
         val gateway = gateway()
 
@@ -467,11 +481,12 @@ class MeshGatewayTest {
     private fun heard(
         handle: String = "abcdef012345",
         reportTimeMs: Long = now - 60_000,
-        sos: Boolean = true
+        sos: Boolean = true,
+        rawPacket: ByteArray = byteArrayOf(0x01, 0x30)
     ) = GatewayReport(
         payload = HealthReportPayload(handle, HealthStatus.SEVERE, "wsqqqm", reportTimeMs, sos),
         senderPeerID = "0102030405060708",
-        rawPacket = byteArrayOf(0x01, 0x30),
+        rawPacket = rawPacket,
         announcement = null
     )
 

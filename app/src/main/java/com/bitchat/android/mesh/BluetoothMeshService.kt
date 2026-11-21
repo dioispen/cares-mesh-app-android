@@ -118,8 +118,13 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     private data class VoiceFrameRequest(val recipientPeerID: String?, val payload: ByteArray)
     private val voiceFrameQueue = Channel<VoiceFrameRequest>(capacity = 128)
     private lateinit var gossipSyncManager: GossipSyncManager
-    // Our own latest Health Report, kept on disk so sync still has it after a restart (P0-3)
-    private val ownHealthReport = OwnHealthReportKeeper(myPeerID, EncryptedOwnHealthReportStore(context))
+    // Our own latest Health Report, kept on disk so sync still has it after a restart (P0-3).
+    // A standing one outlives its sync expiry: MeshForegroundService re-sends it (ADR-0010).
+    internal val ownHealthReport = OwnHealthReportKeeper(
+        myPeerID,
+        EncryptedOwnHealthReportStore(context),
+        keepPastExpiry = com.bitchat.android.service.StandingHealthReport::isStanding
+    )
 
     // Service-level notification manager for background (no-UI) DMs
     private val serviceNotificationManager = com.bitchat.android.ui.NotificationManager(

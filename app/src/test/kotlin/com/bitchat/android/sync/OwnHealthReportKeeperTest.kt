@@ -116,6 +116,49 @@ class OwnHealthReportKeeperTest {
     }
 
     @Test
+    fun `a report held past expiry is still the latest own one but is not restored to sync`() = runBlocking {
+        val sent = signed(healthReport(myPeerID, now))
+        val holding = OwnHealthReportKeeper(myPeerID, store, nowMs = { now }, keepPastExpiry = { true })
+        holding.keep(sent)
+
+        // The phone was off for longer than the retention period (ADR-0010)
+        now += AppConstants.Sync.HEALTH_REPORT_RETENTION_MS + 60_000
+
+        assertNull(holding.latest())
+        assertEquals(sent, holding.latestOwn())
+        assertNotNull(store.slot)
+    }
+
+    @Test
+    fun `a newer report replaces one held past expiry`() = runBlocking {
+        val holding = OwnHealthReportKeeper(myPeerID, store, nowMs = { now }, keepPastExpiry = { true })
+        holding.keep(signed(healthReport(myPeerID, now)))
+        now += AppConstants.Sync.HEALTH_REPORT_RETENTION_MS + 60_000
+        val resent = signed(healthReport(myPeerID, now))
+
+        holding.keep(resent)
+
+        assertEquals(resent, holding.latest())
+    }
+
+    @Test
+    fun `changes moves on when a report is kept or cleared, not when nothing is written`() = runBlocking {
+        val keeper = keeper()
+        val start = OwnHealthReportKeeper.changes.value
+
+        keeper.keep(signed(healthReport(myPeerID, now)))
+        val afterKeep = OwnHealthReportKeeper.changes.value
+        keeper.keep(signed(healthReport(myPeerID, now - 1_000))) // older: not written
+        keeper.keep(signed(healthReport(otherPeerID, now)))
+        val afterIgnored = OwnHealthReportKeeper.changes.value
+        keeper.clear()
+
+        assertTrue(afterKeep > start)
+        assertEquals(afterKeep, afterIgnored)
+        assertTrue(OwnHealthReportKeeper.changes.value > afterIgnored)
+    }
+
+    @Test
     fun `does not keep a report that is already expired when sent`() = runBlocking {
         keeper().keep(signed(healthReport(myPeerID, now - AppConstants.Sync.HEALTH_REPORT_RETENTION_MS - 1)))
 

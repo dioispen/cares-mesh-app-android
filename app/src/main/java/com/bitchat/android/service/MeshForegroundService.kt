@@ -115,6 +115,7 @@ class MeshForegroundService : Service() {
     private var isShuttingDown: Boolean = false
     private var lastNotifiedPeerCount: Int? = null
     private var gateway: MeshGatewayRuntime? = null
+    private var standingReportResender: Job? = null
 
     /**
      * Posts the ongoing notification again whenever the app comes to the front (#84): a notification
@@ -163,6 +164,10 @@ class MeshForegroundService : Service() {
         // The Gateway (#111) writes verified Health Reports to Firestore for as long as the mesh
         // service runs, so it keeps working with the App's screens closed.
         gateway = MeshGatewayRuntime.start(applicationContext)
+
+        // A raised SOS or an injury report is sent again every 30 min while it stands, so it
+        // does not expire from the mesh after 2 h, screens closed or not (ADR-0010).
+        standingReportResender = StandingReportRebroadcaster.start(scope)
 
         // Notification content is driven by peer-state changes, not a permanent timer.
         updateJob = scope.launch {
@@ -448,6 +453,8 @@ class MeshForegroundService : Service() {
         ExperimentTools.onMeshServiceDestroyed()
         gateway?.stop()
         gateway = null
+        standingReportResender?.cancel()
+        standingReportResender = null
         // Cancel the service coroutine scope to prevent leaks
         try { serviceJob.cancel() } catch (_: Exception) { }
         // Best-effort ensure we are not marked foreground

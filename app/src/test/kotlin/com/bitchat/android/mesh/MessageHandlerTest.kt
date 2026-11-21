@@ -408,6 +408,42 @@ class MessageHandlerTest {
         verify(delegate, never()).onMessageReceived(any())
     }
 
+    // ADR-0010：Reporter 的裝置以新的封包重發成立中的回報，payload 不變（reportTime 也不變）
+    @Test
+    fun `a re-sent health report reaches the chat once but Flutter and the gateway every time`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val sentAt = System.currentTimeMillis()
+        val original = healthReportPacket(timestamp = sentAt)
+        val resent = healthReportPacket(timestamp = sentAt + AppConstants.Sync.STANDING_REPORT_RESEND_INTERVAL_MS)
+        val forwarded = mutableListOf<BitchatPacket>()
+        val listener: (BitchatPacket) -> Unit = { forwarded.add(it) }
+        InboundPacketBridge.addListener(listener)
+        try {
+            val hooked = collectGatewayHook {
+                handler.handleMessage(RoutedPacket(original, peerID, "direct-link"))
+                handler.handleMessage(RoutedPacket(resent, peerID, "direct-link"))
+            }
+
+            verify(delegate, org.mockito.kotlin.times(1)).onMessageReceived(any())
+            assertEquals(2, forwarded.size)
+            assertEquals(2, hooked.size)
+        } finally {
+            InboundPacketBridge.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun `a newer statement from the same Reporter reaches the chat again, a late older one does not`() = runBlocking {
+        whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
+        val first = 1_700_000_000_000L
+
+        handler.handleMessage(RoutedPacket(healthReportPacket(reportTimeMillis = first), peerID, "direct-link"))
+        handler.handleMessage(RoutedPacket(healthReportPacket(reportTimeMillis = first + 60_000), peerID, "direct-link"))
+        handler.handleMessage(RoutedPacket(healthReportPacket(reportTimeMillis = first + 30_000), peerID, "direct-link"))
+
+        verify(delegate, org.mockito.kotlin.times(2)).onMessageReceived(any())
+    }
+
     @Test
     fun `a field-experiment health report never reaches the gateway hook`() = runBlocking {
         whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))
@@ -701,24 +737,29 @@ class MessageHandlerTest {
         lastSeen = System.currentTimeMillis()
     )
 
-    private fun healthReportData(reporterHandle: String = "abcdef012345"): ByteArray = HealthReportPayload.fromLocation(
+    private fun healthReportData(
+        reporterHandle: String = "abcdef012345",
+        reportTimeMillis: Long = 1_700_000_000_000L
+    ): ByteArray = HealthReportPayload.fromLocation(
         reporterHandle = reporterHandle,
         status = HealthStatus.SAFE,
         lat = null,
         lng = null,
-        reportTimeMillis = 1_700_000_000_000L
+        reportTimeMillis = reportTimeMillis
     ).encode()
 
     private fun healthReportPacket(
         tag: Byte = BroadcastContentTag.HEALTH_REPORT.value,
-        reporterHandle: String = "abcdef012345"
+        reporterHandle: String = "abcdef012345",
+        reportTimeMillis: Long = 1_700_000_000_000L,
+        timestamp: Long = System.currentTimeMillis()
     ): BitchatPacket {
         return BitchatPacket(
             version = 1u,
             type = MessageType.HEALTH_REPORT.value,
             senderID = peerID.hexToBytes(),
-            timestamp = System.currentTimeMillis().toULong(),
-            payload = byteArrayOf(tag) + healthReportData(reporterHandle),
+            timestamp = timestamp.toULong(),
+            payload = byteArrayOf(tag) + healthReportData(reporterHandle, reportTimeMillis),
             signature = signature,
             ttl = 7u
         )

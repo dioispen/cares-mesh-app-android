@@ -8,6 +8,10 @@ import com.bitchat.android.util.AppConstants
 import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 
 /**
@@ -38,10 +42,13 @@ object OwnHealthReportPolicy {
             packet.senderID.toHexString().equals(myPeerID, ignoreCase = true)
     }
 
-    /** Ours, and GossipSyncManager would still take it: not older than the retention period. */
+    /** Not older than the retention period, by the packet's own timestamp. */
+    fun isUnexpired(packet: BitchatPacket, nowMs: Long): Boolean =
+        nowMs - packet.timestamp.toLong() <= AppConstants.Sync.HEALTH_REPORT_RETENTION_MS
+
+    /** Ours, and GossipSyncManager would still take it. */
     fun isRestorable(packet: BitchatPacket, myPeerID: String, nowMs: Long): Boolean =
-        isOwnSignedHealthReport(packet, myPeerID) &&
-            nowMs - packet.timestamp.toLong() <= AppConstants.Sync.HEALTH_REPORT_RETENTION_MS
+        isOwnSignedHealthReport(packet, myPeerID) && isUnexpired(packet, nowMs)
 
     /**
      * Whether [candidate], just broadcast, takes the place of [kept]. The newest timestamp wins, as
@@ -65,12 +72,20 @@ object OwnHealthReportPolicy {
  * packet ID, signature and timestamp, so it still expires 2 h after it was first sent; it is never
  * re-signed or re-timestamped here. Restoring runs in the mesh service, not in Flutter, so it also
  * works when only MeshForegroundService is running.
+ *
+ * The SOS re-sender (ADR-0010) sends the kept report again under a new timestamp while it stands;
+ * that send comes back through [keep] like any other, so the slot always holds the last one sent.
  */
 class OwnHealthReportKeeper(
     private val myPeerID: String,
     private val store: OwnHealthReportStore,
     private val nowMs: () -> Long = System::currentTimeMillis,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * A kept report this is true for stays past its sync expiry, for [latestOwn]: a standing SOS
+     * is re-sent from it however long the phone was off (ADR-0010). Any other is erased then.
+     */
+    private val keepPastExpiry: (BitchatPacket) -> Boolean = { false }
 ) {
     private val lock = Any()
 
@@ -87,10 +102,16 @@ class OwnHealthReportKeeper(
 
     /**
      * Our latest Health Report while sync may still serve it, else null. A kept report that has
-     * expired, was sent under another identity (panic wipe, reinstall) or cannot be read is erased:
-     * it records where the Reporter was, so it is kept no longer than it is of use.
+     * expired (unless [keepPastExpiry]), was sent under another identity (panic wipe, reinstall)
+     * or cannot be read is erased: it records where the Reporter was, so it is kept no longer than
+     * it is of use.
      */
-    suspend fun latest(): BitchatPacket? = withContext(ioDispatcher) { latestNow() }
+    suspend fun latest(): BitchatPacket? = withContext(ioDispatcher) {
+        latestNow()?.takeIf { OwnHealthReportPolicy.isUnexpired(it, nowMs()) }
+    }
+
+    /** Like [latest], but also a report past its sync expiry that [keepPastExpiry] holds on to. */
+    suspend fun latestOwn(): BitchatPacket? = withContext(ioDispatcher) { latestNow() }
 
     /**
      * Erases the kept report; a [keep] still in flight writes nothing. Blocks on the disk write:
@@ -101,6 +122,7 @@ class OwnHealthReportKeeper(
             generation++
             erase()
         }
+        changeCount.update { it + 1 }
     }
 
     private fun keepNow(signed: BitchatPacket, sentInGeneration: Long) {
@@ -113,15 +135,23 @@ class OwnHealthReportKeeper(
                 store.write(encoded)
             } catch (e: Exception) {
                 Log.w(TAG, "Could not keep own health report: ${e.message}")
+                return
             }
         }
+        changeCount.update { it + 1 }
     }
 
     private fun latestNow(): BitchatPacket? {
         synchronized(lock) {
             val encoded = readSlot() ?: return null
             val kept = BitchatPacket.fromBinaryData(encoded)
-            if (kept != null && OwnHealthReportPolicy.isRestorable(kept, myPeerID, nowMs())) return kept
+            if (kept != null &&
+                OwnHealthReportPolicy.isOwnSignedHealthReport(kept, myPeerID) &&
+                (OwnHealthReportPolicy.isUnexpired(kept, nowMs()) || keepPastExpiry(kept))
+            ) {
+                return kept
+            }
+            // Not announced on changes: nobody needs to act on a record that was of no use
             erase()
             return null
         }
@@ -142,7 +172,16 @@ class OwnHealthReportKeeper(
         }
     }
 
-    private companion object {
-        const val TAG = "OwnHealthReportKeeper"
+    companion object {
+        private const val TAG = "OwnHealthReportKeeper"
+
+        private val changeCount = MutableStateFlow(0L)
+
+        /**
+         * Moves on whenever a keeper has written a report or been cleared. Process-wide, not per
+         * keeper: the mesh service that owns one is replaced (panic, restart) without telling
+         * those who read it. The SOS re-sender (ADR-0010) reads the kept report again on it.
+         */
+        val changes: StateFlow<Long> = changeCount.asStateFlow()
     }
 }
