@@ -1,8 +1,5 @@
 package com.bitchat.android.adminnotice
 
-import com.bitchat.android.adminnotice.TestAdminNotices.V5
-import com.bitchat.android.adminnotice.TestAdminNotices.V5_MESSAGE_ID
-import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
 import com.bitchat.android.mesh.BLEPacketPaddingPolicy
 import com.bitchat.android.mesh.FragmentManager
 import com.bitchat.android.mesh.FragmentingPacketSender
@@ -17,6 +14,11 @@ import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.sync.GCSFilter
 import com.bitchat.android.sync.GossipSyncManager
 import com.bitchat.android.sync.SyncDefaults
+import com.bitchat.android.testsupport.ManualScheduler
+import com.bitchat.android.testsupport.TestAdminNotices
+import com.bitchat.android.testsupport.TestAdminNotices.V5
+import com.bitchat.android.testsupport.TestAdminNotices.V5_MESSAGE_ID
+import com.bitchat.android.testsupport.TestAdminNotices.VECTOR_ISSUED_AT
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel

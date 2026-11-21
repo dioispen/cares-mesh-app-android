@@ -1,5 +1,10 @@
-package com.bitchat.android.adminnotice
+package com.bitchat.android.testsupport
 
+import com.bitchat.android.adminnotice.AdminKeyTable
+import com.bitchat.android.adminnotice.AdminNoticeInjector
+import com.bitchat.android.adminnotice.AdminNoticeRecipientKey
+import com.bitchat.android.adminnotice.AdminNoticeScheduler
+import com.bitchat.android.adminnotice.AdminNoticeSyncSet
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import org.bouncycastle.crypto.agreement.X25519Agreement

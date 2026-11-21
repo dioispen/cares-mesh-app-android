@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import com.bitchat.android.flutter.FlutterChatActivity
+import com.bitchat.android.testsupport.TestAdminNotices
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

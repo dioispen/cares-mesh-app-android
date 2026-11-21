@@ -1,16 +1,18 @@
 package com.bitchat.android.adminnotice
 
-import com.bitchat.android.adminnotice.TestAdminNotices.V1
-import com.bitchat.android.adminnotice.TestAdminNotices.V2
-import com.bitchat.android.adminnotice.TestAdminNotices.V3
-import com.bitchat.android.adminnotice.TestAdminNotices.V4
-import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
 import com.bitchat.android.mesh.PacketProcessor
 import com.bitchat.android.mesh.PacketProcessorDelegate
 import com.bitchat.android.mesh.PeerManager
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.SpecialRecipients
+import com.bitchat.android.testsupport.ManualScheduler
+import com.bitchat.android.testsupport.TestAdminNotices
+import com.bitchat.android.testsupport.TestAdminNotices.V1
+import com.bitchat.android.testsupport.TestAdminNotices.V2
+import com.bitchat.android.testsupport.TestAdminNotices.V3
+import com.bitchat.android.testsupport.TestAdminNotices.V4
+import com.bitchat.android.testsupport.TestAdminNotices.VECTOR_ISSUED_AT
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
