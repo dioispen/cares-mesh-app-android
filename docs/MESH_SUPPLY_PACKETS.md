@@ -22,7 +22,7 @@
 | … | unitLen + unit | 1 + ≤16 | UTF-8 單位 |
 
 最大 203 bytes，常見約 45 bytes（仍在 100 bytes 的壓縮門檻之下）。封包標頭的 timestamp 是建立時間。
-TTL 與 Health Report 相同（`HealthReportBroadcast.DEFAULT_TTL`）：物資需求不該比求救傳得更遠。
+TTL 與 Health Report 相同（`HealthReportBroadcast.DEFAULT_TTL`，目前為 7，見 [ADR-0014](adr/0014-broadcast-reports-use-upstream-ttl.md)）：物資需求不該比求救傳得更遠。
 
 **權威向量**：`app/src/test/kotlin/.../protocol/SupplyExchangePacketTest.kt` 與
 `flutter_ui/test/supply_exchange_packet_test.dart` 使用同一組 bytes，改格式時兩邊一起改。

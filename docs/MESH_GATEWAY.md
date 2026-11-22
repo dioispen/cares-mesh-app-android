@@ -26,7 +26,7 @@
 Reporter A（無網路）
   │  HEALTH_REPORT（簽章明文，Broadcast Tier，geohash-6）
   ▼
-mesh：flood（TTL 3）或 gossip sync 補送（TTL 0，2 小時內）
+mesh：flood（TTL 7，ADR-0014）或 gossip sync 補送（TTL 0，2 小時內）
       成立中的回報另由 A 的裝置每 30 分鐘重發，reportTime 不變（ADR-0012）
   │
   ▼
