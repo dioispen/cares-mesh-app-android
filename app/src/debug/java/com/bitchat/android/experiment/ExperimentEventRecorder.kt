@@ -2,6 +2,7 @@ package com.bitchat.android.experiment
 
 import com.bitchat.android.experiment.ExperimentEvent.Companion.id8
 import com.bitchat.android.experiment.ExperimentEvent.Kind
+import com.bitchat.android.mesh.AdminNoticeTraffic
 import com.bitchat.android.mesh.BLEPacketPaddingPolicy
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.BroadcastContentTag
@@ -15,6 +16,9 @@ import com.bitchat.android.util.toHexString
  * [rxCounter] 給現場計數畫面，自己送出的實驗 Health Report 寫出幾條鏈路則交給 [onExperimentTx]。
  *
  * 只在呼叫端的執行緒上組事件，寫檔交給 [sink]（[ExperimentLog] 的背景 writer）。
+ *
+ * Admin Notice（0x31）與它的切片一律不記：它的 senderID 是公告的 messageId，不是實驗裡的手機，
+ * `src` 會被誤認成一個發送者（ADR-0011、#137）。
  */
 class ExperimentEventRecorder(
     private val sink: (ExperimentEvent) -> Unit,
@@ -31,12 +35,14 @@ class ExperimentEventRecorder(
     private val scanRssi = HashMap<String, RssiSample>()
 
     override fun onReceived(packet: BitchatPacket, ingressAddress: String?) {
+        if (AdminNoticeTraffic.carriesAdminNotice(packet)) return
         val now = clock()
         emit(packetEvent(Kind.RX, now, packet, packet.bleLength(), peer = ingressAddress?.let(probe::peerAt)))
         experimentHandleOf(packet)?.let { rxCounter.record(it, now) }
     }
 
     override fun onDuplicate(packet: BitchatPacket, ingressAddress: String?) {
+        if (AdminNoticeTraffic.carriesAdminNotice(packet)) return
         emit(packetEvent(Kind.DUP, clock(), packet, packet.bleLength(), peer = ingressAddress?.let(probe::peerAt)))
     }
 
@@ -49,6 +55,7 @@ class ExperimentEventRecorder(
     }
 
     private fun recordBroadcast(packet: BitchatPacket, len: Int?, fanout: Int) {
+        if (AdminNoticeTraffic.carriesAdminNotice(packet)) return
         val kind = if (packet.senderID.toHexString() == probe.myPeerID()) Kind.TX else Kind.RELAY
         emit(packetEvent(kind, clock(), packet, len, fanout = fanout))
         if (kind == Kind.TX && experimentHandleOf(packet) != null) {
@@ -57,6 +64,7 @@ class ExperimentEventRecorder(
     }
 
     override fun onSyncSent(packet: BitchatPacket, peerID: String) {
+        if (AdminNoticeTraffic.carriesAdminNotice(packet)) return
         emit(packetEvent(Kind.SYNC, clock(), packet, packet.bleLength(), peer = peerID))
     }
 
@@ -64,6 +72,7 @@ class ExperimentEventRecorder(
         val now = clock()
         val peer = probe.peerAt(deviceAddress)
         val packet = BitchatPacket.fromBinaryData(data)
+        if (packet != null && AdminNoticeTraffic.carriesAdminNotice(packet)) return
         emit(
             if (packet != null) {
                 packetEvent(Kind.QFULL, now, packet, data.size, peer = peer)

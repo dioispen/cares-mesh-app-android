@@ -2,11 +2,16 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import '../models/admin_notice.dart';
 import '../models/user.dart';
+import '../services/admin_notice_service.dart';
 import '../services/mascot_service.dart';
 import '../services/profile_store.dart';
-import '../widgets/chat_navigation_host.dart';
+import '../widgets/admin_notice_style.dart';
+import '../widgets/app_navigation_host.dart';
+import '../widgets/background_operation_notice.dart';
 import '../widgets/user_avatar.dart';
+import 'admin_notice_screen.dart';
 import 'knowledge_screen.dart';
 import 'shelter_screen.dart';
 import 'sos_screen.dart';
@@ -17,7 +22,13 @@ import 'settings_screen.dart';
 import 'supply_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.adminNotices, this.clock});
+
+  /// 測試用；預設為 app 層級的 [AdminNoticeService.instance]。
+  final AdminNoticeService? adminNotices;
+
+  /// 判斷公告是否已過期的時鐘，測試用；預設為 [DateTime.now]。
+  final DateTime Function()? clock;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -31,14 +42,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   AppUser? _user;
 
+  AdminNoticeService get _adminNotices => widget.adminNotices ?? AdminNoticeService.instance;
+
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
     _loadUser();
+    // 通知權限是在系統設定裡改的，原生不會推事件：回到 App 時重讀，公告卡片才跟著出現或消失。
+    _lifecycle = AppLifecycleListener(onResume: _refreshAdminNotices);
+    // setup 流程剛問過通知權限，app 啟動時讀到的可能已經過時。
+    _refreshAdminNotices();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) mascotOptionsNotifier.value = homeOptions;
     });
   }
+
+  void _refreshAdminNotices() => unawaited(_adminNotices.refresh());
 
   @override
   void didChangeDependencies() {
@@ -48,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     mascotRouteObserver.unsubscribe(this);
     super.dispose();
   }
@@ -73,8 +95,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (mounted) await _loadUser();
   }
 
+  /// 管理端公告列表（#142）。小助理先收起來，免得擋住公告；回來時 [didPopNext] 再叫它出來。
+  /// 用列表的具名 route，點公告通知時（AppNavigationHost）才認得出它已經開著。
+  void _openAdminNotices() {
+    mascotOptionsNotifier.value = const [];
+    Navigator.push(context, AdminNoticeScreen.route(service: widget.adminNotices, clock: widget.clock));
+  }
+
   void _navigateTo(Widget screen) {
-    // 聊天室用它的具名 route，點通知時（ChatNavigationHost）才認得出它已經開著。
+    // 聊天室用它的具名 route，點通知時（AppNavigationHost）才認得出它已經開著。
     final route = screen is ChatScreen ? ChatScreen.route() : MaterialPageRoute<void>(builder: (_) => screen);
     Navigator.push(context, route);
   }
@@ -101,9 +130,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         : shield;
   }
 
-  /// 首頁出現代表已走完 setup 與登入：點了的聊天通知從這裡帶到聊天畫面（#57）。
+  /// 首頁出現代表已走完 setup 與登入：點了的通知從這裡帶到聊天畫面（#57）或公告列表。
   @override
-  Widget build(BuildContext context) => ChatNavigationHost(child: _buildHome(context));
+  Widget build(BuildContext context) =>
+      AppNavigationHost(adminNotices: widget.adminNotices, child: _buildHome(context));
 
   Widget _buildHome(BuildContext context) {
     final features = [
@@ -174,6 +204,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       ),
                     ),
                     const Spacer(),
+                    ValueListenableBuilder<AdminNoticeList>(
+                      valueListenable: _adminNotices.notices,
+                      builder: (context, list, _) => _AdminNoticeEntry(
+                        key: const ValueKey('admin-notice-entry'),
+                        unread: list.unreadCount,
+                        onTap: _openAdminNotices,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
                     GestureDetector(
                       onTap: _openSettings,
                       child: _UserAvatar(user: _user),
@@ -209,12 +248,38 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
             ),
 
+            // 前景服務沒有在跑時的提示（P1-6）：離開 App 後 Mesh 可能被系統暫停。
+            const SliverToBoxAdapter(
+              child: BackgroundOperationNotice(padding: EdgeInsets.fromLTRB(16, 18, 16, 0)),
+            ),
+
             // 功能卡片
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: Column(
                   children: [
+                    // 沒有通知權限時，最新一則未讀的公告放在最上面，代替通知（#142）。
+                    ValueListenableBuilder<bool?>(
+                      valueListenable: _adminNotices.notificationsAllowed,
+                      builder: (context, allowed, _) => ValueListenableBuilder<AdminNoticeList>(
+                        valueListenable: _adminNotices.notices,
+                        builder: (context, list, _) {
+                          final notice = allowed == false
+                              ? list.latestUnreadInForce((widget.clock ?? DateTime.now)())
+                              : null;
+                          if (notice == null) return const SizedBox.shrink();
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 14),
+                            child: _AdminNoticeHomeCard(
+                              key: const ValueKey('admin-notice-home-card'),
+                              notice: notice,
+                              onTap: _openAdminNotices,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                     // SOS 大卡
                     _SosHeroCard(
                       onTap: () {
@@ -322,6 +387,127 @@ class _SosHeroCard extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               child: const Icon(Icons.sos_rounded, color: Colors.white, size: 36),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── 標頭的管理端公告入口與未讀數（#142）──────────────────────────
+class _AdminNoticeEntry extends StatelessWidget {
+  final int unread;
+  final VoidCallback onTap;
+  const _AdminNoticeEntry({super.key, required this.unread, required this.onTap});
+
+  static const _brown = Color(0xFF5C3D2E);
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: unread > 0 ? '管理端公告，$unread 則未讀' : '管理端公告',
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: _brown.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.campaign_rounded, color: _brown, size: 24),
+            ),
+            if (unread > 0)
+              Positioned(
+                top: -5,
+                right: -6,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFC4553A),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFF7F3EC), width: 2),
+                  ),
+                  child: Text(
+                    unread > 99 ? '99+' : '$unread',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, height: 1.2),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── 沒有通知權限時代替通知的公告卡片（#142）────────────────────────
+class _AdminNoticeHomeCard extends StatelessWidget {
+  final AdminNotice notice;
+  final VoidCallback onTap;
+  const _AdminNoticeHomeCard({super.key, required this.notice, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = adminNoticeLevelColor(notice.level);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(20, 18, 16, 16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [color, Color.lerp(color, Colors.black, 0.18)!],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(color: color.withValues(alpha: 0.4), blurRadius: 18, offset: const Offset(0, 6)),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.campaign_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text(
+                    '管理端公告',
+                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                AdminNoticeLevelBadge(level: notice.level, onDark: true),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              notice.content,
+              // 最長 300 bytes，大約 100 個字：小螢幕放大字體時也幾乎整則顯示，全文在列表裡。
+              maxLines: 10,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700, height: 1.4),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '發布 ${formatAdminNoticeTime(notice.issuedAt)}・通知未開啟，公告會顯示在這裡',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 12, height: 1.3),
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: Colors.white.withValues(alpha: 0.85)),
+              ],
             ),
           ],
         ),

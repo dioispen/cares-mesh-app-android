@@ -3,6 +3,7 @@ package com.bitchat.android.mesh
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
@@ -43,6 +44,8 @@ abstract class MeshConnectionTracker(
     protected val pendingConnections = ConcurrentHashMap<String, ConnectionAttempt>()
 
     private var isActive = false
+    // 藍牙關閉再開啟時 start() 會再被呼叫；只留一個清理迴圈，舊的在 stop() 時取消。
+    private var cleanupJob: Job? = null
 
     /**
      * Start the tracker and its cleanup loop
@@ -57,6 +60,8 @@ abstract class MeshConnectionTracker(
      */
     open fun stop() {
         isActive = false
+        cleanupJob?.cancel()
+        cleanupJob = null
         pendingConnections.clear()
     }
 
@@ -119,7 +124,8 @@ abstract class MeshConnectionTracker(
     abstract fun getConnectionCount(): Int
 
     private fun startPeriodicCleanup() {
-        scope.launch {
+        cleanupJob?.cancel()
+        cleanupJob = scope.launch {
             while (isActive) {
                 try {
                     delay(CLEANUP_INTERVAL)

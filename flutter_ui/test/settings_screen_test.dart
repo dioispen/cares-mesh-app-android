@@ -95,6 +95,7 @@ void main() {
   late List<String> account;
   late Future<void> Function() nativePanic;
   late Future<void> Function() firebaseSignOut;
+  late Future<void> Function() clearNoticeKey;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({
@@ -108,6 +109,7 @@ void main() {
     account = [];
     nativePanic = () async => account.add('nativePanic');
     firebaseSignOut = () async => account.add('firebaseSignOut');
+    clearNoticeKey = () async => account.add('noticeKey');
   });
 
   Future<void> pumpSettings(WidgetTester tester) async {
@@ -126,6 +128,7 @@ void main() {
         account: AccountService(
           signOutFirebase: () => firebaseSignOut(),
           nativePanicClear: () => nativePanic(),
+          clearNoticeKey: () => clearNoticeKey(),
         ),
         signedOutBuilder: (_) => const Scaffold(body: Text('login screen')),
       ),
@@ -395,7 +398,7 @@ void main() {
       await tester.tap(find.widgetWithText(TextButton, '登出'));
       await tester.pumpAndSettle();
 
-      expect(account, ['firebaseSignOut']);
+      expect(account, ['firebaseSignOut', 'noticeKey']);
       expect((await SharedPreferences.getInstance()).getString('app_user'), isNull);
       expect(find.text('login screen'), findsOneWidget);
     });
@@ -430,7 +433,7 @@ void main() {
       await tester.tap(confirmButton());
       await tester.pumpAndSettle();
 
-      expect(account, ['nativePanic', 'firebaseSignOut']);
+      expect(account, ['nativePanic', 'noticeKey', 'firebaseSignOut']);
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('app_user'), isNull);
       expect(prefs.getString('pending_app_user'), isNull);
@@ -453,7 +456,7 @@ void main() {
       expect(find.textContaining('清除未完成'), findsNothing);
       await tester.tap(find.text('確定'));
       await tester.pumpAndSettle();
-      expect(account, ['nativePanic']);
+      expect(account, ['nativePanic', 'noticeKey']);
       expect(find.text('login screen'), findsOneWidget);
     });
 
@@ -469,6 +472,42 @@ void main() {
 
       expect(find.textContaining('清除未完成'), findsOneWidget);
       expect(account, isEmpty);
+      expect((await SharedPreferences.getInstance()).getString('app_user'), isNotNull);
+      expect(find.text('login screen'), findsNothing);
+    });
+
+    testWidgets('an Admin Notice key that cannot be deleted is reported and nothing else is cleared (#140)',
+        (tester) async {
+      clearNoticeKey = () async => throw PlatformException(code: 'KEY_STORE_UNAVAILABLE', message: 'keystore');
+      await pumpSettings(tester);
+      await openPanicDialog(tester);
+
+      await tester.enterText(find.byType(TextField).last, '清除');
+      await tester.pump();
+      await tester.tap(confirmButton());
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('清除未完成'), findsOneWidget);
+      expect(find.textContaining('公告的收件金鑰'), findsOneWidget);
+      expect(account, ['nativePanic']);
+      expect((await SharedPreferences.getInstance()).getString('app_user'), isNotNull);
+      expect(find.text('login screen'), findsNothing);
+    });
+
+    testWidgets('targeted Admin Notices that cannot be deleted are reported and nothing else is cleared (#140)',
+        (tester) async {
+      clearNoticeKey = () async => throw PlatformException(code: 'NOTICE_STORE_UNAVAILABLE', message: 'disk full');
+      await pumpSettings(tester);
+      await openPanicDialog(tester);
+
+      await tester.enterText(find.byType(TextField).last, '清除');
+      await tester.pump();
+      await tester.tap(confirmButton());
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('清除未完成'), findsOneWidget);
+      expect(find.textContaining('無法刪除這支手機上給你的管理員公告'), findsOneWidget);
+      expect(account, ['nativePanic']);
       expect((await SharedPreferences.getInstance()).getString('app_user'), isNotNull);
       expect(find.text('login screen'), findsNothing);
     });

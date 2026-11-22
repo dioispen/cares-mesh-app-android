@@ -2,6 +2,9 @@ package com.bitchat.android.mesh
 
 import android.content.Context
 import android.util.Log
+import com.bitchat.android.adminnotice.AdminNoticeBridge
+import com.bitchat.android.adminnotice.AdminNoticeSyncSet
+import com.bitchat.android.adminnotice.AdminNoticeInjector
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.model.BitchatMessage
@@ -16,7 +19,9 @@ import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.SpecialRecipients
 import com.bitchat.android.model.RequestSyncPacket
+import com.bitchat.android.sync.EncryptedOwnHealthReportStore
 import com.bitchat.android.sync.GossipSyncManager
+import com.bitchat.android.sync.OwnHealthReportKeeper
 import com.bitchat.android.util.toHexString
 import com.bitchat.android.services.VerificationService
 import com.bitchat.android.service.TransportBridgeService
@@ -116,6 +121,13 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     private data class VoiceFrameRequest(val recipientPeerID: String?, val payload: ByteArray)
     private val voiceFrameQueue = Channel<VoiceFrameRequest>(capacity = 128)
     private lateinit var gossipSyncManager: GossipSyncManager
+    // Our own latest Health Report, kept on disk so sync still has it after a restart (P0-3).
+    // A standing one outlives its sync expiry: MeshForegroundService re-sends it (ADR-0012).
+    internal val ownHealthReport = OwnHealthReportKeeper(
+        myPeerID,
+        EncryptedOwnHealthReportStore(context),
+        keepPastExpiry = com.bitchat.android.service.StandingHealthReport::isStanding
+    )
 
     // Service-level notification manager for background (no-UI) DMs
     private val serviceNotificationManager = com.bitchat.android.ui.NotificationManager(
@@ -125,6 +137,27 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     
     // Service state management
     private var isActive = false
+
+    /**
+     * Gateway injection (#137): while this service runs, the Admin Notice Inbox hands it the
+     * normalized 0x31 packets this device injects. Broadcast as given, never signed: the packet
+     * must be the same whichever Gateway injects it (ADR-0011).
+     */
+    private val adminNoticeInjector = AdminNoticeInjector { packet ->
+        isActive && broadcastRoutedPacket(RoutedPacket(packet))
+    }
+
+    /**
+     * Gossip sync of Admin Notices (#138): attached with the injector, the Inbox hands this
+     * service's sync set every verified notice in the mesh, so late arrivals still get it. The set
+     * is shared with Wi-Fi Aware (MeshServiceHolder), so its peers are offered them too.
+     */
+    private val adminNoticeSyncSet = object : AdminNoticeSyncSet {
+        override fun add(packet: BitchatPacket, expiresAtMs: Long) =
+            gossipSyncManager.onAdminNoticeSeen(packet, expiresAtMs)
+
+        override fun remove(messageId: String) = gossipSyncManager.removeAdminNotice(messageId)
+    }
     
     // Delegate for message callbacks (maintains same interface)
     var delegate: BluetoothMeshDelegate? = null
@@ -177,6 +210,12 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
 
         com.bitchat.android.service.MeshServiceHolder.setGossipManager(gossipSyncManager) { packet ->
             signPacketBeforeBroadcast(packet)
+        }
+        // Sync only repairs reports somebody holds: put our own back, same signed packet and
+        // expiry, so neighbours that connect after a restart still receive it (P0-3)
+        serviceScope.launch {
+            val kept = ownHealthReport.latest() ?: return@launch
+            try { gossipSyncManager.onPublicPacketSeen(kept) } catch (_: Exception) { }
         }
         if (isBleTransportEnabled()) {
             TransportBridgeService.register("BLE", this)
@@ -635,6 +674,9 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
 
             override fun handleVoiceFrame(routed: RoutedPacket): Boolean =
                 messageHandler.handlePublicVoiceFrame(routed)
+
+            override fun handleAdminNotice(routed: RoutedPacket): Boolean =
+                AdminNoticeBridge.deliverFromMesh(routed.packet)
             
             override fun handleLeave(routed: RoutedPacket) {
                 serviceScope.launch { messageHandler.handleLeave(routed) }
@@ -795,6 +837,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
         if (connectionManager.startServices()) {
             isActive = true
             TransportBridgeService.register("BLE", this)
+            AdminNoticeBridge.attachMesh(adminNoticeInjector, adminNoticeSyncSet)
             
             // Start periodic syncs
             com.bitchat.android.service.MeshServiceHolder.startSharedGossip("BLE")
@@ -817,6 +860,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     private fun pauseServicesForTransportDisable() {
         Log.i(TAG, "Disabling BLE mesh transport")
         isActive = false
+        AdminNoticeBridge.detachMesh(adminNoticeInjector, adminNoticeSyncSet)
         com.bitchat.android.service.MeshServiceHolder.stopSharedGossip("BLE")
         TransportBridgeService.unregister("BLE")
         try { com.bitchat.android.services.AppStateStore.clearTransportPeers("BLE") } catch (_: Exception) { }
@@ -836,6 +880,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
         
         Log.i(TAG, "Stopping Bluetooth mesh service")
         isActive = false
+        AdminNoticeBridge.detachMesh(adminNoticeInjector, adminNoticeSyncSet)
         TransportBridgeService.unregister("BLE")
         try { com.bitchat.android.services.AppStateStore.clearTransportPeers("BLE") } catch (_: Exception) { }
         try { com.bitchat.android.services.AppStateStore.clearTransportDirectPeers("BLE") } catch (_: Exception) { }
@@ -1256,6 +1301,8 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                 connectionManager.broadcastPacket(RoutedPacket(signedPacket))
                 // 追蹤公開 packet 以進行同步
                 try { gossipSyncManager.onPublicPacketSeen(signedPacket) } catch (_: Exception) { }
+                // 自己的 Health Report 另存一份，app 重啟後放回同步暫存（P0-3）；其他類型不存
+                ownHealthReport.keep(signedPacket)
                 Log.d(TAG, "✅ 廣播 Packet 成功: type=${packet.type}, payload size=${packet.payload.size}")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ 廣播 Packet 失敗: ${e.message}", e)
@@ -1678,6 +1725,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
             peerManager.clearAllPeers()
             peerManager.clearAllFingerprints()
             try { gossipSyncManager.clear() } catch (_: Exception) { }
+            ownHealthReport.clear()
         } catch (e: Exception) {
             Log.e(TAG, "Error clearing mesh service internal data: ${e.message}")
         }

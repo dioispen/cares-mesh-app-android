@@ -203,10 +203,13 @@ service cloud.firestore {
     // 哪一把 key。後台遇到多個 uid 宣稱同一個 Handle 時，比對 signingPublicKey 與
     // mesh_reports 原始封包的簽章 key 才分得出來（docs/MESH_GATEWAY.md 第 9 節）。
     // Administrator 可以刪（清理冒領或災後清空），但不能替人登記。
+    //
+    // 同一份文件也登記這支手機的 Admin Notice 收件公鑰 noticePublicKey（#140、
+    // docs/ADMIN_NOTICE_V1.md 收件者加密金鑰），Administrator 用它加密定向公告。
     match /reporter_handles/{uid}/installations/{handle} {
       function validInstallation(handle) {
         let data = request.resource.data;
-        let fields = ['reporterHandle', 'signingPublicKey', 'registeredAt'];
+        let fields = ['reporterHandle', 'signingPublicKey', 'noticePublicKey', 'registeredAt'];
         return data.keys().hasAll(fields)
             && data.keys().hasOnly(fields)
             // 文件 ID 就是 Handle；小寫 12 碼十六進位，與 mesh_reports 的文件 ID 一致，
@@ -216,6 +219,10 @@ service cloud.firestore {
             // ANNOUNCE 裡的那把 Ed25519 簽章公鑰，固定 32 bytes。
             && data.signingPublicKey is bytes
             && data.signingPublicKey.size() == 32
+            // 每次登入換一把的 X25519 收件公鑰，固定 32 bytes。比照 ADR-0008 列為必填，
+            // 實驗期所有裝置一起更新：舊版寫的文件沒有它，下次啟動整份覆寫時補上。
+            && data.noticePublicKey is bytes
+            && data.noticePublicKey.size() == 32
             // 用伺服器時間：後台以最新的 registeredAt 判斷 Handle 目前屬於哪個帳號，
             // 不能讓客戶端填未來的時間搶先。
             && data.registeredAt == request.time;
@@ -303,6 +310,92 @@ service cloud.firestore {
       // 會換成新的寫入者。代價是同一秒內送出的第二份回報會被拒；極少見，接受。
       allow update: if validMeshReport(handle)
                     && request.resource.data.reportTime > resource.data.reportTime;
+    }
+
+    // admin_notices/{messageId}：Administrator 發出的 Admin Notice（docs/ADMIN_NOTICE_V1.md、
+    // ADR-0011）。wire 是簽好章的公告 payload，Gateway 讀到後原封不動注入 mesh。文件 ID 是 payload
+    // 裡的 messageId。
+    //
+    // 規則不是 Admin Notice 的信任來源：用戶端只相信 wire 裡的管理端 Ed25519 簽章，連從
+    // Firestore 讀到的副本也要驗。規則看不到簽章對不對，也看不出 expiresAt 欄位和 wire 裡簽過的
+    // 是否一致。兩道防線互相獨立：規則寫錯讓非 Administrator 寫進來，假公告仍過不了簽章；
+    // 私鑰外洩時，規則也擋不住直接從 mesh 注入的偽造公告。規則能做的是：
+    //   - 身分：只有 Administrator 能建立，createdBy 必須是寫入者自己。所有操作者共用一把私鑰，
+    //     mesh 上分不出是誰發的，createdBy 是唯一能追查操作者的依據。
+    //   - 格式：欄位剛好四個。所有 Gateway 都讀得到這份文件，明文內容與收件者 uid 不能放在這裡
+    //     （放在 admin_notice_records），否則定向公告的加密就白做了。
+    //   - 上限：wire 最多 1 KB、expiresAt 最晚是伺服器時間加 25 小時，讓 Gateway 的查詢不會
+    //     撈到一堆永不過期的文件。有效期最長 24 小時，多的 1 小時留給簽章時間與寫入時間的差距。
+    //
+    // 任何登入帳號都能讀：任何登入帳號都可能是 Gateway。
+    match /admin_notices/{messageId} {
+      function validAdminNotice(messageId) {
+        let data = request.resource.data;
+        let fields = ['wire', 'expiresAt', 'createdAt', 'createdBy'];
+        return data.keys().hasAll(fields)
+            && data.keys().hasOnly(fields)
+            // payload 裡的 messageId 是 8 bytes，文件 ID 是它的小寫十六進位。
+            && messageId.matches('^[0-9a-f]{16}$')
+            // 最長的公告（5 個收件裝置、內容 300 bytes）是 661 bytes。
+            && data.wire is bytes
+            && data.wire.size() <= 1024
+            && data.expiresAt is timestamp
+            && data.expiresAt <= request.time + duration.value(25, 'h')
+            && data.createdAt == request.time
+            && data.createdBy == request.auth.uid;
+      }
+
+      allow read: if request.auth != null;
+      allow create: if isAdmin() && validAdminNotice(messageId);
+      // 公告一進到 mesh 就收不回來，改文件也改不到已經在傳的副本；更正與撤回只能發一則新的
+      // Admin Notice（docs/ADMIN_NOTICE_V1.md「撤回與取代」）。messageId 撞號時 set() 會變成
+      // update 而被擋，管理端換一個 messageId 重試。
+      allow update: if false;
+      // 刪除只是清理 Firestore，不算撤回：Gateway 收到刪除事件時什麼都不做。
+      allow delete: if isAdmin();
+
+      // receipts/{uid}：定向公告的回條（#143、docs/ADMIN_NOTICE_V1.md「回條」）。收件帳號每個一份，
+      // 同一帳號的多台裝置共用，以最後寫入的為準。App 由 Kotlin 端的 Firestore SDK 分兩次 merge 寫入：
+      // 解密成功時寫 deliveredAt 與 via，第一次在 App 裡讀到時寫 readAt。沒有網路時寫入留在 SDK 的
+      // 離線佇列，連上網路才送到這裡。
+      //
+      // 回條是收件者自己申報的：規則只認得是本人寫自己的那份，不知道他是不是真的收件者。規則能做的是：
+      //   - 身分：只能寫在自己的 uid 底下，而且公告文件要存在（exists() 每次寫入多算一次讀取）。
+      //   - 格式：deliveredAt 與 via 一定要有，readAt 可有可無。所以只有 readAt 的寫入，只能補在這個
+      //     帳號已有的回條上：送達那次沒有寫成、或同一支手機換了帳號後讀到前一個帳號的公告，都不會
+      //     憑空多出一份沒有送達紀錄的回條。
+      //   - 時間：用手機時鐘，不比對 request.time。離線排隊的寫入，伺服器時間是連上網那一刻。
+      //
+      // 只有 Administrator 讀得到，本人也讀不到：App 只寫不讀。via == 'ble' 會透露收件者當時沒有網路。
+      // 不能刪除；Administrator 刪掉公告文件時，這裡的回條仍留著、仍讀得到，只是之後不能再寫。
+      match /receipts/{uid} {
+        function validReceipt() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['deliveredAt', 'readAt', 'via'])
+              && data.keys().hasAll(['deliveredAt', 'via'])
+              && data.deliveredAt is timestamp
+              && data.via in ['firestore', 'ble']
+              && (!('readAt' in data) || data.readAt is timestamp);
+        }
+
+        allow read: if isAdmin();
+        allow create, update: if isOwner(uid)
+                              && exists(/databases/$(database)/documents/admin_notices/$(messageId))
+                              && validReceipt();
+        allow delete: if false;
+      }
+    }
+
+    // admin_notice_records/{messageId}：管理端留存每則 Admin Notice 的明文內容、收件對象、kind、
+    // level、replaces、batchId 與操作者（docs/ADMIN_NOTICE_V1.md「Firestore」），讓事後查得出
+    // 是誰發了什麼。與 admin_notices 同一個 messageId，由同一次 batch write 寫入。
+    //
+    // 只有 Administrator 讀得到：裡面有定向公告的明文與收件者 uid。建立後不能修改或刪除，
+    // 連 Administrator 也不行，紀錄才能當稽核依據。欄位名稱見 docs/ADMIN_NOTICE_V1.md「Firestore」；
+    // 規則刻意不檢查欄位：這份文件只給 Administrator 讀寫，不會流到用戶端。
+    match /admin_notice_records/{messageId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
     }
 
     // mesh_supply_packets/{packetId}：Gateway 代傳上來的物資需求／捐贈（SUPPLY_EXCHANGE 封包，

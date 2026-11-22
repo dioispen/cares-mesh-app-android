@@ -72,6 +72,19 @@
   <string name="mesh_service_channel_desc">Keeps the Bluetooth mesh running in the background</string>
     <string name="mesh_service_notification_content">Mesh running — %1$d peers</string>
 
+  <!-- Admin Notice notifications (docs/ADMIN_NOTICE_V1.md, 收件端呈現) -->
+  <string name="admin_notice_channel_group">Admin notices</string>
+  <string name="admin_notice_channel_urgent">Urgent notices</string>
+  <string name="admin_notice_channel_urgent_desc">Urgent instructions from the administrators, such as evacuation orders. Sounds and vibrates; Do Not Disturb still applies.</string>
+  <string name="admin_notice_channel_important">Important notices</string>
+  <string name="admin_notice_channel_important_desc">Important information from the administrators, such as shelter openings.</string>
+  <string name="admin_notice_channel_info">Information notices</string>
+  <string name="admin_notice_channel_info_desc">General information from the administrators. Silent.</string>
+  <string name="admin_notice_title_urgent">Urgent notice</string>
+  <string name="admin_notice_title_important">Important notice</string>
+  <string name="admin_notice_title_info">Notice</string>
+  <string name="admin_notice_targeted_hidden">A notice for you. Unlock to read it.</string>
+
   <!-- Favorites accessibility -->
   <string name="cd_add_favorite">Add to favorites</string>
   <string name="cd_remove_favorite">Remove from favorites</string>

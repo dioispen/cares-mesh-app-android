@@ -101,6 +101,33 @@ abstract final class SettingsErrors {
   static const panicFailed = 'PANIC_FAILED';
 }
 
+/// Admin Notice 的 method 名稱，對應 Kotlin `AdminNoticeBridge` 的 companion 常數（命名規則
+/// `adminNotice_<動詞><受詞>`）：收件金鑰（#140）與公告列表（#142）。
+abstract final class AdminNoticeMethods {
+  static const getPublicKey = 'adminNotice_getPublicKey';
+  static const clearKey = 'adminNotice_clearKey';
+  static const getAll = 'adminNotice_getAll';
+  static const markRead = 'adminNotice_markRead';
+}
+
+/// Admin Notice method 拒絕時的錯誤碼（[PlatformException.code]），對應 Kotlin `AdminNoticeBridge` 的
+/// `ERROR_*`。參數不合法時則是共用的 `INVALID_ARGUMENT`。
+abstract final class AdminNoticeErrors {
+  /// 原生的加密儲存開不了、讀不到或寫不進去；沒有交出任何公鑰，可以之後再試。
+  static const keyStoreUnavailable = 'KEY_STORE_UNAVAILABLE';
+
+  /// 原生存公告的加密儲存開不了、讀不到或寫不進去；可以之後再試。
+  static const noticeStoreUnavailable = 'NOTICE_STORE_UNAVAILABLE';
+}
+
+/// Admin Notice 事件的 `type`，對應 Kotlin `AdminNoticeBridge.EVENT_ADMIN_NOTICE`。
+abstract final class AdminNoticeEvents {
+  /// 原生存進新公告、或公告有變（已讀，以及 #139 的已更正、已撤回）時推來整份列表，
+  /// `notices` 與 [BitchatBridge.getAdminNotices] 回傳的相同（見 `models/admin_notice.dart`）。
+  /// 只在 Flutter engine 接著時推；沒接時收到的公告，下次讀列表就會出現。
+  static const notices = 'admin_notice';
+}
+
 /// 聊天快照事件的 `type`，對應 Kotlin `ChatSerialization` 的常數（命名規則 `chat_<snake_case>`）。
 abstract final class ChatEvents {
   /// `{type, messages: List<Map>}`：公開 mesh 時間線的完整快照，依時間線順序。
@@ -136,8 +163,8 @@ abstract final class ChatEvents {
   /// 在 [peers] 的列上。
   static const unread = 'chat_unread';
 
-  /// `{type, navigation: Map?}`：使用者點了聊天通知、Dart 還沒處理的目的地（#57），沒有時
-  /// `navigation` 為 null（見 `models/chat_navigation.dart`）。它只是提醒：要導航前一定先以
+  /// `{type, navigation: Map?}`：使用者點了通知（聊天或 Admin Notice）、Dart 還沒處理的目的地（#57），沒有時
+  /// `navigation` 為 null（見 `models/app_navigation.dart`）。它只是提醒：要導航前一定先以
   /// [ChatMethods.takePendingNavigation] 取走，照取到的去，每個點擊只處理一次。
   static const pendingNavigation = 'chat_pending_navigation';
 
@@ -266,10 +293,11 @@ class BitchatBridge {
   static Future<String?> openLatestUnreadPrivateChat() =>
       _method.invokeMethod<String>(ChatMethods.openLatestUnreadPrivateChat);
 
-  /// 取走使用者點聊天通知要去的地方（#57）：`{target: privateChat, peerID, senderNickname}` 或
-  /// `{target: publicChat}`；沒有（或已被取走）時回傳 null。取走後原生不再持有它。只取、不開啟：
-  /// 私訊畫面照一般流程呼叫 [startPrivateChat]。bridge 錯誤會往上拋。
-  static Future<Map<dynamic, dynamic>?> takePendingChatNavigation() =>
+  /// 取走使用者點通知要去的地方（#57）：`{target: privateChat, peerID, senderNickname}`、
+  /// `{target: publicChat}` 或 `{target: adminNotices}`（Admin Notice 的通知）；沒有（或已被取走）時
+  /// 回傳 null。取走後原生不再持有它。只取、不開啟：私訊畫面照一般流程呼叫 [startPrivateChat]。
+  /// bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> takePendingAppNavigation() =>
       _method.invokeMethod<Map>(ChatMethods.takePendingNavigation);
 
   /// 切換我的最愛（原生 `ChatViewModel.toggleFavorite`，原生私訊標頭星號做的事）：加入或移出，
@@ -406,6 +434,44 @@ class BitchatBridge {
   /// mesh 服務還不存在時原生回 [PlatformException]（`SERVICE_NOT_READY`）；沒有原生 mesh 的平台
   /// （iOS、測試）丟 [MissingPluginException]。兩者都往上拋。
   static Future<Uint8List?> getSigningPublicKey() => _method.invokeMethod<Uint8List>('getSigningPublicKey');
+
+  /// 這支手機給 [uid] 的 Admin Notice 收件公鑰（X25519，32 bytes，#140）。Reporter Handle 登記把它
+  /// 寫成 `noticePublicKey`，Administrator 用它加密定向公告（docs/ADMIN_NOTICE_V1.md 收件者加密金鑰）。
+  ///
+  /// 同一個 [uid] 再問還是同一把；私鑰綁的是別的帳號（或已經清除）時，原生先刪掉舊私鑰再產生新的。
+  /// 原生的加密儲存出錯時丟 [PlatformException]（[AdminNoticeErrors.keyStoreUnavailable]）；沒有原生
+  /// mesh 的平台（iOS、測試）丟 [MissingPluginException]。兩者都往上拋。
+  static Future<Uint8List?> getAdminNoticePublicKey(String uid) =>
+      _method.invokeMethod<Uint8List>(AdminNoticeMethods.getPublicKey, <String, dynamic>{'uid': uid});
+
+  /// 刪除這支手機的 Admin Notice 收件私鑰（#140）：登出與緊急清除時呼叫，之後這支手機解不開任何
+  /// 定向公告，直到下次登入產生新的一把。已經解開、存在本機的定向公告也一併刪除並收回通知，
+  /// 下一個登入的帳號看不到；廣播是公開的，留著。列表的變化經 [AdminNoticeEvents.notices] 推來。
+  ///
+  /// 正常完成就表示私鑰與定向公告都已從磁碟刪除。私鑰刪不掉丟 [PlatformException]
+  /// （[AdminNoticeErrors.keyStoreUnavailable]），公告刪不掉丟 [AdminNoticeErrors.noticeStoreUnavailable]；
+  /// 兩步都會試過才回報，重試無害。沒有原生 mesh 的平台（iOS、測試）丟 [MissingPluginException]。
+  /// 都往上拋。
+  static Future<void> clearAdminNoticeKey() => _method.invokeMethod<void>(AdminNoticeMethods.clearKey);
+
+  /// 這支手機收到、還在保留期（expiresAt 後 7 天）內的所有 Admin Notice，新的在前（#142）。每一則是
+  /// `{messageId, kind, level, content, issuedAt, expiresAt, status, replacedBy, read}`，解析見
+  /// `models/admin_notice.dart`；之後的變化經 [AdminNoticeEvents.notices] 推來。
+  /// 原生的儲存出錯時丟 [PlatformException]（[AdminNoticeErrors.noticeStoreUnavailable]）；沒有原生的
+  /// 平台丟 [MissingPluginException]。兩者都往上拋。
+  static Future<List<Object?>> getAdminNotices() async {
+    final List<dynamic>? notices = await _method.invokeMethod<List>(AdminNoticeMethods.getAll);
+    if (notices == null) {
+      throw PlatformException(code: 'NO_NOTICES', message: '${AdminNoticeMethods.getAll} answered null');
+    }
+    return notices;
+  }
+
+  /// 使用者在 App 裡讀了這則公告（#142）。已讀過或已不在保留期內也正常完成。新的列表經
+  /// [AdminNoticeEvents.notices] 推來；第一次讀到的定向公告，原生之後會寫 readAt 回條（#143）。
+  /// 錯誤同 [getAdminNotices]，往上拋。
+  static Future<void> markAdminNoticeRead(String messageId) =>
+      _method.invokeMethod<void>(AdminNoticeMethods.markRead, <String, dynamic>{'messageId': messageId});
 
   /// 實驗畫面（#70，debug 限定）讀取現場即時狀態，回傳：
   ///

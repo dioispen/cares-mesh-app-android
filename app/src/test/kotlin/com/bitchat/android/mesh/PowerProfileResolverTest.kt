@@ -1,5 +1,7 @@
 package com.bitchat.android.mesh
 
+import com.bitchat.android.mesh.PowerManager.BleAdvertiseMode
+import com.bitchat.android.mesh.PowerManager.BleTxPower
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,23 +10,84 @@ import org.junit.Test
 class PowerProfileResolverTest {
 
     @Test
-    fun `background normal without peers scans one second per minute`() {
+    fun `background normal without peers scans four seconds every thirty at balanced scan mode`() {
         val profile = resolve(battery = 80, background = true, peers = false)
 
         assertEquals(PowerManager.BatteryBand.NORMAL, profile.batteryBand)
-        assertEquals(1_000L, profile.ble.scanOnMs)
-        assertEquals(59_000L, profile.ble.scanOffMs)
+        assertEquals(4_000L, profile.ble.scanOnMs)
+        assertEquals(26_000L, profile.ble.scanOffMs)
+        assertEquals(PowerManager.BleScanMode.BALANCED, profile.ble.scanMode)
         assertFalse(profile.ble.continuousScan)
         assertEquals(8, profile.ble.maxConnections)
         assertEquals(60_000L, profile.meshAnnouncementIntervalMs)
     }
 
     @Test
-    fun `any direct transport peer accelerates background BLE discovery to thirty seconds`() {
+    fun `an isolated background phone keeps the longer window at every battery level`() {
+        for (battery in listOf(80, 20, 10)) {
+            val profile = resolve(battery = battery, background = true, peers = false)
+
+            assertEquals("$battery%", 4_000L, profile.ble.scanOnMs)
+            assertEquals("$battery%", 26_000L, profile.ble.scanOffMs)
+            assertEquals("$battery%", PowerManager.BleScanMode.BALANCED, profile.ble.scanMode)
+        }
+    }
+
+    @Test
+    fun `background with direct peers keeps one second every thirty at low power scan mode`() {
         val profile = resolve(battery = 80, background = true, peers = true)
 
         assertEquals(1_000L, profile.ble.scanOnMs)
         assertEquals(29_000L, profile.ble.scanOffMs)
+        assertEquals(PowerManager.BleScanMode.LOW_POWER, profile.ble.scanMode)
+    }
+
+    @Test
+    fun `foreground scan modes still follow the power mode`() {
+        assertEquals(PowerManager.BleScanMode.BALANCED, resolve(battery = 80, background = false).ble.scanMode)
+        assertEquals(PowerManager.BleScanMode.LOW_POWER, resolve(battery = 20, background = false).ble.scanMode)
+        assertEquals(PowerManager.BleScanMode.LOW_POWER, resolve(battery = 10, background = false).ble.scanMode)
+        assertEquals(
+            PowerManager.BleScanMode.LOW_LATENCY,
+            PowerProfileResolver.resolve(80, isCharging = true, isBackground = false, hasDirectPeers = false).ble.scanMode
+        )
+    }
+
+    @Test
+    fun `with direct peers each mode keeps its upstream advertising`() {
+        assertEquals(advertise(BleAdvertiseMode.BALANCED, BleTxPower.MEDIUM), resolve(80, false, peers = true).advertise)
+        assertEquals(advertise(BleAdvertiseMode.LOW_POWER, BleTxPower.LOW), resolve(80, true, peers = true).advertise)
+        assertEquals(advertise(BleAdvertiseMode.LOW_POWER, BleTxPower.ULTRA_LOW), resolve(10, true, peers = true).advertise)
+        assertEquals(
+            advertise(BleAdvertiseMode.LOW_LATENCY, BleTxPower.HIGH),
+            PowerProfileResolver.resolve(80, isCharging = true, isBackground = false, hasDirectPeers = true).advertise
+        )
+    }
+
+    @Test
+    fun `without direct peers the phone advertises balanced at high power`() {
+        val isolated = advertise(BleAdvertiseMode.BALANCED, BleTxPower.HIGH)
+
+        assertEquals(isolated, resolve(80, background = true, peers = false).advertise)
+        assertEquals(isolated, resolve(20, background = true, peers = false).advertise)
+        assertEquals(isolated, resolve(80, background = false, peers = false).advertise)
+        assertEquals(isolated, resolve(20, background = false, peers = false).advertise)
+    }
+
+    @Test
+    fun `isolation never lowers performance advertising`() {
+        assertEquals(
+            advertise(BleAdvertiseMode.LOW_LATENCY, BleTxPower.HIGH),
+            PowerProfileResolver.resolve(80, isCharging = true, isBackground = false, hasDirectPeers = false).advertise
+        )
+    }
+
+    @Test
+    fun `isolated at critical battery advertises low power at medium power`() {
+        val critical = advertise(BleAdvertiseMode.LOW_POWER, BleTxPower.MEDIUM)
+
+        assertEquals(critical, resolve(10, background = true, peers = false).advertise)
+        assertEquals(critical, resolve(10, background = false, peers = false).advertise)
     }
 
     @Test
@@ -78,7 +141,7 @@ class PowerProfileResolverTest {
         assertTrue(foreground.ble.continuousScan)
         assertEquals(PowerManager.PowerMode.POWER_SAVER, background.mode)
         assertFalse(background.ble.continuousScan)
-        assertEquals(59_000L, background.ble.scanOffMs)
+        assertEquals(26_000L, background.ble.scanOffMs)
     }
 
     @Test
@@ -99,4 +162,6 @@ class PowerProfileResolverTest {
         isBackground = background,
         hasDirectPeers = peers
     )
+
+    private fun advertise(mode: BleAdvertiseMode, txPower: BleTxPower) = PowerManager.AdvertiseProfile(mode, txPower)
 }

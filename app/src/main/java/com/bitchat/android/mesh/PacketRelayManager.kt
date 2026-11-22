@@ -13,8 +13,17 @@ import kotlin.random.Random
  * 
  * This class handles all relay decisions and logic for bitchat packets.
  * All packets that aren't specifically addressed to us get processed here.
+ *
+ * [policy] 與 [random] 的預設值就是 production 行為。模擬器（#1、ADR-0001）經 [delegate] 串接多個
+ * 實例，並注入自己的政策與帶 seed 的 [Random]，讓機率轉發可重現。帶 seed 的 [Random] 不是
+ * thread-safe，只適合單執行緒的模擬；production 的 [Random.Default] 是。
  */
-class PacketRelayManager(private val myPeerID: String) {
+class PacketRelayManager(
+    private val myPeerID: String,
+    private val policy: RelayPolicy = RelayPolicy(),
+    /** 機率轉發與語音封包 jitter 的亂數來源。 */
+    private val random: Random = Random.Default
+) {
     private val debugManager by lazy { try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (e: Exception) { null } }
     
     companion object {
@@ -70,7 +79,7 @@ class PacketRelayManager(private val myPeerID: String) {
         val relayPacket = packet.copy(ttl = voiceTtl)
         Log.d(TAG, "Decremented TTL from ${packet.ttl} to ${relayPacket.ttl}")
         if (MessageType.fromValue(packet.type) == MessageType.VOICE_FRAME) {
-            delay(Random.nextLong(8L, 26L))
+            delay(random.nextLong(8L, 26L))
         }
         
         // Source-based routing: if route is set and includes us, try targeted next-hop forwarding
@@ -140,9 +149,9 @@ class PacketRelayManager(private val myPeerID: String) {
      * Determine if we should relay this packet based on type and network conditions
      */
     private fun shouldRelayPacket(packet: BitchatPacket, fromPeerID: String): Boolean {
-        // Always relay if TTL is high enough (indicates important message)
-        if (packet.ttl >= 4u) {
-            Log.d(TAG, "High TTL (${packet.ttl}), relaying")
+        // 遞減後 TTL 達門檻就一律轉發（#1 R13；門檻見 RelayPolicy.unconditionalRelayTtl）
+        if (packet.ttl >= policy.unconditionalRelayTtl) {
+            Log.d(TAG, "High TTL (${packet.ttl} >= ${policy.unconditionalRelayTtl}), relaying")
             return true
         }
         
@@ -164,7 +173,7 @@ class PacketRelayManager(private val myPeerID: String) {
             else -> 0.4                 // Lowest probability for very large networks
         }
         
-        val shouldRelay = Random.nextDouble() < relayProb
+        val shouldRelay = random.nextDouble() < relayProb
         Log.d(TAG, "Network size: ${networkSize}, Relay probability: ${relayProb}, Decision: ${shouldRelay}")
         
         return shouldRelay
@@ -186,6 +195,7 @@ class PacketRelayManager(private val myPeerID: String) {
             appendLine("=== Packet Relay Manager Debug Info ===")
             appendLine("Relay Scope Active: ${relayScope.isActive}")
             appendLine("My Peer ID: ${myPeerID}")
+            appendLine("Relay Policy: ${policy}")
             appendLine("Network Size: ${delegate?.getNetworkSize() ?: "unknown"}")
         }
     }

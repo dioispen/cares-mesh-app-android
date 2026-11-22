@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
+import 'services/admin_notice_service.dart';
 import 'services/chat_service.dart';
 import 'services/mascot_service.dart';
 import 'services/supply_exchange_feed.dart';
@@ -81,7 +82,14 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
       _listenToSystemStatus();
       _startChat();
       _startMutualAidTasks();
+      _startAdminNotices();
     });
+  }
+
+  /// Admin Notice 列表（#142）也從 app 啟動就開始收：首頁的未讀數與公告卡片不必等打開列表。
+  void _startAdminNotices() {
+    if (kIsWeb) return;
+    unawaited(AdminNoticeService.instance.start());
   }
 
   /// 聊天狀態由 app 層級的 [ChatService] 持有，app 一啟動就開始接收，

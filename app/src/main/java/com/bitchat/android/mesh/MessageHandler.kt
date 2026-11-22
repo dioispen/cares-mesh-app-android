@@ -49,6 +49,9 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
     // so repeated failures mean the established session is stale (peer re-handshaked elsewhere).
     private val consecutiveDecryptFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
+    // Health Reports already handed to the chat delegate, so a re-send is not announced again
+    private val chatHealthReports = HealthReportRepeatFilter()
+
     /**
      * Handle Noise encrypted transport message - SIMPLIFIED iOS-compatible version
      * Uses NoisePayloadType system exactly like iOS SimplifiedBluetoothService
@@ -643,27 +646,33 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         // 實機實驗（#70）的封包照常轉發與量測，但不是真的有人回報：聊天與 Health 畫面都不顯示。
         if (ExperimentHandles.isExperimentHandle(report.reporterHandle)) return
 
-        // 1. Notify UI/Flutter —— 只帶 Broadcast Tier：Status 與近似位置，不含任何 PII
-        val approx = report.approximateLatLng()
-        val locationText = if (approx != null) {
-            // Locale.US 固定用小數點，避免逗號小數的地區把座標對格式化成四個數字
-            String.format(java.util.Locale.US, "約 %.3f, %.3f", approx.first, approx.second)
-        } else {
-            "位置未提供"
+        // 1. Notify UI —— 只帶 Broadcast Tier：Status 與近似位置，不含任何 PII。
+        //    同一則陳述（Reporter Handle、reportTime 都相同）只交一次：Reporter 的裝置會以新的封包
+        //    重發成立中的回報（ADR-0012）。聊天列本來就依 id 去重，但每交一次就會再震動一次。
+        if (chatHealthReports.isNew(report)) {
+            val approx = report.approximateLatLng()
+            val locationText = if (approx != null) {
+                // Locale.US 固定用小數點，避免逗號小數的地區把座標對格式化成四個數字
+                String.format(java.util.Locale.US, "約 %.3f, %.3f", approx.first, approx.second)
+            } else {
+                "位置未提供"
+            }
+            val message = BitchatMessage(
+                id = report.reporterHandle,
+                sender = "匿名回報",
+                content = "[HEALTH REPORT] Status: ${report.status.label}\nLocation: $locationText",
+                senderPeerID = peerID,
+                timestamp = Date()
+            )
+            delegate?.onMessageReceived(message)
         }
-        val message = BitchatMessage(
-            id = report.reporterHandle,
-            sender = "匿名回報",
-            content = "[HEALTH REPORT] Status: ${report.status.label}\nLocation: $locationText",
-            senderPeerID = peerID,
-            timestamp = Date()
-        )
-        delegate?.onMessageReceived(message)
 
-        // 2. 轉發給 Flutter EventChannel
+        // 2. 轉發給 Flutter EventChannel。重發也照轉：Health 畫面依 Reporter Handle 與 reportTime
+        //    合併、不會多一筆，而第一份送達時沒開著的畫面要靠它才看得到這份回報。
         InboundPacketBridge.onPacketReceived?.invoke(packet)
 
-        // 3. 交給 Gateway（ADR-0009）：收到時的原始封包，含 content tag 與簽章
+        // 3. 交給 Gateway（ADR-0009）：收到時的原始封包，含 content tag 與簽章。重發由 Gateway
+        //    依 reportTime 自行略過。
         VerifiedHealthReportBridge.publish(VerifiedHealthReport(received, report, peerID))
     }
 
