@@ -425,7 +425,7 @@ class _SupplyScreenState extends State<SupplyScreen>
               if (snap.hasError) return _emptyNote('讀取失敗：${snap.error}');
               if (!snap.hasData) return _emptyNote('載入中…');
               final docs = snap.data!.docs.map(SupplyRequest.fromDoc).toList()
-                ..sort((a, b) => (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
+                ..sort((a, b) => compareNewestFirst(a.createdAt, b.createdAt));
               if (docs.isEmpty) return _emptyNote('你還沒有申請過物資。');
               return Column(
                 children: [
@@ -453,7 +453,7 @@ class _SupplyScreenState extends State<SupplyScreen>
               if (snap.hasError) return _emptyNote('讀取失敗：${snap.error}');
               if (!snap.hasData) return _emptyNote('載入中…');
               final docs = snap.data!.docs.map(SupplyPledge.fromDoc).toList()
-                ..sort((a, b) => (b.pledgedAt ?? DateTime(0)).compareTo(a.pledgedAt ?? DateTime(0)));
+                ..sort((a, b) => compareNewestFirst(a.pledgedAt, b.pledgedAt));
               if (docs.isEmpty) return _emptyNote('你還沒有登記過捐贈。');
               return Column(
                 children: [
@@ -559,6 +559,12 @@ class _SupplyScreenState extends State<SupplyScreen>
     );
   }
 }
+
+/// 「我的申請／我的捐贈」的排序：新的在前。時間是 null 的是還沒同步到雲端的紀錄
+/// （serverTimestamp 尚未回填），也就是剛寫下的，排在最前面。
+@visibleForTesting
+int compareNewestFirst(DateTime? a, DateTime? b) =>
+    a == null ? (b == null ? 0 : -1) : (b == null ? 1 : b.compareTo(a));
 
 /// 卡片把例外原樣顯示在「申請失敗：…」後面，所以 toString 就是給使用者看的句子。
 class _NotSignedIn implements Exception {
