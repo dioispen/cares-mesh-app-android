@@ -2,12 +2,15 @@ package com.bitchat.android.adminnotice
 
 import android.content.Context
 import android.os.Build
-import com.bitchat.android.adminnotice.TestAdminNotices.RECIPIENT_1_PRIVATE_HEX
-import com.bitchat.android.adminnotice.TestAdminNotices.V2
-import com.bitchat.android.adminnotice.TestAdminNotices.V2_CONTENT
-import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.testsupport.FakeAndroidKeyStore
+import com.bitchat.android.testsupport.ManualScheduler
+import com.bitchat.android.testsupport.TestAdminNotices
+import com.bitchat.android.testsupport.TestAdminNotices.RECIPIENT_1_PRIVATE_HEX
+import com.bitchat.android.testsupport.TestAdminNotices.V2
+import com.bitchat.android.testsupport.TestAdminNotices.V2_CONTENT
+import com.bitchat.android.testsupport.TestAdminNotices.VECTOR_ISSUED_AT
+import com.bitchat.android.testsupport.hex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

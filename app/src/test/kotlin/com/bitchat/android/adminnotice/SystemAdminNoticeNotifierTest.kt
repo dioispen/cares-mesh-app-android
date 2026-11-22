@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import com.bitchat.android.flutter.AppNavigation
 import com.bitchat.android.flutter.FlutterChatActivity
+import com.bitchat.android.testsupport.TestAdminNotices
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
