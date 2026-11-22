@@ -308,7 +308,7 @@ void main() {
 
   group('ExperimentTtl', () {
     test('runs from 0 to 7, starting at the current Health Report TTL', () {
-      expect([ExperimentTtl.min, ExperimentTtl.max, ExperimentTtl.initial], [0, 7, 3]);
+      expect([ExperimentTtl.min, ExperimentTtl.max, ExperimentTtl.initial], [0, 7, 7]);
     });
 
     test('says how far a TTL reaches: TTL n goes up to hop n + 1', () {
