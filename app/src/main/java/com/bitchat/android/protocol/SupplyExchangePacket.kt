@@ -17,7 +17,7 @@ enum class SupplyExchangeAction(val wire: Byte, val value: String) {
 }
 
 /**
- * SUPPLY_EXCHANGE（0x31）的 payload：一筆物資需求或捐贈，不含任何可識別個人的欄位。
+ * SUPPLY_EXCHANGE（0x32）的 payload：一筆物資需求或捐贈，不含任何可識別個人的欄位。
  *
  * 線路格式（big-endian，最大 [MAX_ENCODED_SIZE] bytes）：
  * ```

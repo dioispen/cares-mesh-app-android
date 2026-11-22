@@ -14,7 +14,7 @@ void main() {
     String exchangeId = '0123456789abcdef0123456789abcdef',
     String action = 'request',
     int? timestamp,
-    int packetType = 0x31,
+    int packetType = 0x32,
     List<int>? payload,
   }) =>
       {

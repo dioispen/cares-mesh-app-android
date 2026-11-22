@@ -239,7 +239,7 @@ class BitchatFlutterChannels(
                 }
             }
 
-            // 物資需求／捐贈（SUPPLY_EXCHANGE，0x31）。錯誤碼與 sendHealthReport 同一組：
+            // 物資需求／捐贈（SUPPLY_EXCHANGE，0x32）。錯誤碼與 sendHealthReport 同一組：
             // INVALID_FORMAT（欄位缺少或不合法）、SERVICE_NOT_READY（mesh 沒在跑）、SEND_FAILED。
             "sendSupplyExchange" -> {
                 try {

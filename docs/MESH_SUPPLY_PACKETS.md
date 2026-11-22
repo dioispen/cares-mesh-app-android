@@ -1,4 +1,4 @@
-# Mesh 物資封包（SUPPLY_EXCHANGE，0x31）
+# Mesh 物資封包（SUPPLY_EXCHANGE，0x32）
 
 物資頁的「申請物資」與「捐贈物資」送出時，除了寫進雲端自己的 `supply_requests`／`supply_pledges`，
 同時經 BLE mesh 廣播一份不含 PII 的 `SUPPLY_EXCHANGE` 封包。附近的手機收到後顯示在物資頁的
@@ -9,7 +9,7 @@
 
 ## 線路格式
 
-`MessageType.SUPPLY_EXCHANGE = 0x31`，沒有 content tag（與 `HEALTH_REPORT` 不同）。payload：
+`MessageType.SUPPLY_EXCHANGE = 0x32`，沒有 content tag（與 `HEALTH_REPORT` 不同）。`0x31` 已保留給 Admin Notice（[ADR-0011](adr/0011-admin-notice-trusts-admin-signature-only.md)），不能用。payload：
 
 | 位移 | 欄位 | 大小 | 說明 |
 |---|---|---|---|

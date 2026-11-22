@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// SUPPLY_EXCHANGE（0x31）的 payload：一筆物資需求（request）或捐贈（offer），不含任何 PII。
+/// SUPPLY_EXCHANGE（0x32）的 payload：一筆物資需求（request）或捐贈（offer），不含任何 PII。
 ///
 /// 對應 `app/.../protocol/SupplyExchangePacket.kt` 的線路格式（big-endian）：
 /// ```

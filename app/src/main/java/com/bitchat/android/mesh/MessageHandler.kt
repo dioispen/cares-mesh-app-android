@@ -455,7 +455,7 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
     }
     
     /**
-     * SUPPLY_EXCHANGE(0x31)：一筆物資需求／捐贈。與 Health Report 相同，只收已驗證 peer 的封包
+     * SUPPLY_EXCHANGE(0x32)：一筆物資需求／捐贈。與 Health Report 相同，只收已驗證 peer 的封包
      * （SecurityManager 已驗過簽章；物資封包沒有 ADR-0006 的 key 快取，發送者離開後補送的會在那裡被擋）。
      * 解碼成功後交給 Flutter（附近的人看得到）與 Gateway（有網路的人代傳到 Firestore）。
      */

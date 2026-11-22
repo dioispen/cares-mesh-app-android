@@ -421,7 +421,7 @@ class MessageHandlerTest {
         assertTrue(hooked.isEmpty())
     }
 
-    // SUPPLY_EXCHANGE（0x31）：物資需求／捐贈，交給 Flutter 與物資 Gateway 的 hook。
+    // SUPPLY_EXCHANGE（0x32）：物資需求／捐贈，交給 Flutter 與物資 Gateway 的 hook。
     @Test
     fun `verified supply exchange reaches Flutter untouched and the supply gateway hook`() = runBlocking {
         whenever(delegate.getPeerInfo(peerID)).thenReturn(peerInfo(signingKey))

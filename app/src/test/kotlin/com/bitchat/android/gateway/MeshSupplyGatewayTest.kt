@@ -152,7 +152,7 @@ class MeshSupplyGatewayTest {
         ),
         senderPeerID = "0102030405060708",
         packetId = packetId,
-        rawPacket = byteArrayOf(0x01, 0x31),
+        rawPacket = byteArrayOf(0x01, 0x32),
         createdAtMs = createdAtMs
     )
 

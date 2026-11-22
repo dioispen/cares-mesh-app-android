@@ -7,7 +7,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
- * SUPPLY_EXCHANGE（0x31）payload 的編解碼測試。
+ * SUPPLY_EXCHANGE（0x32）payload 的編解碼測試。
  *
  * 跨端權威向量 —— Dart 端 `supply_exchange_packet_test.dart` 使用相同的 bytes 與欄位值：
  * version=1, action=request(1), exchangeId=0123456789abcdef0123456789abcdef, itemId="water",
@@ -25,6 +25,12 @@ class SupplyExchangePacketTest {
         quantity = 12,
         unit = "瓶"
     )
+
+    @Test
+    fun `packet type is 0x32 because 0x31 is reserved for Admin Notice`() {
+        // ADR-0011 把 0x31 給了 ADMIN_NOTICE；Dart 端 BlePacketType.supplyExchange 必須同值。
+        assertEquals(0x32u.toUByte(), MessageType.SUPPLY_EXCHANGE.value)
+    }
 
     @Test
     fun `encodes the authoritative vector byte for byte`() {

@@ -21,7 +21,8 @@ enum class MessageType(val value: UByte) {
     FILE_TRANSFER(0x22u), // New: File transfer packet (BLE voice notes, etc.)
     VOICE_FRAME(0x29u), // Ephemeral live push-to-talk frame; never added to gossip sync
     HEALTH_REPORT(0x30u), // Renamed from DISASTER_REPORT
-    SUPPLY_EXCHANGE(0x31u); // 物資需求／捐贈（SupplyExchangePacket），本專案專有
+    // 0x31 保留給 ADMIN_NOTICE（ADR-0011、docs/ADMIN_NOTICE_V1.md），不可挪用
+    SUPPLY_EXCHANGE(0x32u); // 物資需求／捐贈（SupplyExchangePacket），本專案專有
 
     companion object {
         fun fromValue(value: UByte): MessageType? {

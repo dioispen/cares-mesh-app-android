@@ -28,7 +28,7 @@
 
 - `mesh/MessageHandler.kt` — 加入 tagged broadcast 處理路徑（`BroadcastContentTag`）
 - `mesh/BluetoothMeshService.kt`、`mesh/PacketProcessor.kt` — 接上災害回報流程
-- `protocol/BinaryProtocol.kt` — 新增 `HEALTH_REPORT`（`0x30`）、`SUPPLY_EXCHANGE`（`0x31`）等訊息型別
+- `protocol/BinaryProtocol.kt` — 新增 `HEALTH_REPORT`（`0x30`）、`SUPPLY_EXCHANGE`（`0x32`）等訊息型別
 - `service/MeshForegroundService.kt`、`service/MeshServiceHolder.kt` — 前景服務生命週期調整
 - `ui/`、`MainActivity.kt` — 移除或停用不適用於本情境的上游 UI
 - Gradle — 嵌入 `:flutter` 子專案、加入 google-services plugin

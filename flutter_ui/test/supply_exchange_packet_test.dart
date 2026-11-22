@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/protocol/ble_packet_decoder.dart';
 import 'package:flutter_ui/protocol/supply_exchange_packet.dart';
 
 void main() {
@@ -21,6 +22,11 @@ void main() {
     quantity: 12,
     unit: '瓶',
   );
+
+  test('packet type is 0x32 because 0x31 is reserved for Admin Notice', () {
+    // ADR-0011 把 0x31 給了 ADMIN_NOTICE；Kotlin 端 MessageType.SUPPLY_EXCHANGE 必須同值。
+    expect(BlePacketType.supplyExchange, 0x32);
+  });
 
   test('encodes the authoritative vector byte for byte', () {
     expect(packet.encode(), vector);
