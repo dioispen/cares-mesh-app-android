@@ -252,7 +252,7 @@ void main() {
       await selectDevice(tester, 3);
       await tester.enterText(find.byKey(const ValueKey('experiment-count')), '20');
       await tester.enterText(find.byKey(const ValueKey('experiment-interval')), '200');
-      await setTtl(tester, 7);
+      await setTtl(tester, 3);
       await tester.enterText(find.byKey(const ValueKey('experiment-start-at')), '9:05:00');
       await tester.tap(find.text('重傷'));
       await tester.pump();
@@ -262,14 +262,14 @@ void main() {
         'device': 3,
         'count': 20,
         'intervalMs': 200,
-        'ttl': 7,
+        'ttl': 3,
         'startAt': '09:05:00',
         'status': '重傷',
         'keepAwake': true,
       });
     });
 
-    testWidgets('the defaults start now with TTL 3 and Status 安全; a 0 ms burst is allowed', (tester) async {
+    testWidgets('the defaults start now with TTL 7 and Status 安全; a 0 ms burst is allowed', (tester) async {
       await pumpScreen(tester);
 
       await selectDevice(tester, 1);
@@ -280,7 +280,7 @@ void main() {
         'device': 1,
         'count': 50,
         'intervalMs': 0,
-        'ttl': 3,
+        'ttl': 7,
         'startAt': null,
         'status': '安全',
         'keepAwake': true,
@@ -301,7 +301,7 @@ void main() {
 
     testWidgets('the TTL slider covers 0 to 7 and says how far the packet can go', (tester) async {
       await pumpScreen(tester);
-      expect(textOf(tester, 'experiment-ttl-reach'), 'TTL 3：最遠第 4 跳');
+      expect(textOf(tester, 'experiment-ttl-reach'), 'TTL 7：最遠第 8 跳');
 
       await setTtl(tester, 0);
       expect(textOf(tester, 'experiment-ttl-reach'), 'TTL 0：只到直連鄰居');

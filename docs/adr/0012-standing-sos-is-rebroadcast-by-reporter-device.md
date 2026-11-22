@@ -6,7 +6,7 @@ SOS 依定義會一直舉著，直到撤回或宣告安全（ADR-0004）；輕�
 
 我們讓 **Reporter 自己的裝置重發成立中的回報**：
 
-- **何時重發**：Reporter 最新一筆自己的 Health Report（P0-3 保存的那一筆，`OwnHealthReportKeeper`）舉著 SOS，或 Status 為輕傷、重傷時，每 30 分鐘（`STANDING_REPORT_RESEND_INTERVAL_MS`）以**新的封包時間戳重新簽章**，經 `HealthReportBroadcast.send` 發送一次：照常 TTL 3 flood、放進同步暫存，並成為新的「最新一筆」。30 分鐘遠小於 2 小時的保留期限，一次重發沒人收到、或等待被 Doze 拉長，回報也不會在下一次重發前到期。
+- **何時重發**：Reporter 最新一筆自己的 Health Report（P0-3 保存的那一筆，`OwnHealthReportKeeper`）舉著 SOS，或 Status 為輕傷、重傷時，每 30 分鐘（`STANDING_REPORT_RESEND_INTERVAL_MS`）以**新的封包時間戳重新簽章**，經 `HealthReportBroadcast.send` 發送一次：照常以 Health Report 的 TTL flood（ADR-0014 起為 7，本 ADR 定案時為 3）、放進同步暫存，並成為新的「最新一筆」。30 分鐘遠小於 2 小時的保留期限，一次重發沒人收到、或等待被 Doze 拉長，回報也不會在下一次重發前到期。
 - **payload 原封不動**，包括 `reportTime` 與位置：Rescuer 仍看得到 Reporter 實際做出這個陳述的時間；位置不重新取得。
 - **在 `MeshForegroundService` 裡跑**（`StandingReportRebroadcaster`），不依賴 Flutter 畫面。下一次發送排在「上一次發送的封包時間戳 + 30 分鐘」：app 或服務重啟既不會連發、也不會漏掉一次；Reporter 手動送出一筆就是重新起算。平時只有一個 delay；保存的回報一變就從新的那筆重算，沒有輪詢。只有該發卻因為 mesh 沒在跑而送不出去時，才每 5 分鐘再試一次。
 - **何時停止**：最新一筆是「安全」且沒有 SOS（Reporter 送出新的一筆就取代舊的，每次醒來都重新判斷），或保存的回報被清除（panic 換身分）。成立中的回報保存到超過 2 小時也不刪，手機關機數小時後重新開機，仍會馬上重發一次；其餘回報照 P0-3 到期就刪。
@@ -27,7 +27,7 @@ SOS 依定義會一直舉著，直到撤回或宣告安全（ADR-0004）；輕�
 
 ## Consequences
 
-- **電量**：每位舉著 SOS 或受傷的 Reporter，每 2 小時多約 4 次 flood（TTL 3），範圍內每台手機各轉發一次。delay 以開機後的 uptime 計，CPU 休眠時不前進：Doze 下實際間隔可能長於 30 分鐘（試跑 12.1 中，60 s 一次的 `STAT` 計時器被拉長到 1–5 分鐘）。每次醒來都以牆上時鐘重算，不會因此連發。若實測延遲到接近 2 小時，改用 `AlarmManager.setAndAllowWhileIdle`。
+- **電量**：每位舉著 SOS 或受傷的 Reporter，每 2 小時多約 4 次 flood（TTL 7，ADR-0014），範圍內每台手機各轉發一次；網路規模超過 10 時，前 3 代轉發不經轉發機率，負載交給模擬評估。delay 以開機後的 uptime 計，CPU 休眠時不前進：Doze 下實際間隔可能長於 30 分鐘（試跑 12.1 中，60 s 一次的 `STAT` 計時器被拉長到 1–5 分鐘）。每次醒來都以牆上時鐘重算，不會因此連發。若實測延遲到接近 2 小時，改用 `AlarmManager.setAndAllowWhileIdle`。
 - **隱私**：裝置會持續廣播 Broadcast Tier 的精確座標（ADR-0008），範圍內的人在 Reporter 宣告安全之前，都知道他確切在哪裡，也知道這支手機還開著；ADR-0006 記錄的「ANNOUNCE 把 Handle 連到暱稱」的曝光時間也跟著延長。成立中的回報在磁碟上（加密）保存到 Reporter 宣告安全或 panic 為止，不再是 2 小時。Reporter 宣告安全就停止。
 - **Severity Inflation**：宣告輕傷就能換到持續重發。與 Relay Decision 一樣無法防止，只能量測。
 - **位置會過時**：重發的是當時的位置；Reporter 移動後，Rescuer 要以 `reportTime` 判斷陳述與位置有多舊。
