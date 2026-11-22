@@ -474,6 +474,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
   通知不設 category：勿擾模式對鬧鐘、活動或訊息的例外會把它放行。每則通知以 messageId 當 tag，撤回或取代時才找得到它來更新或取消。廣播的通知在鎖定畫面顯示內容，定向公告不顯示。
 
+  點了通知開啟公告列表（不是單一則：列表攤開就是全文），App 已在執行與冷啟動都一樣。實作沿用聊天通知的點擊導航（#57）：通知的 intent 帶 `SystemAdminNoticeNotifier.EXTRA_OPEN_ADMIN_NOTICES`，`FlutterChatActivity` 讀成 `AppNavigation.AdminNotices` 放進 `PendingAppNavigation`，經 `chat_pending_navigation`／`chat_takePendingNavigation`（`{target: "adminNotices"}`）交給 Dart 的 `AppNavigationHost`；它在登入後的首頁出現時才導航，列表已開著就不再開一份。各種通知共用這一個待處理的目的地，以最後一次點擊為準。
+
   實作（#141）：定向公告的通知是 `VISIBILITY_PRIVATE`，附一份只有等級標題與「有一則給你的公告，解鎖後查看」的 public version，安全鎖定畫面顯示的是這一份。使用者在系統設定裡允許鎖定畫面顯示敏感內容時，Android 仍會顯示完整內容，這與其他通訊軟體相同；若要不論設定一律不顯示，得改成 `VISIBILITY_SECRET`，代價是鎖定畫面上完全看不到這則通知。
 
 - `POST_NOTIFICATIONS` 是選用權限。沒有權限時，首頁要放一張醒目的公告卡片代替通知。
@@ -559,6 +561,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 4. 公告發出之後才讓 A 進入 B 的範圍 → A 經 gossip sync 收到。
 5. C 滑掉 App 畫面（服務仍在）→ 仍會注入。
 6. C 重開 App → 不會重複通知。
+7. A 點公告通知，App 在前景、在背景、以及滑掉 App 只剩前景服務（冷啟動）各一次 → 都開在公告列表，未讀的變成已讀。
+8. A 登出（與緊急清除各一次）→ 第 2 則定向公告從列表與通知欄消失，廣播留著；改登入另一個帳號後也看不到它。
 
 ## 實作順序
 
