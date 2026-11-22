@@ -12,7 +12,8 @@ const _textPrimary = Color(0xFF3D2C1E);
 const _textSecondary = Color(0xFF8C7B6E);
 const _grey = Color(0xFF9A8F86);
 
-/// 管理端公告列表（#142，docs/ADMIN_NOTICE_V1.md 收件端呈現），從首頁開啟。
+/// 管理端公告列表（#142，docs/ADMIN_NOTICE_V1.md 收件端呈現），從首頁開啟，點公告通知時也開它
+/// （`AppNavigationHost`）。
 ///
 /// 列出這支手機保留的所有 Admin Notice，新的在前：等級、內容、發布與到期時間，以及「已過期」
 /// 「已更正」「已撤回」的標示；已更正、已撤回的不再顯示原內容，已更正的連到更正它的那則。
@@ -29,6 +30,15 @@ class AdminNoticeScreen extends StatefulWidget {
 
   /// 判斷「已過期」用的時鐘，預設為 [DateTime.now]。
   final DateTime Function()? clock;
+
+  /// 列表的 route 名稱：點公告通知時（`AppNavigationHost`）靠它認出列表已經開著。
+  static const routeName = '/admin-notices';
+
+  /// 開啟列表一律用這個 route（帶 [routeName]）。
+  static Route<void> route({AdminNoticeService? service, DateTime Function()? clock}) => MaterialPageRoute<void>(
+        settings: const RouteSettings(name: routeName),
+        builder: (_) => AdminNoticeScreen(service: service, clock: clock),
+      );
 
   @override
   State<AdminNoticeScreen> createState() => _AdminNoticeScreenState();

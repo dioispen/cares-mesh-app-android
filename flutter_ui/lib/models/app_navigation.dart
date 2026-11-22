@@ -8,12 +8,12 @@
 /// 解析一律容錯、永遠不丟例外：格式不對、或這個 app 不認得的目的地，都當作「哪裡都不去」（null）。
 library;
 
-/// 一個通知點擊的目的地：[OpenPrivateChat] 或 [OpenPublicChat]。
+/// 一個通知點擊的目的地：[OpenPrivateChat]、[OpenPublicChat] 或 [OpenAdminNotices]。
 sealed class AppNavigation {
   const AppNavigation();
 
-  /// 解析 `{target: privateChat, peerID, senderNickname}` 或 `{target: publicChat}`；
-  /// null、格式不對或未知的 `target` 回傳 null。
+  /// 解析 `{target: privateChat, peerID, senderNickname}`、`{target: publicChat}` 或
+  /// `{target: adminNotices}`；null、格式不對或未知的 `target` 回傳 null。
   static AppNavigation? fromMap(Object? raw) {
     if (raw is! Map) return null;
     switch (raw['target']) {
@@ -24,6 +24,8 @@ sealed class AppNavigation {
         return OpenPrivateChat(peerID, senderNickname: nickname is String ? nickname : null);
       case 'publicChat':
         return const OpenPublicChat();
+      case 'adminNotices':
+        return const OpenAdminNotices();
     }
     return null;
   }
@@ -48,4 +50,13 @@ final class OpenPublicChat extends AppNavigation {
 
   @override
   String toString() => 'OpenPublicChat()';
+}
+
+/// Admin Notice 通知（任何一則）：開啟管理端公告列表。列表攤開就是全文，畫面在前景時會把看到的
+/// 未讀公告標成已讀，所以不指定是哪一則。
+final class OpenAdminNotices extends AppNavigation {
+  const OpenAdminNotices();
+
+  @override
+  String toString() => 'OpenAdminNotices()';
 }

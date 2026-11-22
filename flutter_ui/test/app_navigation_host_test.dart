@@ -3,11 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/screens/admin_notice_screen.dart';
 import 'package:flutter_ui/screens/chat_screen.dart';
 import 'package:flutter_ui/screens/private_chat_screen.dart';
+import 'package:flutter_ui/services/admin_notice_service.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
 import 'package:flutter_ui/widgets/app_navigation_host.dart';
+
+import 'support/fake_admin_notice_native.dart';
 
 /// A `chat_selected_private_peer` map as Kotlin sends it; [peerID] null means no private chat.
 Map<String, dynamic> focusEvent(String? peerID) => {
@@ -23,6 +27,7 @@ const bob = 'contact_bbbb';
 const privateAlice = {'target': 'privateChat', 'peerID': alice, 'senderNickname': 'alice'};
 const privateBob = {'target': 'privateChat', 'peerID': bob, 'senderNickname': 'bob'};
 const publicChat = {'target': 'publicChat'};
+const adminNotices = {'target': 'adminNotices'};
 
 void main() {
   late StreamController<Map<String, dynamic>> events;
@@ -38,7 +43,13 @@ void main() {
   late bool refuseStart;
   late ChatService service;
 
+  /// The Admin Notice half of the bridge, for the list an Admin Notice tap opens.
+  late FakeAdminNoticeNative noticeNative;
+  late AdminNoticeService notices;
+
   setUp(() async {
+    noticeNative = FakeAdminNoticeNative();
+    notices = noticeNative.service();
     events = StreamController<Map<String, dynamic>>.broadcast();
     calls = [];
     nativePending = null;
@@ -71,6 +82,7 @@ void main() {
 
   tearDown(() async {
     await service.dispose();
+    await notices.dispose();
     await events.close();
   });
 
@@ -81,7 +93,11 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Widget host() => AppNavigationHost(chatService: service, child: const Scaffold(body: Text('home')));
+  Widget host() => AppNavigationHost(
+        chatService: service,
+        adminNotices: notices,
+        child: const Scaffold(body: Text('home')),
+      );
 
   /// Subscribes from inside the widget test, so what the service does on an event (the host's
   /// take and navigation) runs in the test's fake-async zone and settles with the frames.
@@ -226,6 +242,92 @@ void main() {
     });
   });
 
+  group('an Admin Notice notification', () {
+    testWidgets('opens the notice list over home, the mascot tucked away as when opened by hand', (tester) async {
+      await pumpHome(tester);
+      mascotOptionsNotifier.value = homeOptions;
+
+      await tapNotification(tester, adminNotices);
+
+      expect(find.byType(AdminNoticeScreen), findsOneWidget);
+      expect(find.text('home', skipOffstage: false), findsOneWidget);
+      expect(calls, ['take']);
+      expect(mascotOptionsNotifier.value, isEmpty);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(AdminNoticeScreen), findsNothing);
+      expect(find.text('home'), findsOneWidget);
+    });
+
+    testWidgets('that started the app opens the list once the signed-in home screen is up', (tester) async {
+      // Cold start: Kotlin reports the tap while Dart is still on its setup / sign-in screens.
+      await startService();
+      await tester.pumpWidget(MaterialApp(
+        navigatorObservers: [mascotRouteObserver],
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute<void>(builder: (_) => host())),
+              child: const Text('sign in'),
+            ),
+          ),
+        ),
+      ));
+      await tapNotification(tester, adminNotices);
+
+      expect(calls, isEmpty, reason: 'nothing is taken, let alone opened, before signing in');
+      expect(find.byType(AdminNoticeScreen), findsNothing);
+
+      await tester.tap(find.text('sign in'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AdminNoticeScreen), findsOneWidget);
+    });
+
+    testWidgets('marks the unread notices the list shows read', (tester) async {
+      noticeNative.stored = [adminNoticeMap('a1b2c3d4e5f60718')];
+      await notices.start();
+      await pumpHome(tester);
+
+      await tapNotification(tester, adminNotices);
+
+      expect(noticeNative.markedRead, ['a1b2c3d4e5f60718']);
+    });
+
+    testWidgets('while the list is open keeps that one list', (tester) async {
+      await pumpHome(tester);
+      await tapNotification(tester, adminNotices);
+
+      await tapNotification(tester, adminNotices);
+
+      expect(find.byType(AdminNoticeScreen, skipOffstage: false), findsOneWidget);
+    });
+
+    testWidgets('opens the list over a chat the user was in, which stays under it', (tester) async {
+      await pumpHome(tester);
+      await tapNotification(tester, publicChat);
+
+      await tapNotification(tester, adminNotices);
+
+      expect(find.byType(AdminNoticeScreen), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(ChatScreen), findsOneWidget);
+    });
+
+    testWidgets('a chat notification tapped next opens the chat over the list', (tester) async {
+      await pumpHome(tester);
+      await tapNotification(tester, adminNotices);
+
+      await tapNotification(tester, privateAlice);
+
+      expect(find.byType(PrivateChatScreen), findsOneWidget);
+      expect(privateChatTitle(tester), 'nick-$alice');
+      expect(find.byType(AdminNoticeScreen, skipOffstage: false), findsOneWidget);
+    });
+  });
+
   testWidgets('another screen the user was on stays under the chat, as it was', (tester) async {
     await pumpHome(tester);
     final navigator = tester.state<NavigatorState>(find.byType(Navigator));
@@ -277,5 +379,10 @@ void main() {
   testWidgets('the chat routes are named so a later tap finds them', (tester) async {
     expect(ChatScreen.route().settings.name, ChatScreen.routeName);
     expect(ChatScreen.routeName, isNot(PrivateChatScreen.routeName));
+  });
+
+  testWidgets('the Admin Notice list route is named so a later tap finds it', (tester) async {
+    expect(AdminNoticeScreen.route().settings.name, AdminNoticeScreen.routeName);
+    expect(AdminNoticeScreen.routeName, isNot(anyOf(ChatScreen.routeName, PrivateChatScreen.routeName)));
   });
 }

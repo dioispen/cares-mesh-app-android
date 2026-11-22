@@ -28,6 +28,10 @@ void main() {
       expect(AppNavigation.fromMap({'target': 'publicChat'}), isA<OpenPublicChat>());
     });
 
+    test('an Admin Notice notification opens the notice list, which has no fields of its own', () {
+      expect(AppNavigation.fromMap({'target': 'adminNotices'}), isA<OpenAdminNotices>());
+    });
+
     test('accepts the Map<Object?, Object?> shape the codec actually delivers', () {
       final navigation = AppNavigation.fromMap(<Object?, Object?>{'target': 'privateChat', 'peerID': _contact});
 

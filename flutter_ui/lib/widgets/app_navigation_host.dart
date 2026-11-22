@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/app_navigation.dart';
+import '../screens/admin_notice_screen.dart';
 import '../screens/chat_screen.dart';
 import '../screens/private_chat_screen.dart';
+import '../services/admin_notice_service.dart';
 import '../services/chat_service.dart';
+import '../services/mascot_service.dart';
 
 /// 把點了的通知帶到正確的畫面（#57）。放在登入後的首頁（`HomeScreen`）裡，包住它的內容。
 ///
@@ -21,17 +24,24 @@ import '../services/chat_service.dart';
 ///   （[ChatService.startPrivateChat]）。之後全照 #55 的收斂規則：聊天室看到原生選定私訊就開私訊畫面，
 ///   已開著的私訊畫面則跟著換成新對象（同一人就不變）；畫面自己呼叫的 `startPrivateChat` 重複無害。
 /// - @提及通知：回到公開聊天室——私訊畫面開著就關掉它（由聊天室照常結束私訊），沒有聊天室就開一個。
-/// - 使用者原本在別的畫面（例如填到一半的健康回報）時，聊天室開在它上面，不關掉它。
+/// - Admin Notice 通知：最上面是公告列表就留著（它自己會把新到的未讀公告標成已讀），否則在最上面
+///   開列表，與從首頁開啟時一樣先把小助理收起來。
+/// - 使用者原本在別的畫面（例如填到一半的健康回報）時，聊天室或列表開在它上面，不關掉它。
 ///
 /// 依靠 [ChatScreen.routeName] 與 [PrivateChatScreen.routeName] 認出聊天畫面：聊天室只能以
 /// [ChatScreen.route] 開啟，私訊畫面只由聊天室開啟，所以聊天室若在 stack 上，一定在最上面或私訊畫面下面。
+/// 公告列表同樣只以 [AdminNoticeScreen.route] 開啟，靠 [AdminNoticeScreen.routeName] 認出；列表上
+/// 不會再開別的畫面，所以它若開著就在最上面。
 class AppNavigationHost extends StatefulWidget {
-  const AppNavigationHost({super.key, required this.child, this.chatService});
+  const AppNavigationHost({super.key, required this.child, this.chatService, this.adminNotices});
 
   final Widget child;
 
   /// 測試用；預設為 app 層級的 [ChatService.instance]。
   final ChatService? chatService;
+
+  /// 測試用；交給它開的公告列表，預設為 app 層級的 [AdminNoticeService.instance]。
+  final AdminNoticeService? adminNotices;
 
   @override
   State<AppNavigationHost> createState() => _AppNavigationHostState();
@@ -111,6 +121,11 @@ class _AppNavigationHostState extends State<AppNavigationHost> {
         } catch (e) {
           // 留在聊天室；使用者可以從 peer 列表再開一次。
           debugPrint('AppNavigationHost: startPrivateChat failed: $e');
+        }
+      case OpenAdminNotices():
+        if (top != AdminNoticeScreen.routeName) {
+          mascotOptionsNotifier.value = const [];
+          unawaited(navigator.push(AdminNoticeScreen.route(service: widget.adminNotices)));
         }
     }
   }

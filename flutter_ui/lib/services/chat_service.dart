@@ -123,7 +123,8 @@ class ChatService {
   /// 在線 peer 的未讀數也在 [peerList] 的列上。
   ValueListenable<ChatUnread> get unread => _unread;
 
-  /// 使用者點了聊天通知、還沒處理的目的地（#57，原生 `PendingAppNavigation` 的投影）；沒有時 null。
+  /// 使用者點了通知、還沒處理的目的地（#57，原生 `PendingAppNavigation` 的投影）；沒有時 null。
+  /// 聊天通知以外的點擊（Admin Notice 開公告列表）也經聊天的 bridge 傳來，最後一次點擊為準。
   /// App 被通知冷啟動時，它在 Dart 走完 setup／登入前就會出現，等可以導航的畫面（`AppNavigationHost`）
   /// 來處理。只是提醒：導航前一定先 [takePendingNavigation]，照取到的去。
   ValueListenable<AppNavigation?> get pendingNavigation => _pendingNavigation;
@@ -168,7 +169,7 @@ class ChatService {
   /// bridge 錯誤會往上拋。
   Future<String?> openLatestUnreadPrivateChat() => _openLatestUnread();
 
-  /// 取走使用者點聊天通知要去的地方（原生同時不再持有它），沒有或已被取走時回傳 null；
+  /// 取走使用者點通知要去的地方（原生同時不再持有它），沒有或已被取走時回傳 null；
   /// [pendingNavigation] 隨即清為 null。只取、不導航。bridge 錯誤會往上拋。
   Future<AppNavigation?> takePendingNavigation() async {
     final taken = AppNavigation.fromMap(await _takePendingNavigation());
