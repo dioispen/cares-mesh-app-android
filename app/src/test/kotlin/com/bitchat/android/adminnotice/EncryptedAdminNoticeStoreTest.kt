@@ -2,7 +2,7 @@ package com.bitchat.android.adminnotice
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
+import com.bitchat.android.testsupport.TestAdminNotices.VECTOR_ISSUED_AT
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

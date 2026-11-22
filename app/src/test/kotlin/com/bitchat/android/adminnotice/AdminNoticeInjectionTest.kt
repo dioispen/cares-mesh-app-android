@@ -1,12 +1,16 @@
 package com.bitchat.android.adminnotice
 
-import com.bitchat.android.adminnotice.TestAdminNotices.V1
-import com.bitchat.android.adminnotice.TestAdminNotices.V2
-import com.bitchat.android.adminnotice.TestAdminNotices.VECTOR_ISSUED_AT
 import com.bitchat.android.protocol.BinaryProtocol
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.sync.PacketIdUtil
+import com.bitchat.android.testsupport.ManualScheduler
+import com.bitchat.android.testsupport.RecordingInjector
+import com.bitchat.android.testsupport.TestAdminNotices
+import com.bitchat.android.testsupport.TestAdminNotices.V1
+import com.bitchat.android.testsupport.TestAdminNotices.V2
+import com.bitchat.android.testsupport.TestAdminNotices.VECTOR_ISSUED_AT
+import com.bitchat.android.testsupport.hex
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

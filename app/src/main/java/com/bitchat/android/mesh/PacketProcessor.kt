@@ -14,8 +14,14 @@ import kotlinx.coroutines.channels.actor
  * Per-peer packet serialization using Kotlin coroutine actors
  * Prevents race condition where multiple threads process packets
  * from the same peer simultaneously, causing session management conflicts.
+ *
+ * [dispatcher] runs the actors. Production keeps [Dispatchers.IO]; a test passes a test dispatcher
+ * and runs the actors to idle instead of waiting for them.
  */
-class PacketProcessor(private val myPeerID: String) {
+class PacketProcessor(
+    private val myPeerID: String,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO
+) {
     private val debugManager by lazy { try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (e: Exception) { null } }
     
     companion object {
@@ -43,7 +49,7 @@ class PacketProcessor(private val myPeerID: String) {
     private val packetRelayManager = PacketRelayManager(myPeerID)
     
     // Coroutines
-    private val processorScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val processorScope = CoroutineScope(dispatcher + SupervisorJob())
     
     // Per-peer actors to serialize packet processing
     // Each peer gets its own actor that processes packets sequentially
@@ -163,7 +169,7 @@ class PacketProcessor(private val myPeerID: String) {
             MessageType.FILE_TRANSFER -> handleMessage(routed) // treat same routing path; parsing happens in handler
             MessageType.VOICE_FRAME -> validPacket = delegate?.handleVoiceFrame(routed) ?: false
             MessageType.LEAVE -> handleLeave(routed)
-            MessageType.FRAGMENT -> handleFragment(routed)
+            MessageType.FRAGMENT -> validPacket = handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
             MessageType.HEALTH_REPORT -> handleMessage(routed)
             // Relayed only when the Inbox verified the Administrators' signature (ADR-0011).
@@ -238,22 +244,24 @@ class PacketProcessor(private val myPeerID: String) {
     }
     
     /**
-     * Handle message fragments
+     * Handle message fragments. Returns whether the fragment itself is relayed (validPacket): an
+     * Admin Notice's fragment is not, see [AdminNoticeTraffic.relaysFragment].
      */
-    private suspend fun handleFragment(routed: RoutedPacket) {
+    private suspend fun handleFragment(routed: RoutedPacket): Boolean {
         val reassembledPacket = delegate?.handleFragment(routed.packet)
         if (reassembledPacket != null) {
             handleReceivedPacket(
                 RoutedPacket(
-                    packet = reassembledPacket,
+                    packet = AdminNoticeTraffic.reassembled(reassembledPacket, completedBy = routed.packet),
                     peerID = routed.peerID,
                     relayAddress = routed.relayAddress,
                     ingressLinkID = routed.ingressLinkID
                 )
             )
         }
-        
+
         // Fragment relay is now handled by centralized PacketRelayManager
+        return AdminNoticeTraffic.relaysFragment(routed.packet)
     }
 
     /**

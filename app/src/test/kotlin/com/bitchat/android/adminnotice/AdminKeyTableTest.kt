@@ -1,6 +1,8 @@
 package com.bitchat.android.adminnotice
 
 import android.os.Build
+import com.bitchat.android.testsupport.TestAdminNotices
+import com.bitchat.android.testsupport.hex
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
