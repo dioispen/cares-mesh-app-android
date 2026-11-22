@@ -402,6 +402,32 @@ class BitchatBridge {
         'sos': sos,
       });
 
+  /// 經 BLE mesh 廣播一筆物資需求（[action] 為 `request`）或捐贈（`offer`）。
+  ///
+  /// [exchangeId] 是 32 碼小寫十六進位（`SupplyExchangePacket.exchangeIdFromUuid`），與本人寫進
+  /// Firestore `supply_requests`／`supply_pledges` 的文件 ID 相同，後台才能把 Gateway 代傳的與本人
+  /// 上傳的對起來。不帶姓名、uid 或任何 PII。
+  ///
+  /// 正常完成才表示原生已交給 mesh 廣播。沒有送出時往上拋：[PlatformException] 的錯誤碼與
+  /// [HealthReportErrors] 同一組（`INVALID_FORMAT`、`SERVICE_NOT_READY`、`SEND_FAILED`）；
+  /// [MissingPluginException] 是這個平台沒有原生 mesh。
+  static Future<void> sendSupplyExchange({
+    required String action,
+    required String exchangeId,
+    required String itemId,
+    required String itemName,
+    required int quantity,
+    required String unit,
+  }) =>
+      _method.invokeMethod<void>('sendSupplyExchange', <String, dynamic>{
+        'action': action,
+        'exchangeId': exchangeId,
+        'itemId': itemId,
+        'itemName': itemName,
+        'quantity': quantity,
+        'unit': unit,
+      });
+
   /// 本機 mesh 身分的 Ed25519 簽章公鑰（32 bytes），就是 ANNOUNCE 裡的那一把。Reporter Handle
   /// 登記（#110）把它寫進 `reporter_handles`，管理後台才能分辨冒領同一個 Handle 的帳號（ADR-0009）。
   ///

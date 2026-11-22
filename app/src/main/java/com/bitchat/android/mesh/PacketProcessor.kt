@@ -172,6 +172,7 @@ class PacketProcessor(
             MessageType.FRAGMENT -> validPacket = handleFragment(routed)
             MessageType.REQUEST_SYNC -> handleRequestSync(routed)
             MessageType.HEALTH_REPORT -> handleMessage(routed)
+            MessageType.SUPPLY_EXCHANGE -> handleMessage(routed)
             // Relayed only when the Inbox verified the Administrators' signature (ADR-0011).
             MessageType.ADMIN_NOTICE -> validPacket = delegate?.handleAdminNotice(routed) ?: false
             else -> {

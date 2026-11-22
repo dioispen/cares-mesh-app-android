@@ -398,6 +398,61 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // mesh_supply_packets/{packetId}：Gateway 代傳上來的物資需求／捐贈（SUPPLY_EXCHANGE 封包，
+    // docs/MESH_SUPPLY_PACKETS.md）。與 mesh_reports 同一套想法，差別在這是事件不是狀態：
+    // 每個 Packet ID 一份、寫進去就不能改，也不能刪（除了 Administrator）。
+    //
+    // 去重靠「只能 create、不能 update」：Gateway 不先讀再寫，第二支 Gateway 寫同一個 Packet ID
+    // 會得到 PERMISSION_DENIED，App 把它當成「已經有人寫過」。exchangeId 與發送者本人（有網路時）
+    // 寫進 supply_requests／supply_pledges 的文件 ID 相同，後台靠它把兩邊對起來。
+    //
+    // 只有 Administrator 能讀（管理後台調度物資用）；任何登入帳號都可能是 Gateway，所以任何登入
+    // 帳號都能 create，gatewayUid 必須是自己。伺服器端不驗簽，rawPacket 留給日後驗。
+    match /mesh_supply_packets/{packetId} {
+      function validSupplyPacket(packetId) {
+        let data = request.resource.data;
+        let fields = ['schemaVersion', 'packetId', 'exchangeId', 'action', 'originPeerId',
+                      'itemId', 'itemName', 'quantity', 'unit', 'createdAt', 'uploadedAt',
+                      'gatewayUid', 'rawPacket'];
+        return request.auth != null
+            && data.gatewayUid == request.auth.uid
+            && data.keys().hasAll(fields)
+            && data.keys().hasOnly(fields)
+            && data.schemaVersion is int
+            && data.schemaVersion == 1
+            // 文件 ID 就是 Packet ID：SHA-256 前 16 bytes 的小寫十六進位。
+            && packetId.matches('^[0-9a-f]{32}$')
+            && packetId == data.packetId
+            // 封包裡的 exchangeId：UUID 去掉連字號，32 碼小寫十六進位。
+            && data.exchangeId is string
+            && data.exchangeId.matches('^[0-9a-f]{32}$')
+            && data.action in ['request', 'offer']
+            && data.originPeerId is string
+            && data.originPeerId.matches('^[0-9a-f]{16}$')
+            // 字串上限與 SupplyExchangePacket 的線路格式相同。
+            && data.itemId is string
+            && data.itemId.size() > 0 && data.itemId.size() <= 64
+            && data.itemName is string
+            && data.itemName.size() > 0 && data.itemName.size() <= 96
+            && data.quantity is int
+            && data.quantity > 0 && data.quantity <= 4294967295
+            && data.unit is string
+            && data.unit.size() > 0 && data.unit.size() <= 16
+            // createdAt 是封包標頭的時間（發送者手機的時鐘）；比照 mesh_reports 容忍 10 分鐘的
+            // 時鐘誤差，再舊的已超過 Gateway 的 2 小時保留期限。
+            && data.createdAt is timestamp
+            && data.createdAt <= request.time + duration.value(10, 'm')
+            && data.createdAt >= request.time - duration.value(130, 'm')
+            && data.uploadedAt == request.time
+            && data.rawPacket is bytes
+            && data.rawPacket.size() <= 1024;
+      }
+
+      allow read, delete: if isAdmin();
+      allow create: if validSupplyPacket(packetId);
+      allow update: if false;
+    }
+
     // supply_items 是所有使用者共用的型錄；套用欄位限制而非擁有者限制，
     // 讓使用者能在任何物資上登記需求或捐贈，但不能竄改描述欄位。
     match /supply_items/{docId} {

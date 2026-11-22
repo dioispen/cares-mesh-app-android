@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MissingPluginException, PlatformException;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../bridge/bitchat_bridge.dart';
+import '../protocol/supply_exchange_packet.dart';
+import '../services/supply_delivery.dart';
+import '../services/supply_exchange_feed.dart';
 import '../models/user.dart';
 // ignore: library_prefixes
 import '../models/supply items.dart';
@@ -39,10 +44,19 @@ class _SupplyScreenState extends State<SupplyScreen>
   StreamSubscription? _itemsSub;
   StreamSubscription? _connectSub;
 
+  final _pendingRequestIds = PendingSubmissionIds();
+  final _pendingPledgeIds = PendingSubmissionIds();
+
+  /// 自己的申請與捐贈紀錄，拿到使用者時建一次。若在 build 裡呼叫 `.snapshots()`，每次 setState
+  /// （型錄更新、網路變化、切換分類）都會換一個新 stream：StreamBuilder 退回「載入中…」、重新掛
+  /// Firestore listener，多算讀取次數。
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _myRequests;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _myPledges;
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     // 進入物資頁後隱藏小秘書（postFrame 避免 build 期間觸發 setState）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       mascotOptionsNotifier.value = const [];
@@ -64,27 +78,46 @@ class _SupplyScreenState extends State<SupplyScreen>
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('app_user');
     if (raw != null && mounted) {
-      setState(() => _currentUser = AppUser.fromJson(jsonDecode(raw)));
+      final user = AppUser.fromJson(jsonDecode(raw));
+      setState(() {
+        _currentUser = user;
+        _myRequests = _mine('supply_requests', user.id);
+        _myPledges = _mine('supply_pledges', user.id);
+      });
     }
   }
 
+  static Stream<QuerySnapshot<Map<String, dynamic>>> _mine(String collection, String uid) =>
+      FirebaseFirestore.instance.collection(collection).where('userId', isEqualTo: uid).snapshots();
+
   Future<void> _initSupplyItems() async {
     final col = FirebaseFirestore.instance.collection('supply_items');
-    final snapshot = await col.limit(1).get();
-    if (snapshot.docs.isEmpty) {
-      final batch = FirebaseFirestore.instance.batch();
-      for (final item in kSeedItems) {
-        batch.set(col.doc(item.id), item.toMap());
+    // 型錄為空時寫入種子。離線、或讀取逾時就跳過：下面的監聽會先給本機快取，連上線再補。
+    try {
+      final snapshot = await col.limit(1).get().timeout(_cloudWriteTimeout);
+      if (snapshot.docs.isEmpty) {
+        final batch = FirebaseFirestore.instance.batch();
+        for (final item in kSeedItems) {
+          batch.set(col.doc(item.id), item.toMap());
+        }
+        await batch.commit().timeout(_cloudWriteTimeout);
       }
-      await batch.commit();
+    } catch (e) {
+      debugPrint('supply_items seed check skipped: $e');
     }
-    _itemsSub = col.orderBy('category').snapshots().listen((snap) {
-      if (!mounted) return;
-      setState(() {
-        _items = snap.docs.map(SupplyItem.fromDoc).toList();
-        _isLoading = false;
-      });
-    });
+    _itemsSub = col.orderBy('category').snapshots().listen(
+      (snap) {
+        if (!mounted) return;
+        setState(() {
+          _items = snap.docs.map(SupplyItem.fromDoc).toList();
+          _isLoading = false;
+        });
+      },
+      onError: (Object e) {
+        debugPrint('supply_items listen failed: $e');
+        if (mounted) setState(() => _isLoading = false);
+      },
+    );
   }
 
   Future<void> _watchConnectivity() async {
@@ -102,52 +135,142 @@ class _SupplyScreenState extends State<SupplyScreen>
       ? _items
       : _items.where((s) => s.category == _selectedCategory).toList();
 
-  Future<void> _submitRequest(SupplyItem item, int qty) async {
-    if (_currentUser == null) return;
+  /// 一次送出走兩條路：經 BLE mesh 廣播給附近裝置（有網路的人會代傳到後台），以及寫進雲端
+  /// 自己的 `supply_requests`／`supply_pledges`。兩條路各自獨立，任一條失敗不拖垮另一條；
+  /// 斷網是災害現場的常態，雲端寫入離線時進本機佇列、不等伺服器確認，畫面不能卡住。
+  Future<SupplyDelivery> _submitRequest(SupplyItem item, int qty) async {
+    final user = _requireUser();
     final request = SupplyRequest(
-      userId: _currentUser!.id,
-      userName: _currentUser!.name,
+      requestId: _pendingRequestIds.idFor(item.id),
+      userId: user.id,
+      userName: user.name,
       itemId: item.id,
       itemName: item.name,
       unit: item.unit,
       qty: qty,
     );
-    final batch = FirebaseFirestore.instance.batch();
-    batch.set(
-      FirebaseFirestore.instance
-          .collection('supply_requests')
-          .doc(request.requestId),
-      request.toMap(),
+    final delivery = await _deliver(
+      action: 'request',
+      exchangeId: SupplyExchangePacket.exchangeIdFromUuid(request.requestId),
+      item: item,
+      qty: qty,
+      cloudWrite: (batch) {
+        batch.set(
+          FirebaseFirestore.instance.collection('supply_requests').doc(request.requestId),
+          request.toMap(),
+        );
+        batch.update(
+          FirebaseFirestore.instance.collection('supply_items').doc(item.id),
+          {'totalRequestedQty': FieldValue.increment(qty)},
+        );
+      },
     );
-    batch.update(
-      FirebaseFirestore.instance.collection('supply_items').doc(item.id),
-      {'totalRequestedQty': FieldValue.increment(qty)},
-    );
-    await batch.commit();
+    _pendingRequestIds.settle(item.id, delivery);
+    _showSubmissionResult(delivery, success: '已送出申請');
+    return delivery;
   }
 
-  Future<void> _submitPledge(SupplyItem item, int qty) async {
-    if (_currentUser == null) return;
+  Future<SupplyDelivery> _submitPledge(SupplyItem item, int qty) async {
+    final user = _requireUser();
     final pledge = SupplyPledge(
-      userId: _currentUser!.id,
-      userName: _currentUser!.name,
+      pledgeId: _pendingPledgeIds.idFor(item.id),
+      userId: user.id,
+      userName: user.name,
       itemId: item.id,
       itemName: item.name,
       unit: item.unit,
       qty: qty,
     );
+    final delivery = await _deliver(
+      action: 'offer',
+      exchangeId: SupplyExchangePacket.exchangeIdFromUuid(pledge.pledgeId),
+      item: item,
+      qty: qty,
+      cloudWrite: (batch) {
+        batch.set(
+          FirebaseFirestore.instance.collection('supply_pledges').doc(pledge.pledgeId),
+          pledge.toMap(),
+        );
+        batch.update(
+          FirebaseFirestore.instance.collection('supply_items').doc(item.id),
+          {'totalPledgedQty': FieldValue.increment(qty)},
+        );
+      },
+    );
+    _pendingPledgeIds.settle(item.id, delivery);
+    _showSubmissionResult(delivery, success: '感謝您的捐贈承諾');
+    return delivery;
+  }
+
+  /// 本機沒有 app_user（登入時讀不到 users 文件）就不送：送出去的紀錄會沒有人名，後台對不上。
+  AppUser _requireUser() {
+    final user = _currentUser;
+    if (user == null) throw const _NotSignedIn();
+    return user;
+  }
+
+  Future<SupplyDelivery> _deliver({
+    required String action,
+    required String exchangeId,
+    required SupplyItem item,
+    required int qty,
+    required void Function(WriteBatch batch) cloudWrite,
+  }) async {
+    String? broadcastFailure;
+    try {
+      await BitchatBridge.sendSupplyExchange(
+        action: action,
+        exchangeId: exchangeId,
+        itemId: item.id,
+        itemName: item.name,
+        quantity: qty,
+        unit: item.unit,
+      );
+    } on PlatformException catch (e) {
+      broadcastFailure = switch (e.code) {
+        'SERVICE_NOT_READY' => '藍牙 Mesh 尚未啟動',
+        'INVALID_FORMAT' => '封包格式不合法',
+        _ => e.message ?? e.code,
+      };
+    } on MissingPluginException {
+      broadcastFailure = '此裝置沒有藍牙 Mesh';
+    } catch (e) {
+      broadcastFailure = '$e';
+    }
+
+    String? uploadFailure;
+    var uploadQueued = false;
     final batch = FirebaseFirestore.instance.batch();
-    batch.set(
-      FirebaseFirestore.instance
-          .collection('supply_pledges')
-          .doc(pledge.pledgeId),
-      pledge.toMap(),
+    cloudWrite(batch);
+    try {
+      // Firestore 的寫入要等伺服器確認才完成，離線時永遠不會完成（資料已進本機佇列，恢復連線
+      // 後會自動送出）。等一小段時間就放手，不讓畫面卡在轉圈。
+      await batch.commit().timeout(_cloudWriteTimeout);
+    } on TimeoutException {
+      uploadQueued = true;
+    } on FirebaseException catch (e) {
+      uploadFailure = e.code == 'permission-denied' ? '雲端拒絕寫入（請確認已登入）' : (e.message ?? e.code);
+    } catch (e) {
+      uploadFailure = '$e';
+    }
+    return SupplyDelivery(
+      broadcastFailure: broadcastFailure,
+      uploadFailure: uploadFailure,
+      uploadQueued: uploadQueued,
     );
-    batch.update(
-      FirebaseFirestore.instance.collection('supply_items').doc(item.id),
-      {'totalPledgedQty': FieldValue.increment(qty)},
+  }
+
+  static const _cloudWriteTimeout = Duration(seconds: 8);
+
+  void _showSubmissionResult(SupplyDelivery delivery, {required String success}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(delivery.message(success)),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: delivery.failed ? 6 : 4),
+      ),
     );
-    await batch.commit();
   }
 
   Widget _categoryFilter() => SizedBox(
@@ -255,6 +378,138 @@ class _SupplyScreenState extends State<SupplyScreen>
     );
   }
 
+  // ── Tab 3：附近與我的 ────────────────────────────────────────
+  /// 上半是附近裝置經 BLE mesh 送來的需求／捐贈（離線也看得到，來源是 [SupplyExchangeFeed]）；
+  /// 下半是自己寫進雲端的申請與捐贈紀錄（`supply_requests`／`supply_pledges`，規則只讓本人讀，
+  /// 離線時顯示 Firestore 的本機快取）。
+  Widget _buildActivityTab() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: [
+        _sectionTitle('附近的需求與捐贈', Icons.bluetooth_searching),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: Text(
+            '經藍牙 Mesh 從附近裝置收到，不需要網路。只有物資與數量，沒有對方的姓名。',
+            style: TextStyle(fontSize: 12, color: _textSecondary),
+          ),
+        ),
+        ListenableBuilder(
+          listenable: SupplyExchangeFeed.instance,
+          builder: (context, _) {
+            final entries = SupplyExchangeFeed.instance.entries;
+            if (entries.isEmpty) return _emptyNote('目前沒有收到附近的物資需求或捐贈。');
+            return Column(
+              children: [
+                for (final e in entries)
+                  _ActivityTile(
+                    isRequest: e.isRequest,
+                    itemName: e.packet.itemName,
+                    quantity: e.packet.quantity,
+                    unit: e.packet.unit,
+                    subtitle: '附近裝置 ${e.senderPeerId.length >= 8 ? e.senderPeerId.substring(0, 8) : e.senderPeerId} · ${_relativeTime(e.createdAt)}',
+                    status: null,
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 20),
+        _sectionTitle('我的申請', Icons.shopping_cart_outlined),
+        if (_myRequests == null)
+          _emptyNote('讀不到你的帳號資料，無法顯示你的紀錄。')
+        else
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _myRequests,
+            builder: (context, snap) {
+              if (snap.hasError) return _emptyNote('讀取失敗：${snap.error}');
+              if (!snap.hasData) return _emptyNote('載入中…');
+              final docs = snap.data!.docs.map(SupplyRequest.fromDoc).toList()
+                ..sort((a, b) => compareNewestFirst(a.createdAt, b.createdAt));
+              if (docs.isEmpty) return _emptyNote('你還沒有申請過物資。');
+              return Column(
+                children: [
+                  for (final r in docs)
+                    _ActivityTile(
+                      isRequest: true,
+                      itemName: r.itemName,
+                      quantity: r.qty,
+                      unit: r.unit,
+                      subtitle: r.createdAt == null ? '尚未同步到雲端' : _relativeTime(r.createdAt!),
+                      status: _requestStatusLabel(r.status),
+                    ),
+                ],
+              );
+            },
+          ),
+        const SizedBox(height: 20),
+        _sectionTitle('我的捐贈', Icons.volunteer_activism_outlined),
+        if (_myPledges == null)
+          const SizedBox.shrink()
+        else
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _myPledges,
+            builder: (context, snap) {
+              if (snap.hasError) return _emptyNote('讀取失敗：${snap.error}');
+              if (!snap.hasData) return _emptyNote('載入中…');
+              final docs = snap.data!.docs.map(SupplyPledge.fromDoc).toList()
+                ..sort((a, b) => compareNewestFirst(a.pledgedAt, b.pledgedAt));
+              if (docs.isEmpty) return _emptyNote('你還沒有登記過捐贈。');
+              return Column(
+                children: [
+                  for (final p in docs)
+                    _ActivityTile(
+                      isRequest: false,
+                      itemName: p.itemName,
+                      quantity: p.qty,
+                      unit: p.unit,
+                      subtitle: p.pledgedAt == null ? '尚未同步到雲端' : _relativeTime(p.pledgedAt!),
+                      status: _pledgeStatusLabel(p.status),
+                    ),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _sectionTitle(String title, IconData icon) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: _brown),
+            const SizedBox(width: 6),
+            Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _textPrimary)),
+          ],
+        ),
+      );
+
+  Widget _emptyNote(String text) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Text(text, style: const TextStyle(fontSize: 13, color: _textSecondary)),
+      );
+
+  static String _requestStatusLabel(String status) => switch (status) {
+        'fulfilled' => '已滿足',
+        'cancelled' => '已取消',
+        _ => '等待中',
+      };
+
+  static String _pledgeStatusLabel(String status) => switch (status) {
+        'delivered' => '已送達',
+        'cancelled' => '已取消',
+        _ => '已承諾',
+      };
+
+  static String _relativeTime(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inMinutes < 1) return '剛剛';
+    if (d.inMinutes < 60) return '${d.inMinutes} 分鐘前';
+    if (d.inHours < 24) return '${d.inHours} 小時前';
+    return '${d.inDays} 天前';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -284,6 +539,10 @@ class _SupplyScreenState extends State<SupplyScreen>
               text: '捐贈物資',
               icon: Icon(Icons.volunteer_activism_outlined, size: 18),
             ),
+            Tab(
+              text: '附近與我的',
+              icon: Icon(Icons.bluetooth_searching, size: 18),
+            ),
           ],
         ),
       ),
@@ -294,8 +553,86 @@ class _SupplyScreenState extends State<SupplyScreen>
               children: [
                 _buildRequestTab(),
                 _buildDonateTab(),
+                _buildActivityTab(),
               ],
             ),
+    );
+  }
+}
+
+/// 「我的申請／我的捐贈」的排序：新的在前。時間是 null 的是還沒同步到雲端的紀錄
+/// （serverTimestamp 尚未回填），也就是剛寫下的，排在最前面。
+@visibleForTesting
+int compareNewestFirst(DateTime? a, DateTime? b) =>
+    a == null ? (b == null ? 0 : -1) : (b == null ? 1 : b.compareTo(a));
+
+/// 卡片把例外原樣顯示在「申請失敗：…」後面，所以 toString 就是給使用者看的句子。
+class _NotSignedIn implements Exception {
+  const _NotSignedIn();
+
+  @override
+  String toString() => '讀不到你的帳號資料，請重新登入後再試';
+}
+
+// ── 附近與我的：一列紀錄 ────────────────────────────────────────
+class _ActivityTile extends StatelessWidget {
+  const _ActivityTile({
+    required this.isRequest,
+    required this.itemName,
+    required this.quantity,
+    required this.unit,
+    required this.subtitle,
+    required this.status,
+  });
+
+  final bool isRequest;
+  final String itemName;
+  final int quantity;
+  final String unit;
+  final String subtitle;
+
+  /// 雲端紀錄的狀態；附近的 mesh 封包沒有狀態（null）。
+  final String? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isRequest ? const Color(0xFFC4553A) : const Color(0xFF6B9EAD);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEFDF9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(isRequest ? Icons.shopping_cart_outlined : Icons.volunteer_activism_outlined, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${isRequest ? '需要' : '捐贈'} $itemName $quantity $unit',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF3D2C1E)),
+                ),
+                const SizedBox(height: 2),
+                Text(subtitle, style: const TextStyle(fontSize: 12, color: Color(0xFF8C7B6E))),
+              ],
+            ),
+          ),
+          if (status != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(status!, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -305,7 +642,8 @@ class _SupplyScreenState extends State<SupplyScreen>
 @visibleForTesting
 class SupplyRequestCard extends StatefulWidget {
   final SupplyItem item;
-  final Future<void> Function(int qty) onRequest;
+  /// 送出一筆申請；結果由物資頁的 snackbar 說明，卡片只依 [SupplyDelivery.recorded] 決定要不要清空。
+  final Future<SupplyDelivery> Function(int qty) onRequest;
 
   /// 一開始就展開。物資頁一律收起；排版測試用它檢查展開後的內容放不放得下。
   final bool initiallyExpanded;
@@ -345,13 +683,11 @@ class _RequestCardState extends State<SupplyRequestCard> {
     }
     setState(() => _isSubmitting = true);
     try {
-      await widget.onRequest(qty);
-      _qtyCtrl.clear();
-      if (mounted) setState(() => _expanded = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('申請成功！'),
-            behavior: SnackBarBehavior.floating));
+      final delivery = await widget.onRequest(qty);
+      // 雲端沒記下就保留輸入，讓使用者重送。
+      if (delivery.recorded) {
+        _qtyCtrl.clear();
+        if (mounted) setState(() => _expanded = false);
       }
     } catch (e) {
       if (mounted) {
@@ -428,7 +764,8 @@ class _RequestCardState extends State<SupplyRequestCard> {
 @visibleForTesting
 class SupplyDonateCard extends StatefulWidget {
   final SupplyItem item;
-  final Future<void> Function(int qty) onPledge;
+  /// 送出一筆捐贈承諾；結果由物資頁的 snackbar 說明，卡片只依 [SupplyDelivery.recorded] 決定要不要清空。
+  final Future<SupplyDelivery> Function(int qty) onPledge;
 
   /// 一開始就展開。物資頁一律收起；排版測試用它檢查展開後的內容放不放得下。
   final bool initiallyExpanded;
@@ -467,13 +804,11 @@ class _DonateCardState extends State<SupplyDonateCard> {
     }
     setState(() => _isSubmitting = true);
     try {
-      await widget.onPledge(qty);
-      _qtyCtrl.clear();
-      if (mounted) setState(() => _expanded = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('感謝您的捐贈承諾！'),
-            behavior: SnackBarBehavior.floating));
+      final delivery = await widget.onPledge(qty);
+      // 雲端沒記下就保留輸入，讓使用者重送。
+      if (delivery.recorded) {
+        _qtyCtrl.clear();
+        if (mounted) setState(() => _expanded = false);
       }
     } catch (e) {
       if (mounted) {

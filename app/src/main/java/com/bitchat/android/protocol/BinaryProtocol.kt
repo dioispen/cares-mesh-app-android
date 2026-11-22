@@ -23,7 +23,8 @@ enum class MessageType(val value: UByte) {
     HEALTH_REPORT(0x30u), // Renamed from DISASTER_REPORT
     // Trusted only by the Administrators' signature in its payload, never by a device signature;
     // its senderID is the notice's messageId, not a peer (ADR-0011, docs/ADMIN_NOTICE_V1.md).
-    ADMIN_NOTICE(0x31u);
+    ADMIN_NOTICE(0x31u),
+    SUPPLY_EXCHANGE(0x32u); // 物資需求／捐贈（SupplyExchangePacket），本專案專有
 
     companion object {
         fun fromValue(value: UByte): MessageType? {

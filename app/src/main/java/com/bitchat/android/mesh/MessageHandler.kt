@@ -11,6 +11,7 @@ import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.protocol.SupplyExchangePacket
 import com.bitchat.android.sync.PacketIdUtil
 import com.bitchat.android.util.toHexString
 import com.bitchat.android.features.voice.LiveVoiceManager
@@ -423,10 +424,10 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         val recipientID = packet.recipientID?.takeIf { !it.contentEquals(delegate?.getBroadcastRecipient()) }
 
         if (recipientID == null) {
-            if (packet.type == MessageType.HEALTH_REPORT.value) {
-                handleTaggedBroadcast(routed)
-            } else {
-                handleBroadcastMessage(routed)
+            when (packet.type) {
+                MessageType.HEALTH_REPORT.value -> handleTaggedBroadcast(routed)
+                MessageType.SUPPLY_EXCHANGE.value -> handleSupplyExchange(routed)
+                else -> handleBroadcastMessage(routed)
             }
         } else if (recipientID.toHexString() == myPeerID) {
             // PRIVATE MESSAGE FOR US
@@ -456,6 +457,28 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         )
     }
     
+    /**
+     * SUPPLY_EXCHANGE(0x32)：一筆物資需求／捐贈。與 Health Report 相同，只收已驗證 peer 的封包
+     * （SecurityManager 已驗過簽章；物資封包沒有 ADR-0006 的 key 快取，發送者離開後補送的會在那裡被擋）。
+     * 解碼成功後交給 Flutter（附近的人看得到）與 Gateway（有網路的人代傳到 Firestore）。
+     */
+    private fun handleSupplyExchange(routed: RoutedPacket) {
+        val packet = routed.packet
+        val peerID = routed.peerID ?: "unknown"
+        val peerInfo = delegate?.getPeerInfo(peerID)
+        if (peerInfo?.isVerifiedNickname != true) {
+            Log.w(TAG, "Dropping supply exchange from unverified peer ${peerID.take(8)}")
+            return
+        }
+        val supply = SupplyExchangePacket.decode(packet.payload)
+        if (supply == null) {
+            Log.w(TAG, "Dropping malformed supply exchange packet (${packet.payload.size} bytes) from ${peerID.take(8)}")
+            return
+        }
+        InboundPacketBridge.onPacketReceived?.invoke(packet)
+        VerifiedSupplyExchangeBridge.publish(VerifiedSupplyExchange(packet, supply, peerID))
+    }
+
     /**
      * Dispatch HEALTH_REPORT(0x30) tagged-broadcast by BroadcastContentTag.
      * payload[0] = tag; payload[1..] = actual data.
