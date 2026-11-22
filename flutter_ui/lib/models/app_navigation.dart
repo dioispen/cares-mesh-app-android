@@ -1,19 +1,20 @@
-/// 點通知後要前往的聊天畫面（#57）的 Dart 端模型。
+/// 點通知後要前往的畫面（#57）的 Dart 端模型。App 發的每一種通知都用它，所以不論是哪個畫面，
+/// 都是最後一次點擊為準。
 ///
 /// 欄位與 Kotlin `ChatSerialization.navigation`（`app/src/main/java/com/bitchat/android/flutter/
-/// ChatSerialization.kt`、`ChatNavigation.kt`）一一對應，兩邊要一起改。要去哪裡由原生讀上游通知的
+/// ChatSerialization.kt`、`AppNavigation.kt`）一一對應，兩邊要一起改。要去哪裡由原生讀通知的
 /// intent extras 決定；這裡只把 map 轉成型別。
 ///
 /// 解析一律容錯、永遠不丟例外：格式不對、或這個 app 不認得的目的地，都當作「哪裡都不去」（null）。
 library;
 
-/// 一個通知點擊的目的地：[OpenPrivateChat] 或 [OpenPublicChat]。
-sealed class ChatNavigation {
-  const ChatNavigation();
+/// 一個通知點擊的目的地：[OpenPrivateChat]、[OpenPublicChat] 或 [OpenAdminNotices]。
+sealed class AppNavigation {
+  const AppNavigation();
 
-  /// 解析 `{target: privateChat, peerID, senderNickname}` 或 `{target: publicChat}`；
-  /// null、格式不對或未知的 `target` 回傳 null。
-  static ChatNavigation? fromMap(Object? raw) {
+  /// 解析 `{target: privateChat, peerID, senderNickname}`、`{target: publicChat}` 或
+  /// `{target: adminNotices}`；null、格式不對或未知的 `target` 回傳 null。
+  static AppNavigation? fromMap(Object? raw) {
     if (raw is! Map) return null;
     switch (raw['target']) {
       case 'privateChat':
@@ -23,13 +24,15 @@ sealed class ChatNavigation {
         return OpenPrivateChat(peerID, senderNickname: nickname is String ? nickname : null);
       case 'publicChat':
         return const OpenPublicChat();
+      case 'adminNotices':
+        return const OpenAdminNotices();
     }
     return null;
   }
 }
 
 /// 私訊通知：開啟與 [peerID]（原生的對話 ID）的私訊畫面。
-final class OpenPrivateChat extends ChatNavigation {
+final class OpenPrivateChat extends AppNavigation {
   const OpenPrivateChat(this.peerID, {this.senderNickname});
 
   final String peerID;
@@ -42,9 +45,18 @@ final class OpenPrivateChat extends ChatNavigation {
 }
 
 /// mesh @提及通知：回到公開聊天室。
-final class OpenPublicChat extends ChatNavigation {
+final class OpenPublicChat extends AppNavigation {
   const OpenPublicChat();
 
   @override
   String toString() => 'OpenPublicChat()';
+}
+
+/// Admin Notice 通知（任何一則）：開啟管理端公告列表。列表攤開就是全文，畫面在前景時會把看到的
+/// 未讀公告標成已讀，所以不指定是哪一則。
+final class OpenAdminNotices extends AppNavigation {
+  const OpenAdminNotices();
+
+  @override
+  String toString() => 'OpenAdminNotices()';
 }

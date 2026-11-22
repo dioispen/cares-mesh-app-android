@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.bitchat.android.adminnotice.AdminNotices
+import com.bitchat.android.adminnotice.SystemAdminNoticeNotifier
 import com.bitchat.android.adminnotice.recordFirstRead
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
@@ -43,8 +44,8 @@ import kotlinx.coroutines.launch
  * 通知點擊（#57）：上游的聊天通知點下去都開這個 Activity（manifest `singleTop`、通知 intent 帶
  * `SINGLE_TOP | CLEAR_TOP`）。App 還在時由 [onNewIntent] 收到，App 已關閉（只剩前景服務）時由
  * [onCreate] 冷啟動收到。兩者都照 `MainActivity.handleNotificationIntent` 讀 intent extras
- * （[ChatNavigation.fromNotification]）並清掉該對話的通知，但不直接開畫面：只有 Dart 知道何時可以
- * 導航（走完自己的 setup 與登入之後），所以把目的地交給 [PendingChatNavigation]，由 Dart 以
+ * （[AppNavigation.fromNotification]）並清掉該對話的通知，但不直接開畫面：只有 Dart 知道何時可以
+ * 導航（走完自己的 setup 與登入之後），所以把目的地交給 [PendingAppNavigation]，由 Dart 以
  * `chat_takePendingNavigation` 取走。
  */
 class FlutterChatActivity : FlutterFragmentActivity() {
@@ -63,7 +64,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
     }
 
     /** The notification tap Dart has yet to act on; kept across Activity recreation. */
-    private val pendingNavigation: PendingChatNavigation by viewModels()
+    private val pendingNavigation: PendingAppNavigation by viewModels()
 
     /** 大頭貼選圖；registerForActivityResult 必須在 STARTED 之前，所以在欄位初始化時建立。 */
     private val avatarPhotoPicker = AvatarPhotoPicker(this)
@@ -148,7 +149,7 @@ class FlutterChatActivity : FlutterFragmentActivity() {
      * mesh service's notification) only brings the app to the front.
      */
     private fun receiveNotificationTap(intent: Intent) {
-        val navigation = ChatNavigation.fromNotification(intent) ?: return
+        val navigation = AppNavigation.fromNotification(intent) ?: return
         navigation.clearNotifications(chatViewModel)
         pendingNavigation.offer(navigation)
     }
@@ -170,10 +171,12 @@ class FlutterChatActivity : FlutterFragmentActivity() {
         settingsBridge = settings
         // Both stores are process-wide: the mesh service decrypts with the same recipient key, and
         // the Inbox's presenter writes the notices this engine lists. The first reading of a
-        // targeted notice writes its readAt receipt (#143).
+        // targeted notice writes its readAt receipt (#143). Sign-out's clearKey takes back the
+        // notifications of the targeted notices it deletes.
         val adminNotice = AdminNoticeBridge(
             keyStore = { AdminNoticeRecipientKeyStore.getInstance(applicationContext) },
             notices = AdminNotices.store(applicationContext),
+            notifier = SystemAdminNoticeNotifier(applicationContext),
             events = events,
             onFirstRead = AdminNotices.receipts::recordFirstRead
         )

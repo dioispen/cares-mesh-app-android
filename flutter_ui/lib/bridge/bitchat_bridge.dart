@@ -163,8 +163,8 @@ abstract final class ChatEvents {
   /// 在 [peers] 的列上。
   static const unread = 'chat_unread';
 
-  /// `{type, navigation: Map?}`：使用者點了聊天通知、Dart 還沒處理的目的地（#57），沒有時
-  /// `navigation` 為 null（見 `models/chat_navigation.dart`）。它只是提醒：要導航前一定先以
+  /// `{type, navigation: Map?}`：使用者點了通知（聊天或 Admin Notice）、Dart 還沒處理的目的地（#57），沒有時
+  /// `navigation` 為 null（見 `models/app_navigation.dart`）。它只是提醒：要導航前一定先以
   /// [ChatMethods.takePendingNavigation] 取走，照取到的去，每個點擊只處理一次。
   static const pendingNavigation = 'chat_pending_navigation';
 
@@ -293,10 +293,11 @@ class BitchatBridge {
   static Future<String?> openLatestUnreadPrivateChat() =>
       _method.invokeMethod<String>(ChatMethods.openLatestUnreadPrivateChat);
 
-  /// 取走使用者點聊天通知要去的地方（#57）：`{target: privateChat, peerID, senderNickname}` 或
-  /// `{target: publicChat}`；沒有（或已被取走）時回傳 null。取走後原生不再持有它。只取、不開啟：
-  /// 私訊畫面照一般流程呼叫 [startPrivateChat]。bridge 錯誤會往上拋。
-  static Future<Map<dynamic, dynamic>?> takePendingChatNavigation() =>
+  /// 取走使用者點通知要去的地方（#57）：`{target: privateChat, peerID, senderNickname}`、
+  /// `{target: publicChat}` 或 `{target: adminNotices}`（Admin Notice 的通知）；沒有（或已被取走）時
+  /// 回傳 null。取走後原生不再持有它。只取、不開啟：私訊畫面照一般流程呼叫 [startPrivateChat]。
+  /// bridge 錯誤會往上拋。
+  static Future<Map<dynamic, dynamic>?> takePendingAppNavigation() =>
       _method.invokeMethod<Map>(ChatMethods.takePendingNavigation);
 
   /// 切換我的最愛（原生 `ChatViewModel.toggleFavorite`，原生私訊標頭星號做的事）：加入或移出，
@@ -418,8 +419,13 @@ class BitchatBridge {
       _method.invokeMethod<Uint8List>(AdminNoticeMethods.getPublicKey, <String, dynamic>{'uid': uid});
 
   /// 刪除這支手機的 Admin Notice 收件私鑰（#140）：登出與緊急清除時呼叫，之後這支手機解不開任何
-  /// 定向公告，直到下次登入產生新的一把。正常完成就表示私鑰已從磁碟刪除；錯誤同
-  /// [getAdminNoticePublicKey]，往上拋。
+  /// 定向公告，直到下次登入產生新的一把。已經解開、存在本機的定向公告也一併刪除並收回通知，
+  /// 下一個登入的帳號看不到；廣播是公開的，留著。列表的變化經 [AdminNoticeEvents.notices] 推來。
+  ///
+  /// 正常完成就表示私鑰與定向公告都已從磁碟刪除。私鑰刪不掉丟 [PlatformException]
+  /// （[AdminNoticeErrors.keyStoreUnavailable]），公告刪不掉丟 [AdminNoticeErrors.noticeStoreUnavailable]；
+  /// 兩步都會試過才回報，重試無害。沒有原生 mesh 的平台（iOS、測試）丟 [MissingPluginException]。
+  /// 都往上拋。
   static Future<void> clearAdminNoticeKey() => _method.invokeMethod<void>(AdminNoticeMethods.clearKey);
 
   /// 這支手機收到、還在保留期（expiresAt 後 7 天）內的所有 Admin Notice，新的在前（#142）。每一則是

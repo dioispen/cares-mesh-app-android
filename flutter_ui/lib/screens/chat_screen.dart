@@ -21,7 +21,7 @@ import 'private_chat_screen.dart';
 /// - 從 peer 列表點一個 peer，或點列表上方「對話」區段的一段對話（#73，對方離線也可以）：關掉列表、
 ///   立刻開啟私訊畫面，由私訊畫面向原生開啟對話（與原生相同：先開畫面，畫面再呼叫
 ///   `startPrivateChat`；對話以它的對話 ID 開啟，原生會載入完整紀錄）。
-/// - 原生自己選定了私訊（公開聊天室輸入 `/m 暱稱`；點私訊通知時 `ChatNavigationHost` 也經由它）
+/// - 原生自己選定了私訊（公開聊天室輸入 `/m 暱稱`；點私訊通知時 `AppNavigationHost` 也經由它）
 ///   而私訊畫面沒開：開啟它。
 ///   Activity 重建時私訊畫面隨 engine 消失、Dart 從第一個畫面重來，原生端會一併結束私訊
 ///   （Kotlin `ChatBridge.destroy`），不會留下沒人在看、卻仍被當成開著的私訊。
@@ -41,7 +41,7 @@ class ChatScreen extends StatefulWidget {
   /// 測試用；預設為 app 層級的 [ChatService.instance]。
   final ChatService? chatService;
 
-  /// 聊天室的 route 名稱：點通知時（`ChatNavigationHost`）靠它認出聊天室已經開著。
+  /// 聊天室的 route 名稱：點通知時（`AppNavigationHost`）靠它認出聊天室已經開著。
   static const routeName = '/chat';
 
   /// 開啟聊天室一律用這個 route（帶 [routeName]）。

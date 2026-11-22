@@ -10,6 +10,7 @@ import com.bitchat.android.adminnotice.recordFirstRead
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.testsupport.ManualPoster
 import com.bitchat.android.testsupport.Read
+import com.bitchat.android.testsupport.RecordingAdminNoticeNotifier
 import com.bitchat.android.testsupport.RecordingReceipts
 import com.bitchat.android.testsupport.RecordingResult
 import io.flutter.plugin.common.MethodCall
@@ -45,6 +46,7 @@ class AdminNoticeBridgeReadReceiptTest {
     private val bridge = AdminNoticeBridge(
         keyStore = { AdminNoticeRecipientKeyStore(context.getSharedPreferences("unused-${UUID.randomUUID()}", Context.MODE_PRIVATE)) },
         notices = notices,
+        notifier = RecordingAdminNoticeNotifier(),
         events = BridgeEventEmitter(postToMain = ManualPoster(), logDropped = {}),
         onFirstRead = receipts::recordFirstRead,
         scope = CoroutineScope(dispatcher + Job()),

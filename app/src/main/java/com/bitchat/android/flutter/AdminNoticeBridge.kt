@@ -4,6 +4,7 @@ import android.util.Log
 import com.bitchat.android.adminnotice.AdminNoticeChangeListener
 import com.bitchat.android.adminnotice.AdminNoticeKind
 import com.bitchat.android.adminnotice.AdminNoticeLevel
+import com.bitchat.android.adminnotice.AdminNoticeNotifier
 import com.bitchat.android.adminnotice.AdminNoticeStatus
 import com.bitchat.android.adminnotice.AdminNoticeStore
 import com.bitchat.android.adminnotice.StoredAdminNotice
@@ -26,7 +27,8 @@ import kotlinx.coroutines.withContext
  * registration and asks for it to be deleted on sign-out and emergency clear.
  * - [METHOD_GET_PUBLIC_KEY] `{uid: String}` → the 32-byte public key bound to `uid` (a Dart
  *   `Uint8List`). A key bound to another account is deleted and replaced first.
- * - [METHOD_CLEAR_KEY] → null once the private key is off disk.
+ * - [METHOD_CLEAR_KEY] → null once the private key and every targeted notice decrypted with it
+ *   are off disk, and those notices' notifications cancelled; broadcasts stay ([clearKey]).
  *
  * The notice list (#142), read from the process-wide [AdminNoticeStore] the Inbox's presenter
  * writes:
@@ -50,6 +52,8 @@ class AdminNoticeBridge(
     private val keyStore: () -> AdminNoticeRecipientKeyStore,
     /** The process-wide notice store; it opens its encrypted file on first use, on [storeDispatcher]. */
     private val notices: AdminNoticeStore,
+    /** Takes back the notifications of the targeted notices [METHOD_CLEAR_KEY] deletes. */
+    private val notifier: AdminNoticeNotifier,
     private val events: BridgeEventEmitter,
     /**
      * The first time the user reads a notice in the App, on [storeDispatcher] with its readAt set.
@@ -74,7 +78,7 @@ class AdminNoticeBridge(
                     ?: return true.also { result.invalidArguments(call, "{uid: String}") }
                 answer(result, ERROR_KEY_STORE_UNAVAILABLE) { keyStore().publicKeyFor(uid) }
             }
-            METHOD_CLEAR_KEY -> answer(result, ERROR_KEY_STORE_UNAVAILABLE) { keyStore().clear(); null }
+            METHOD_CLEAR_KEY -> answer(result, ERROR_KEY_STORE_UNAVAILABLE) { clearKey() }
             METHOD_GET_ALL -> answer(result, ERROR_NOTICE_STORE_UNAVAILABLE) { noticeList() }
             METHOD_MARK_READ -> {
                 val messageId = call.stringArgument("messageId")?.takeIf { it.isNotEmpty() }
@@ -91,6 +95,40 @@ class AdminNoticeBridge(
 
     private fun noticeList(): List<Map<String, Any?>> = notices.all().map { it.toBridgeMap() }
 
+    /**
+     * 登出與緊急清除 (#140): the private key goes, and so does every targeted notice decrypted with
+     * it, from the store and the notification shade, so the next account on this phone sees none
+     * of them. Broadcasts are public and stay. The store tells an open list ([EVENT_ADMIN_NOTICE]).
+     *
+     * The key goes first, so no new targeted notice is decrypted while the notices are deleted.
+     * Each step is tried whatever the other did: a sign-out goes on after a failure, and the next
+     * account must not find the notices either way. A failure is answered after both, so emergency
+     * clear stops and the user can try again; both steps can be repeated.
+     */
+    private fun clearKey(): Nothing? {
+        val keyFailure = attempt { keyStore().clear() }
+        val noticeFailure = attempt { notices.deleteTargeted().forEach(::cancelNotification) }
+        keyFailure?.let { throw Refusal(ERROR_KEY_STORE_UNAVAILABLE, it) }
+        noticeFailure?.let { throw Refusal(ERROR_NOTICE_STORE_UNAVAILABLE, it) }
+        return null
+    }
+
+    private inline fun attempt(step: () -> Unit): Exception? = try {
+        step()
+        null
+    } catch (e: Exception) {
+        e
+    }
+
+    /** The notice is off disk; a notification that cannot be taken back is only logged, as the presenter does. */
+    private fun cancelNotification(messageId: String) {
+        try {
+            notifier.cancel(messageId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not cancel the notification of Admin Notice $messageId: ${e.message}")
+        }
+    }
+
     private fun firstRead(notice: StoredAdminNotice) {
         try {
             onFirstRead(notice)
@@ -100,13 +138,22 @@ class AdminNoticeBridge(
         }
     }
 
-    /** Answers [result] with [use]'s value, run on [storeDispatcher]; a store failure is [errorCode]. */
+    /** A call that touches both stores answers with the code of the one that failed. */
+    private class Refusal(val code: String, cause: Exception) : Exception(cause.message, cause)
+
+    /**
+     * Answers [result] with [use]'s value, run on [storeDispatcher]; a store failure is [errorCode],
+     * or a [Refusal]'s own code.
+     */
     private fun answer(result: MethodChannel.Result, errorCode: String, use: () -> Any?) {
         scope.launch {
             val value = try {
                 withContext(storeDispatcher) { use() }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: Refusal) {
+                result.error(e.code, e.message, null)
+                return@launch
             } catch (e: Exception) {
                 // The keystore or the encrypted file failed: nothing was handed out, nothing half-done
                 // is left that a retry cannot fix.

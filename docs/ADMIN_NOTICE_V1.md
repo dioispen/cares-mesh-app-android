@@ -64,8 +64,10 @@ v1 不做：
 
 - 每次安裝的 App 在每次登入時產生一組 X25519 金鑰，綁定當時登入的 uid。私鑰存在 Kotlin 端的 EncryptedSharedPreferences，解密才能在背景進行。
 - 公鑰登記在 `reporter_handles/{uid}/installations/{reporterHandle}` 的 `noticePublicKey`，與 Reporter Handle、簽章公鑰同一份文件，沿用 [MESH_GATEWAY.md](MESH_GATEWAY.md) 7.7 的登記：App 啟動時與登入成功後由 Flutter 整份 `set` 一次。公鑰經新增的 bridge 方法 `adminNotice_getPublicKey(uid)` 從 Kotlin 取得；傳入的 uid 與私鑰綁定的不同時，Kotlin 先刪除舊私鑰再產生新的。一個帳號登記過幾台裝置，就有幾把公鑰。
-- bridge 的回傳（#140 定案）：`adminNotice_getPublicKey` 回 32 bytes（Dart 的 `Uint8List`）；`adminNotice_clearKey` 在私鑰已從磁碟刪除後回 null。加密儲存開不了或寫不進去時兩者都回 `KEY_STORE_UNAVAILABLE`，uid 缺少或為空字串時回 `INVALID_ARGUMENT`。Kotlin 端是 `identity/AdminNoticeRecipientKeyStore`，私鑰不離開它：協定層以 `publicKey()` 取得 `R`、以 `agree(ephemeralPublicKey)` 取得 `shared`，沒有金鑰或結果全為 0 時回 null。
-- 登出時 Flutter 呼叫 `adminNotice_clearKey`，要求 Kotlin 刪除私鑰；刪不掉只留 log、照樣登出，下一個帳號登入時 Kotlin 會先刪掉它。緊急清除在原生清除之後也呼叫它，刪不掉就中止，讓使用者再試一次。登記文件照 MESH_GATEWAY.md 5.3 不刪除：同一支手機改登入另一個帳號後，前一個帳號底下那份文件留著的是私鑰已刪除的公鑰，加密給它不會外洩內容，只會佔掉一個收件裝置的名額。
+- bridge 的回傳（#140 定案）：`adminNotice_getPublicKey` 回 32 bytes（Dart 的 `Uint8List`）；`adminNotice_clearKey` 在私鑰與本機的定向公告都已從磁碟刪除後回 null（見下一點）。加密儲存開不了或寫不進去時兩者都回 `KEY_STORE_UNAVAILABLE`，公告的本機儲存刪不掉時 `adminNotice_clearKey` 回 `NOTICE_STORE_UNAVAILABLE`；uid 缺少或為空字串時回 `INVALID_ARGUMENT`。Kotlin 端是 `identity/AdminNoticeRecipientKeyStore`，私鑰不離開它：協定層以 `publicKey()` 取得 `R`、以 `agree(ephemeralPublicKey)` 取得 `shared`，沒有金鑰或結果全為 0 時回 null。
+- 登出時 Flutter 呼叫 `adminNotice_clearKey`，要求 Kotlin 刪除私鑰；刪不掉只留 log、照樣登出，下一個帳號登入時 Kotlin 會先刪掉它。緊急清除在原生清除之後也呼叫它，刪不掉就中止，讓使用者再試一次。
+  - 同一個呼叫也刪掉本機儲存裡所有的定向公告（「收件端呈現」），並以 messageId 收回它們的通知：只刪私鑰的話，已經解開的內容仍會列到 expiresAt 後 7 天，同一支手機的下一個帳號看得到。廣播是公開的，留著。儲存照常推 `admin_notice` 事件，開著的列表跟著更新。讀不懂的項目不確定是不是廣播，一併刪除（fail closed）。
+  - Kotlin 先刪私鑰，刪公告期間就不會再解開新的定向公告。兩步不論另一步成敗都會試（登出遇到錯誤照樣登出，下一個帳號同樣不該看到），都試過才回報第一個失敗的錯誤碼；兩步都能重做，緊急清除重試時照樣跑一次。登記文件照 MESH_GATEWAY.md 5.3 不刪除：同一支手機改登入另一個帳號後，前一個帳號底下那份文件留著的是私鑰已刪除的公鑰，加密給它不會外洩內容，只會佔掉一個收件裝置的名額。
 - **不得重用 Noise 靜態金鑰**，理由是金鑰分離，以及 Noise 靜態金鑰跨帳號不變：同一支手機換帳號登入後，仍解得開前一個帳號的定向公告。登記這把公鑰不會多出新的連結：Administrator 本來就能從 `reporter_handles` 與 `mesh_reports` 把 uid、Reporter Handle、peerID 串在一起（ADR-0009）。
 
 ## 線路格式
@@ -457,7 +459,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 
 ## 收件端呈現
 
-- 收到的公告存在 Kotlin 端的本機儲存，以 messageId 去重，只在第一次寫入時發通知。定向公告解密後的內容要加密儲存（本機儲存從 #136 起就整份加密，#141 以測試確認）。保留到 `expiresAt` 後 7 天，期間標示為「已過期」。
+- 收到的公告存在 Kotlin 端的本機儲存，以 messageId 去重，只在第一次寫入時發通知。定向公告解密後的內容要加密儲存（本機儲存從 #136 起就整份加密，#141 以測試確認）。保留到 `expiresAt` 後 7 天，期間標示為「已過期」；定向公告在登出與緊急清除時就刪除，連同通知（`adminNotice_clearKey`，見「收件者加密金鑰」）。
   - 實作是 EncryptedSharedPreferences（與身分金鑰相同的做法），廣播也一起加密，不另分兩種儲存。寫入用 `commit`，通知發出後行程立刻被殺也不會漏記。
   - 寫不進本機儲存時照樣通知：撤離令比重開後重複一次重要，同一個行程內仍有去重表擋著。
   - 純撤回沒有內容，不呈現也不通知；被撤回或更正的公告怎麼標示、內容與通知怎麼處理見「撤回與取代」的實作。
@@ -471,6 +473,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
   | 資訊 | 低 | 不出聲 |
 
   通知不設 category：勿擾模式對鬧鐘、活動或訊息的例外會把它放行。每則通知以 messageId 當 tag，撤回或取代時才找得到它來更新或取消。廣播的通知在鎖定畫面顯示內容，定向公告不顯示。
+
+  點了通知開啟公告列表（不是單一則：列表攤開就是全文），App 已在執行與冷啟動都一樣。實作沿用聊天通知的點擊導航（#57）：通知的 intent 帶 `SystemAdminNoticeNotifier.EXTRA_OPEN_ADMIN_NOTICES`，`FlutterChatActivity` 讀成 `AppNavigation.AdminNotices` 放進 `PendingAppNavigation`，經 `chat_pending_navigation`／`chat_takePendingNavigation`（`{target: "adminNotices"}`）交給 Dart 的 `AppNavigationHost`；它在登入後的首頁出現時才導航，列表已開著就不再開一份。各種通知共用這一個待處理的目的地，以最後一次點擊為準。
 
   實作（#141）：定向公告的通知是 `VISIBILITY_PRIVATE`，附一份只有等級標題與「有一則給你的公告，解鎖後查看」的 public version，安全鎖定畫面顯示的是這一份。使用者在系統設定裡允許鎖定畫面顯示敏感內容時，Android 仍會顯示完整內容，這與其他通訊軟體相同；若要不論設定一律不顯示，得改成 `VISIBILITY_SECRET`，代價是鎖定畫面上完全看不到這則通知。
 
@@ -535,7 +539,7 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 - sync 集合：上限、到期、被取代就移除；超過 512 bytes 的公告經 sync 切片後完整送達（待驗證 1）。
 - Gateway 注入：等待期間從 BLE 聽到同一則就不注入；來自快取的文件照樣注入；服務停止時取消待注入；兩支 Gateway 注入同一則，封包 ID 相同。
 - 0x31 不建立 peer、不留下 actor、不進實驗 log。
-- 收件者金鑰：uid 改變時重新產生；清除後解不開。
+- 收件者金鑰：uid 改變時重新產生；清除後解不開；清除時本機的定向公告與通知一併刪除、廣播留著，公告刪不掉時回報錯誤、重試能完成。
 - 回條（fake 的回條 port）：Firestore 來源解開時 `via` 是 firestore，mesh 來源是 ble；廣播、不是收件者都不寫；同一則第二份副本、App 重開後再收到都不再寫；回條寫不出去不影響通知與轉送；第一次讀到定向公告才寫 `readAt`。Firestore 實作不等伺服器確認。
 
 **Dart 測試（管理後台）**
@@ -557,6 +561,8 @@ rules 無法驗證 `wire` 的簽章，也無法檢查它和 `expiresAt` 欄位�
 4. 公告發出之後才讓 A 進入 B 的範圍 → A 經 gossip sync 收到。
 5. C 滑掉 App 畫面（服務仍在）→ 仍會注入。
 6. C 重開 App → 不會重複通知。
+7. A 點公告通知，App 在前景、在背景、以及滑掉 App 只剩前景服務（冷啟動）各一次 → 都開在公告列表，未讀的變成已讀。
+8. A 登出（與緊急清除各一次）→ 第 2 則定向公告從列表與通知欄消失，廣播留著；改登入另一個帳號後也看不到它。
 
 ## 實作順序
 

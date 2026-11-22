@@ -70,6 +70,14 @@ interface AdminNoticeStore {
      */
     fun markWithdrawn(messageId: String): StoredAdminNotice?
 
+    /**
+     * 登出與緊急清除 (#140): deletes every targeted notice, whose decrypted content is for the
+     * account signing out and must not be listed to the next one. Broadcasts are public and stay.
+     * Returns the messageIds deleted, so their notifications can be cancelled; throws when the
+     * deletion did not reach the disk, so a caller can report the failure and try again.
+     */
+    fun deleteTargeted(): List<String>
+
     /** [listener] hears of every notice stored and every change to one, until removed. */
     fun addChangeListener(listener: AdminNoticeChangeListener)
 
@@ -158,6 +166,29 @@ class EncryptedAdminNoticeStore internal constructor(
         }
         if (changed != null) notifyChanged()
         return changed
+    }
+
+    /**
+     * Fails closed: an entry it cannot read (a later version's format, or a damaged one) is not
+     * known to be a broadcast, so it goes too. A broadcast lost that way is still in the mesh's
+     * gossip sync until it expires.
+     */
+    override fun deleteTargeted(): List<String> {
+        val deleted = synchronized(lock) {
+            val gone = prefs.all
+                .filterNot { (messageId, value) -> (value as? String)?.let { decode(messageId, it) }?.kind == AdminNoticeKind.BROADCAST }
+                .keys
+                .toList()
+            if (gone.isNotEmpty()) {
+                val editor = prefs.edit()
+                gone.forEach { editor.remove(it) }
+                // commit: the next account must not find them after a crash either.
+                check(editor.commit()) { "Targeted Admin Notices were not deleted" }
+            }
+            gone
+        }
+        if (deleted.isNotEmpty()) notifyChanged()
+        return deleted
     }
 
     override fun addChangeListener(listener: AdminNoticeChangeListener) {

@@ -9,6 +9,7 @@ import com.bitchat.android.adminnotice.EncryptedAdminNoticeStore
 import com.bitchat.android.adminnotice.StoredAdminNotice
 import com.bitchat.android.identity.AdminNoticeRecipientKeyStore
 import com.bitchat.android.testsupport.ManualPoster
+import com.bitchat.android.testsupport.RecordingAdminNoticeNotifier
 import com.bitchat.android.testsupport.RecordingResult
 import com.bitchat.android.testsupport.RecordingSink
 import io.flutter.plugin.common.MethodCall
@@ -47,6 +48,7 @@ class AdminNoticeBridgeNoticeListTest {
     private val bridge = AdminNoticeBridge(
         keyStore = { AdminNoticeRecipientKeyStore(context.getSharedPreferences("unused-${UUID.randomUUID()}", Context.MODE_PRIVATE)) },
         notices = notices,
+        notifier = RecordingAdminNoticeNotifier(),
         events = events,
         onFirstRead = { firstReads += it },
         scope = CoroutineScope(dispatcher + Job()),
@@ -198,6 +200,7 @@ class AdminNoticeBridgeNoticeListTest {
         val broken = AdminNoticeBridge(
             keyStore = { error("unused") },
             notices = EncryptedAdminNoticeStore(openPrefs = { throw GeneralSecurityException("keystore is gone") }, nowMs = { now }),
+            notifier = RecordingAdminNoticeNotifier(),
             events = events,
             scope = CoroutineScope(dispatcher + Job()),
             storeDispatcher = dispatcher

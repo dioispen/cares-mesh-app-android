@@ -8,8 +8,8 @@ import '../services/admin_notice_service.dart';
 import '../services/mascot_service.dart';
 import '../services/profile_store.dart';
 import '../widgets/admin_notice_style.dart';
+import '../widgets/app_navigation_host.dart';
 import '../widgets/background_operation_notice.dart';
-import '../widgets/chat_navigation_host.dart';
 import '../widgets/user_avatar.dart';
 import 'admin_notice_screen.dart';
 import 'knowledge_screen.dart';
@@ -96,13 +96,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   /// 管理端公告列表（#142）。小助理先收起來，免得擋住公告；回來時 [didPopNext] 再叫它出來。
+  /// 用列表的具名 route，點公告通知時（AppNavigationHost）才認得出它已經開著。
   void _openAdminNotices() {
     mascotOptionsNotifier.value = const [];
-    _navigateTo(AdminNoticeScreen(service: widget.adminNotices, clock: widget.clock));
+    Navigator.push(context, AdminNoticeScreen.route(service: widget.adminNotices, clock: widget.clock));
   }
 
   void _navigateTo(Widget screen) {
-    // 聊天室用它的具名 route，點通知時（ChatNavigationHost）才認得出它已經開著。
+    // 聊天室用它的具名 route，點通知時（AppNavigationHost）才認得出它已經開著。
     final route = screen is ChatScreen ? ChatScreen.route() : MaterialPageRoute<void>(builder: (_) => screen);
     Navigator.push(context, route);
   }
@@ -129,9 +130,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         : shield;
   }
 
-  /// 首頁出現代表已走完 setup 與登入：點了的聊天通知從這裡帶到聊天畫面（#57）。
+  /// 首頁出現代表已走完 setup 與登入：點了的通知從這裡帶到聊天畫面（#57）或公告列表。
   @override
-  Widget build(BuildContext context) => ChatNavigationHost(child: _buildHome(context));
+  Widget build(BuildContext context) =>
+      AppNavigationHost(adminNotices: widget.adminNotices, child: _buildHome(context));
 
   Widget _buildHome(BuildContext context) {
     final features = [

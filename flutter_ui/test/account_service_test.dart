@@ -4,7 +4,7 @@ import 'package:flutter_ui/services/account_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 登出與緊急清除時，記憶體裡收到的互救任務（BLE 回報與本機進度）也要清掉；
-/// Admin Notice 的收件私鑰也要刪除（#140）。
+/// Admin Notice 的收件私鑰與本機的定向公告也要刪除（#140，原生在同一個 clearKey 裡刪）。
 void main() {
   late List<String> calls;
 
@@ -69,5 +69,23 @@ void main() {
     );
 
     expect(calls, ['native', 'noticeKey']);
+  });
+
+  test('緊急清除：本機的定向公告刪不掉時同樣中止，讓使用者可以再試', () async {
+    await expectLater(
+      account(noticeKeyError: PlatformException(code: 'NOTICE_STORE_UNAVAILABLE')).panicClear(),
+      throwsA(isA<PlatformException>()),
+    );
+
+    expect(calls, ['native', 'noticeKey']);
+  });
+
+  test('登出：本機的定向公告刪不掉也照樣登出', () async {
+    await expectLater(
+      account(noticeKeyError: PlatformException(code: 'NOTICE_STORE_UNAVAILABLE')).signOut(),
+      completes,
+    );
+
+    expect(calls, ['firebase', 'noticeKey', 'tasks']);
   });
 }

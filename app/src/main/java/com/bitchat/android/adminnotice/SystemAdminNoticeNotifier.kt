@@ -74,6 +74,7 @@ private class ResourceAdminNoticeTexts(private val context: Context) : AdminNoti
  * version on a secure lock screen unless the user lets the lock screen show sensitive content.
  *
  * Each notice is posted under its messageId as the tag, so a correction or withdrawal can cancel it.
+ * Tapping one opens the App on the Admin Notice list ([EXTRA_OPEN_ADMIN_NOTICES]), running or not.
  * POST_NOTIFICATIONS is optional: without it nothing is posted, and the home screen's notice card
  * (#142) stands in.
  */
@@ -93,11 +94,13 @@ class SystemAdminNoticeNotifier(
             Log.i(TAG, "Notifications are off; Admin Notice ${notice.messageId} is only stored")
             return
         }
-        val openApp = PendingIntent.getActivity(
+        // One PendingIntent for every notice: each opens the list, which shows them all in full.
+        val openList = PendingIntent.getActivity(
             context,
             NOTIFICATION_ID,
             Intent(context, FlutterChatActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_OPEN_ADMIN_NOTICES, true)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -108,7 +111,7 @@ class SystemAdminNoticeNotifier(
             .setStyle(NotificationCompat.BigTextStyle().bigText(notice.content))
             .setWhen(notice.issuedAtMs)
             .setShowWhen(true)
-            .setContentIntent(openApp)
+            .setContentIntent(openList)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .setPriority(priority(notice.level))
@@ -126,7 +129,7 @@ class SystemAdminNoticeNotifier(
                         .setContentText(texts.hiddenContent())
                         .setWhen(notice.issuedAtMs)
                         .setShowWhen(true)
-                        .setContentIntent(openApp)
+                        .setContentIntent(openList)
                         .setAutoCancel(true)
                         .setPriority(priority(notice.level))
                         .build()
@@ -195,6 +198,12 @@ class SystemAdminNoticeNotifier(
 
         /** With the messageId as tag; one ID for all notices keeps clear of the App's other notifications. */
         const val NOTIFICATION_ID = 3101
+
+        /**
+         * The tap's intent extra: open the Admin Notice list (`AppNavigation.AdminNotices`), as
+         * upstream's chat notifications name theirs (`ui.NotificationManager.EXTRA_OPEN_MESH_CHAT`).
+         */
+        const val EXTRA_OPEN_ADMIN_NOTICES = "open_admin_notices"
 
         fun channelId(level: AdminNoticeLevel): String = when (level) {
             AdminNoticeLevel.URGENT -> "admin_notice_urgent"
