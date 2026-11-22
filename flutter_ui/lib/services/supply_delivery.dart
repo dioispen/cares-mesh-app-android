@@ -23,13 +23,17 @@ class SupplyDelivery {
   /// 兩條路都失敗：這筆誰都沒收到。
   bool get failed => broadcastFailure != null && uploadFailure != null;
 
+  /// 雲端已寫入或已進離線佇列，這筆已經記下，不用再送。不是的話，畫面保留輸入讓使用者重送，
+  /// 重送時沿用同一個 ID：mesh 上已送出的封包和雲端文件才會是同一個 exchangeId，後台去重對得上。
+  bool get recorded => uploadFailure == null;
+
   /// [success] 是成功時的開頭，例如「已送出申請」。
   String message(String success) => switch ((broadcastFailure, uploadFailure)) {
         (null, null) when uploadQueued => '$success：附近裝置已收到，雲端尚未上傳，恢復連線後會自動送出。',
         (final b?, null) when uploadQueued => '目前離線，附近廣播也失敗（$b）。$success已暫存，恢復連線後會自動送出。',
         (null, null) => '$success：已透過 Mesh 廣播給附近裝置，並記錄到雲端。',
         (final b?, null) => '$success：已記錄到雲端，但附近廣播失敗（$b）。',
-        (null, final u?) => '$success：附近裝置已收到，但雲端上傳失敗（$u）。',
+        (null, final u?) => '$success：附近裝置已收到，但雲端上傳失敗（$u），請再送一次。',
         (final b?, final u?) => '送出失敗：附近廣播失敗（$b），雲端上傳也失敗（$u）。請再試一次。',
       };
 }

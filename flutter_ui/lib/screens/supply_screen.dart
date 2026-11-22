@@ -121,7 +121,7 @@ class _SupplyScreenState extends State<SupplyScreen>
   /// 一次送出走兩條路：經 BLE mesh 廣播給附近裝置（有網路的人會代傳到後台），以及寫進雲端
   /// 自己的 `supply_requests`／`supply_pledges`。兩條路各自獨立，任一條失敗不拖垮另一條；
   /// 斷網是災害現場的常態，雲端寫入離線時進本機佇列、不等伺服器確認，畫面不能卡住。
-  Future<void> _submitRequest(SupplyItem item, int qty) async {
+  Future<SupplyDelivery> _submitRequest(SupplyItem item, int qty) async {
     final user = _requireUser();
     final request = SupplyRequest(
       userId: user.id,
@@ -148,9 +148,10 @@ class _SupplyScreenState extends State<SupplyScreen>
       },
     );
     _showSubmissionResult(delivery, success: '已送出申請');
+    return delivery;
   }
 
-  Future<void> _submitPledge(SupplyItem item, int qty) async {
+  Future<SupplyDelivery> _submitPledge(SupplyItem item, int qty) async {
     final user = _requireUser();
     final pledge = SupplyPledge(
       userId: user.id,
@@ -177,6 +178,7 @@ class _SupplyScreenState extends State<SupplyScreen>
       },
     );
     _showSubmissionResult(delivery, success: '感謝您的捐贈承諾');
+    return delivery;
   }
 
   /// 本機沒有 app_user（登入時讀不到 users 文件）就不送：送出去的紀錄會沒有人名，後台對不上。
@@ -620,7 +622,8 @@ class _ActivityTile extends StatelessWidget {
 @visibleForTesting
 class SupplyRequestCard extends StatefulWidget {
   final SupplyItem item;
-  final Future<void> Function(int qty) onRequest;
+  /// 送出一筆申請；結果由物資頁的 snackbar 說明，卡片只依 [SupplyDelivery.recorded] 決定要不要清空。
+  final Future<SupplyDelivery> Function(int qty) onRequest;
 
   /// 一開始就展開。物資頁一律收起；排版測試用它檢查展開後的內容放不放得下。
   final bool initiallyExpanded;
@@ -660,13 +663,11 @@ class _RequestCardState extends State<SupplyRequestCard> {
     }
     setState(() => _isSubmitting = true);
     try {
-      await widget.onRequest(qty);
-      _qtyCtrl.clear();
-      if (mounted) setState(() => _expanded = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('申請成功！'),
-            behavior: SnackBarBehavior.floating));
+      final delivery = await widget.onRequest(qty);
+      // 雲端沒記下就保留輸入，讓使用者重送。
+      if (delivery.recorded) {
+        _qtyCtrl.clear();
+        if (mounted) setState(() => _expanded = false);
       }
     } catch (e) {
       if (mounted) {
@@ -743,7 +744,8 @@ class _RequestCardState extends State<SupplyRequestCard> {
 @visibleForTesting
 class SupplyDonateCard extends StatefulWidget {
   final SupplyItem item;
-  final Future<void> Function(int qty) onPledge;
+  /// 送出一筆捐贈承諾；結果由物資頁的 snackbar 說明，卡片只依 [SupplyDelivery.recorded] 決定要不要清空。
+  final Future<SupplyDelivery> Function(int qty) onPledge;
 
   /// 一開始就展開。物資頁一律收起；排版測試用它檢查展開後的內容放不放得下。
   final bool initiallyExpanded;
@@ -782,13 +784,11 @@ class _DonateCardState extends State<SupplyDonateCard> {
     }
     setState(() => _isSubmitting = true);
     try {
-      await widget.onPledge(qty);
-      _qtyCtrl.clear();
-      if (mounted) setState(() => _expanded = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('感謝您的捐贈承諾！'),
-            behavior: SnackBarBehavior.floating));
+      final delivery = await widget.onPledge(qty);
+      // 雲端沒記下就保留輸入，讓使用者重送。
+      if (delivery.recorded) {
+        _qtyCtrl.clear();
+        if (mounted) setState(() => _expanded = false);
       }
     } catch (e) {
       if (mounted) {

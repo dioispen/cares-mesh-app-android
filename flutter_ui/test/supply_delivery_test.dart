@@ -14,6 +14,7 @@ void main() {
     const d = SupplyDelivery(uploadQueued: true);
     expect(d.complete, isFalse);
     expect(d.failed, isFalse);
+    expect(d.recorded, isTrue, reason: '進了離線佇列就算記下，重送會重複計算');
     expect(d.message('已送出申請'), '已送出申請：附近裝置已收到，雲端尚未上傳，恢復連線後會自動送出。');
   });
 
@@ -25,17 +26,20 @@ void main() {
 
   test('only the cloud got it', () {
     const d = SupplyDelivery(broadcastFailure: '此裝置沒有藍牙 Mesh');
+    expect(d.recorded, isTrue);
     expect(d.message('感謝您的捐贈承諾'), '感謝您的捐贈承諾：已記錄到雲端，但附近廣播失敗（此裝置沒有藍牙 Mesh）。');
   });
 
   test('only the broadcast went out', () {
     const d = SupplyDelivery(uploadFailure: 'permission-denied');
-    expect(d.message('已送出申請'), '已送出申請：附近裝置已收到，但雲端上傳失敗（permission-denied）。');
+    expect(d.recorded, isFalse);
+    expect(d.message('已送出申請'), '已送出申請：附近裝置已收到，但雲端上傳失敗（permission-denied），請再送一次。');
   });
 
   test('both failed', () {
     const d = SupplyDelivery(broadcastFailure: 'a', uploadFailure: 'b');
     expect(d.failed, isTrue);
+    expect(d.recorded, isFalse);
     expect(d.message('已送出申請'), '送出失敗：附近廣播失敗（a），雲端上傳也失敗（b）。請再試一次。');
   });
 }

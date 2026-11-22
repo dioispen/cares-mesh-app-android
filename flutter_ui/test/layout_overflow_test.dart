@@ -12,6 +12,7 @@ import 'package:flutter_ui/screens/supply_screen.dart';
 import 'package:flutter_ui/screens/verify_email_screen.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 import 'package:flutter_ui/services/mascot_service.dart';
+import 'package:flutter_ui/services/supply_delivery.dart';
 import 'package:flutter_ui/widgets/fill_or_scroll.dart';
 import 'package:flutter_ui/widgets/mascot_assistant.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -329,8 +330,8 @@ void main() {
             body: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                SupplyRequestCard(item: item, onRequest: (qty) async {}, initiallyExpanded: expanded),
-                SupplyDonateCard(item: item, onPledge: (qty) async {}, initiallyExpanded: expanded),
+                SupplyRequestCard(item: item, onRequest: (qty) async => const SupplyDelivery(), initiallyExpanded: expanded),
+                SupplyDonateCard(item: item, onPledge: (qty) async => const SupplyDelivery(), initiallyExpanded: expanded),
               ],
             ),
           ),
