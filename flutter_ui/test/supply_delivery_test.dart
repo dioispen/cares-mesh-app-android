@@ -42,4 +42,31 @@ void main() {
     expect(d.recorded, isFalse);
     expect(d.message('已送出申請'), '送出失敗：附近廣播失敗（a），雲端上傳也失敗（b）。請再試一次。');
   });
+
+  group('PendingSubmissionIds', () {
+    late int minted;
+    late PendingSubmissionIds ids;
+    setUp(() {
+      minted = 0;
+      ids = PendingSubmissionIds(newId: () => 'id-${++minted}');
+    });
+
+    test('a retry after the cloud refused reuses the id, so mesh and cloud share one exchangeId', () {
+      final first = ids.idFor('water');
+      ids.settle('water', const SupplyDelivery(uploadFailure: 'permission-denied'));
+
+      expect(ids.idFor('water'), first);
+    });
+
+    test('once recorded (written or queued offline), the next submission gets a new id', () {
+      final first = ids.idFor('water');
+      ids.settle('water', const SupplyDelivery(uploadQueued: true));
+
+      expect(ids.idFor('water'), isNot(first));
+    });
+
+    test('items keep separate ids', () {
+      expect(ids.idFor('water'), isNot(ids.idFor('rice')));
+    });
+  });
 }

@@ -1,3 +1,5 @@
+import 'package:uuid/uuid.dart';
+
 /// 一筆物資申請／捐贈送出後，兩條路各自的結果：經 BLE mesh 廣播給附近裝置，以及寫入雲端
 /// （Firestore）。比照 Health Report 的 `SosDelivery`：斷網是災害現場的常態，mesh 已送出而雲端
 /// 只是暫存，要說清楚，不能說成失敗。
@@ -36,4 +38,21 @@ class SupplyDelivery {
         (null, final u?) => '$success：附近裝置已收到，但雲端上傳失敗（$u），請再送一次。',
         (final b?, final u?) => '送出失敗：附近廣播失敗（$b），雲端上傳也失敗（$u）。請再試一次。',
       };
+}
+
+/// 雲端還沒記下的那一筆所用的 ID（`supply_requests`／`supply_pledges` 的文件 ID，也是 mesh 封包的
+/// exchangeId），依物資 ID 分開。重送時沿用同一個：先前已經廣播出去的封包和之後寫進雲端的文件
+/// 才會是同一個 exchangeId，後台去重對得上，不會把每次重試都算成一筆離線申請。雲端記下
+/// （[SupplyDelivery.recorded]）之後，下一筆換新的 ID。只放記憶體，離開物資頁就重來。
+class PendingSubmissionIds {
+  PendingSubmissionIds({String Function()? newId}) : _newId = newId ?? const Uuid().v4;
+
+  final String Function() _newId;
+  final Map<String, String> _byItem = {};
+
+  String idFor(String itemId) => _byItem[itemId] ??= _newId();
+
+  void settle(String itemId, SupplyDelivery delivery) {
+    if (delivery.recorded) _byItem.remove(itemId);
+  }
 }

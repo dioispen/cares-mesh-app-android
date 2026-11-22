@@ -44,6 +44,9 @@ class _SupplyScreenState extends State<SupplyScreen>
   StreamSubscription? _itemsSub;
   StreamSubscription? _connectSub;
 
+  final _pendingRequestIds = PendingSubmissionIds();
+  final _pendingPledgeIds = PendingSubmissionIds();
+
   @override
   void initState() {
     super.initState();
@@ -124,6 +127,7 @@ class _SupplyScreenState extends State<SupplyScreen>
   Future<SupplyDelivery> _submitRequest(SupplyItem item, int qty) async {
     final user = _requireUser();
     final request = SupplyRequest(
+      requestId: _pendingRequestIds.idFor(item.id),
       userId: user.id,
       userName: user.name,
       itemId: item.id,
@@ -147,6 +151,7 @@ class _SupplyScreenState extends State<SupplyScreen>
         );
       },
     );
+    _pendingRequestIds.settle(item.id, delivery);
     _showSubmissionResult(delivery, success: '已送出申請');
     return delivery;
   }
@@ -154,6 +159,7 @@ class _SupplyScreenState extends State<SupplyScreen>
   Future<SupplyDelivery> _submitPledge(SupplyItem item, int qty) async {
     final user = _requireUser();
     final pledge = SupplyPledge(
+      pledgeId: _pendingPledgeIds.idFor(item.id),
       userId: user.id,
       userName: user.name,
       itemId: item.id,
@@ -177,6 +183,7 @@ class _SupplyScreenState extends State<SupplyScreen>
         );
       },
     );
+    _pendingPledgeIds.settle(item.id, delivery);
     _showSubmissionResult(delivery, success: '感謝您的捐贈承諾');
     return delivery;
   }
