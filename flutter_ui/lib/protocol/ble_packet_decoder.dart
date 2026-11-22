@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import '../models/health_report.dart';
-import 'geohash.dart';
 
 /// BLE 封包類型常數，與 Android MessageType 對應
 class BlePacketType {
@@ -41,33 +40,43 @@ class BlePacket {
   }
 }
 
-/// Broadcast Tier（A1，見 ADR-0003）—— Health Report 中每台裝置都能讀的部分。
+/// 精確座標在線路上的解析度：1 度 = 10^7 個單位（約 1.1 cm）。與 Kotlin `ReportLocation.SCALE` 相同。
+const int coordinateScale = 10000000;
+
+/// 把座標換成線路上的整數：四捨五入，0.5 往正無限大，與 Kotlin `ReportLocation.of`（`roundToLong`）
+/// 同一規則。互助任務以它把後端的 `lat`／`lng` 換算成與 mesh 相同的單位來比對（ADR-0010）。
+int coordinateToE7(double degrees) => (degrees * coordinateScale + 0.5).floor();
+
+/// Broadcast Tier（見 ADR-0003、ADR-0008）—— Health Report 中每台裝置都能讀的部分。
 ///
-/// **不含任何 PII**：沒有真實姓名、電話、血型、自由文字，也沒有公尺級座標。
-/// 對應 `app/.../protocol/DisasterReportPacket.kt` 的 `HealthReportPayload` 線路格式（big-endian）：
+/// **不含姓名與聯絡方式**：沒有真實姓名、電話、血型、自由文字。位置是精確座標，與 Detail Tier
+/// 是同一份。對應 `app/.../protocol/DisasterReportPacket.kt` 的 `HealthReportPayload` 線路格式
+/// （big-endian）：
 /// ```
-///   [0]     version(1) = 2        也接受 1（沒有 flags，視為沒有 SOS）；其他版本一律拒收
-///   [1..6]  reporterHandle(6)     不具識別性的固定長度識別碼
-///   [7]     status(1)             0=安全 / 1=輕傷 / 2=重傷 / 3=未宣告
-///   [8]     flags(1)              bit0 = SOS；其餘位元忽略（版本 1 沒有這個 byte）
-///   [9]     geohashLen(1)         0 或 geohashPrecision
-///   [10..]  geohash(ASCII)        降精度近似位置
-///   [末 4]  reportTime(4)         Unix 秒，uint32 big-endian
+///   [0]      version(1) = 3       其他版本（含 geohash 的 1、2）一律拒收
+///   [1..6]   reporterHandle(6)    隨機的固定長度識別碼
+///   [7]      status(1)            0=安全 / 1=輕傷 / 2=重傷 / 3=未宣告
+///   [8]      flags(1)             bit0 = SOS，bit1 = 有位置；其餘位元忽略
+///   [9..16]  lat, lng(2 × 4)      int32 big-endian，單位 1e-7 度；只在 bit1 = 1 時出現
+///   [末 4]   reportTime(4)        Unix 秒，uint32 big-endian
 /// ```
 ///
 /// SOS 是 Health Report 上的標記（ADR-0004）：「未宣告」只能和 SOS 一起出現，「安全」不能帶
 /// SOS，不合法的組合一律拒收。
 class HealthReportPayload {
-  static const int version = 2;
-  static const int _versionWithoutFlags = 1;
+  static const int version = 3;
   static const int handleBytes = 6;
-  /// geohash-6（約 0.6 × 1.1 km，ADR-0008）。只接受 0 或這個長度，與 Kotlin
-  /// `HealthReportPayload.GEOHASH_PRECISION` 一致；舊版裝置的 5 碼回報一律拒收。
-  static const int geohashPrecision = 6;
   static const int _flagSos = 0x01;
+  static const int _flagLocation = 0x02;
+  static const int _locationBytes = 8;
+  static const int _maxLatE7 = 90 * coordinateScale;
+  static const int _maxLngE7 = 180 * coordinateScale;
 
-  /// 最短的合法 payload：版本 1、沒有 geohash。
+  /// 沒有位置的 payload：1 + handle + status + flags + time。
   static const int _minEncodedSize = 1 + handleBytes + 1 + 1 + 4;
+
+  /// 帶位置的 payload，也是 Broadcast Tier 的上界（與 Kotlin `MAX_ENCODED_SIZE` 相同）。
+  static const int maxEncodedSize = _minEncodedSize + _locationBytes;
 
   /// 12 個十六進位字元（6 bytes）。
   final String reporterHandle;
@@ -78,8 +87,9 @@ class HealthReportPayload {
   /// Reporter 是否正舉著 SOS。
   final bool sos;
 
-  /// 降精度 geohash；無位置資訊時為 null。
-  final String? geohash;
+  /// 精確座標，線路上的整數（單位 1e-7 度）；無位置資訊時兩者都是 null。
+  final int? latE7;
+  final int? lngE7;
 
   /// 回報時間（線路上只保留到秒）。
   final DateTime reportTime;
@@ -88,9 +98,13 @@ class HealthReportPayload {
     required this.reporterHandle,
     required this.status,
     this.sos = false,
-    this.geohash,
+    this.latE7,
+    this.lngE7,
     required this.reportTime,
   });
+
+  double? get lat => latE7 == null ? null : latE7! / coordinateScale;
+  double? get lng => lngE7 == null ? null : lngE7! / coordinateScale;
 
   /// status wire byte ↔ 中文 label 的單一對應（與 Kotlin `HealthStatus` 一致）。
   static const Map<int, String> statusByWire = {0: '安全', 1: '輕傷', 2: '重傷', 3: statusUndeclared};
@@ -102,7 +116,7 @@ class HealthReportPayload {
       var o = 0;
 
       final v = b[o++] & 0xFF;
-      if (v != version && v != _versionWithoutFlags) return null;
+      if (v != version) return null;
 
       final handle = [
         for (var i = 0; i < handleBytes; i++)
@@ -112,23 +126,30 @@ class HealthReportPayload {
 
       final status = statusByWire[b[o++] & 0xFF];
       if (status == null) return null;
-      final sos = v == version && (b[o++] & _flagSos) != 0;
+      final flags = b[o++] & 0xFF;
+      final sos = (flags & _flagSos) != 0;
       if (!_isLegal(status, sos: sos)) return null;
 
-      final ghLen = b[o++] & 0xFF;
-      if (ghLen != 0 && ghLen != geohashPrecision) return null;
-      if (bytes.length - o < ghLen + 4) return null;
-      final geohash =
-          ghLen == 0 ? null : String.fromCharCodes(b.sublist(o, o + ghLen));
-      o += ghLen;
+      final hasLocation = (flags & _flagLocation) != 0;
+      if (bytes.length != _minEncodedSize + (hasLocation ? _locationBytes : 0)) return null;
+      final view = ByteData.sublistView(b);
+      int? latE7;
+      int? lngE7;
+      if (hasLocation) {
+        latE7 = view.getInt32(o, Endian.big);
+        lngE7 = view.getInt32(o + 4, Endian.big);
+        o += _locationBytes;
+        if (latE7.abs() > _maxLatE7 || lngE7.abs() > _maxLngE7) return null;
+      }
 
-      final secs = ByteData.sublistView(b, o, o + 4).getUint32(0, Endian.big);
+      final secs = view.getUint32(o, Endian.big);
 
       return HealthReportPayload(
         reporterHandle: handle,
         status: status,
         sos: sos,
-        geohash: geohash,
+        latE7: latE7,
+        lngE7: lngE7,
         reportTime:
             DateTime.fromMillisecondsSinceEpoch(secs * 1000, isUtc: true),
       );
@@ -144,20 +165,12 @@ class HealthReportPayload {
         _ => true,
       };
 
-  /// geohash 還原的近似中心座標；無位置時為 null。這是「大約在哪」而非確切位置。
-  (double, double)? approximateLatLng() =>
-      geohash == null ? null : Geohash.decodeCenter(geohash!);
-
-  BroadcastHealthReport toBroadcastReport() {
-    final approx = approximateLatLng();
-    return BroadcastHealthReport(
-      reporterHandle: reporterHandle,
-      status: status,
-      sos: sos,
-      geohash: geohash,
-      approxLat: approx?.$1,
-      approxLng: approx?.$2,
-      reportTime: reportTime,
-    );
-  }
+  BroadcastHealthReport toBroadcastReport() => BroadcastHealthReport(
+        reporterHandle: reporterHandle,
+        status: status,
+        sos: sos,
+        lat: lat,
+        lng: lng,
+        reportTime: reportTime,
+      );
 }

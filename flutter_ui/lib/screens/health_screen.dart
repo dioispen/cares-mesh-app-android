@@ -1203,9 +1203,10 @@ class _TaskDetailSheet extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: onNavigate,
                 icon: const Icon(Icons.directions_rounded, size: 18),
-                label: Text(
-                  task.isBle ? '導航到概略位置' : '開啟地圖導航',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                // BLE 任務與後端任務一樣是精確座標（ADR-0008）。
+                label: const Text(
+                  '開啟地圖導航',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                 ),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _textPrimary,
@@ -1215,14 +1216,6 @@ class _TaskDetailSheet extends StatelessWidget {
                 ),
               ),
             ),
-            if (task.isBle)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text(
-                  'BLE 廣播只帶概略位置，到現場後仍需搜尋',
-                  style: TextStyle(fontSize: 12, color: _textSecondary),
-                ),
-              ),
             _CopyCoordsButton(
               text: '${task.lat}, ${task.lng}',
               color: _textSecondary,

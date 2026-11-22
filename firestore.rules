@@ -249,7 +249,8 @@ service cloud.firestore {
 
     // mesh_reports/{reporterHandle}：Gateway 代傳上來的 Health Report Broadcast Tier
     // （docs/MESH_GATEWAY.md 5.2、ADR-0009）。每個 Reporter Handle 一份，只保留 reportTime
-    // 最新的那份。內容只有 Status、SOS、geohash-6 與稽核材料，沒有 Detail／Sensitive Tier。
+    // 最新的那份。內容只有 Status、SOS、精確座標（ADR-0008）與稽核材料，沒有 Detail／Sensitive
+    // Tier。
     //
     // 只有 Administrator 能讀、能刪：這是給管理後台統計的資料，寫入的 Gateway 自己也讀不到
     // （它本來就不先讀再寫）。App 不刪除任何 mesh_reports，災後由 Administrator 清空。
@@ -263,16 +264,17 @@ service cloud.firestore {
     match /mesh_reports/{handle} {
       function validMeshReport(handle) {
         let data = request.resource.data;
-        let fields = ['schemaVersion', 'reporterHandle', 'status', 'sos', 'geohash',
+        let fields = ['schemaVersion', 'reporterHandle', 'status', 'sos', 'lat', 'lng',
                       'reportTime', 'uploadedAt', 'gatewayUid', 'senderPeerId',
                       'rawPacket', 'announcement'];
         return request.auth != null
             && data.gatewayUid == request.auth.uid
-            // 欄位一個都不能少：geohash 與 announcement 沒有值時也要明確寫 null。
+            // 欄位一個都不能少：lat、lng 與 announcement 沒有值時也要明確寫 null。
             && data.keys().hasAll(fields)
             && data.keys().hasOnly(fields)
             && data.schemaVersion is int
-            && data.schemaVersion == 1
+            // 2：geohash-6 的 geohash 欄位換成精確的 lat／lng（ADR-0008）。
+            && data.schemaVersion == 2
             // 文件 ID 就是 Handle，與 reporter_handles 的文件 ID 同一種格式，後台才能對照。
             && handle.matches('^[0-9a-f]{12}$')
             && handle == data.reporterHandle
@@ -282,8 +284,12 @@ service cloud.firestore {
             // 傷勢的時候。
             && !(data.status == '安全' && data.sos)
             && !(data.status == '未宣告' && !data.sos)
-            // ADR-0008：Broadcast Tier 的 geohash 精度是 6；Reporter 沒有位置時為 null。
-            && (data.geohash == null || (data.geohash is string && data.geohash.size() == 6))
+            // ADR-0008：Broadcast Tier 帶 Reporter 的精確座標，與 health_reports 的 lat／lng 同一種
+            // 形式。Reporter 沒有位置時兩者都是 null，不會只有一個。
+            && ((data.lat == null && data.lng == null)
+                || (data.lat is number && data.lng is number
+                    && data.lat >= -90 && data.lat <= 90
+                    && data.lng >= -180 && data.lng <= 180))
             && data.uploadedAt == request.time
             // reportTime 是 Reporter 手機的時鐘，精度到秒。往後最多容忍 10 分鐘的時鐘誤差：
             // 再晚的話，一份未來時間的回報會讓之後真的回報都不夠「新」，把文件鎖死。

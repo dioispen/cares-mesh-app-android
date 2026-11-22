@@ -54,19 +54,23 @@ class FirestoreMeshReportUploader(
 }
 
 internal const val MESH_REPORTS = "mesh_reports"
-internal const val MESH_REPORT_SCHEMA_VERSION = 1
+
+/** 2: `lat`／`lng` replaced the geohash-6 `geohash` field (ADR-0008). */
+internal const val MESH_REPORT_SCHEMA_VERSION = 2
 
 /**
  * The `mesh_reports/{reporterHandle}` document: the Broadcast Tier as received, plus what an
  * Administrator needs to audit it and, later, to verify its signature (MESH_GATEWAY.md §5.2).
- * `firestore.rules` accepts exactly these keys.
+ * `firestore.rules` accepts exactly these keys. `lat`／`lng` are the Reporter's precise location,
+ * in the same form `health_reports` uses, or both null when the report has none.
  */
 internal fun meshReportDocument(report: GatewayReport, gatewayUid: String): Map<String, Any?> = mapOf(
     "schemaVersion" to MESH_REPORT_SCHEMA_VERSION,
     "reporterHandle" to report.reporterHandle,
     "status" to report.payload.status.label,
     "sos" to report.payload.sos,
-    "geohash" to report.payload.geohash.ifEmpty { null },
+    "lat" to report.payload.location?.lat,
+    "lng" to report.payload.location?.lng,
     "reportTime" to Timestamp(report.reportTimeMs / 1000, 0),
     "uploadedAt" to FieldValue.serverTimestamp(),
     "gatewayUid" to gatewayUid,

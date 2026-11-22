@@ -15,7 +15,7 @@ const statusUndeclared = '未宣告';
 ///   病史、緊急聯絡人），只有本人與正接著這筆任務的 Verified Rescuer 讀得到。
 ///
 /// 兩者都**不會**原樣進入 BLE 廣播；廣播出去的是 [BroadcastHealthReport] 對應的
-/// Broadcast Tier（見 ADR-0003）。
+/// Broadcast Tier（見 ADR-0003）。精確座標與回報時間是兩邊共用的同一份（ADR-0008）。
 class HealthReport {
   final String id;          // UUID v4，管理端追蹤用唯一識別碼
   final String reporterId;  // 回報者 ID
@@ -135,10 +135,10 @@ class HealthReport {
 
 /// 從 BLE 廣播收到的 Health Report —— 只有 Broadcast Tier。
 ///
-/// 與本機自填的 [HealthReport] 是**不同來源**：這裡永遠沒有真實姓名、電話、血型、
-/// 傷勢細項或精確座標。UI 不得假設收到的回報帶有這些欄位。
+/// 與本機自填的 [HealthReport] 是**不同來源**：這裡永遠沒有真實姓名、電話、血型或傷勢細項。
+/// UI 不得假設收到的回報帶有這些欄位。位置則是精確座標，與 Detail Tier 是同一份（ADR-0008）。
 class BroadcastHealthReport {
-  /// 不具識別性的固定長度識別碼，不可反推回帳號或 Firestore 文件。
+  /// 隨機的固定長度識別碼，本身不能反推回帳號或 Firestore 文件。
   final String reporterHandle;
 
   /// '安全' / '輕傷' / '重傷' / '未宣告'。
@@ -147,12 +147,9 @@ class BroadcastHealthReport {
   /// Reporter 是否正舉著 SOS。
   final bool sos;
 
-  /// 降精度 geohash；無位置時為 null。
-  final String? geohash;
-
-  /// 由 [geohash] 還原的近似座標；無位置時為 null。
-  final double? approxLat;
-  final double? approxLng;
+  /// Reporter 的精確座標；無位置時兩者都是 null。
+  final double? lat;
+  final double? lng;
 
   final DateTime reportTime;
 
@@ -160,9 +157,8 @@ class BroadcastHealthReport {
     required this.reporterHandle,
     required this.status,
     this.sos = false,
-    this.geohash,
-    this.approxLat,
-    this.approxLng,
+    this.lat,
+    this.lng,
     required this.reportTime,
   });
 }

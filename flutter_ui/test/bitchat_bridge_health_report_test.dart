@@ -18,6 +18,7 @@ void main() {
         lat: 23.97,
         lng: 120.97,
         sos: sos,
+        reportTime: DateTime.utc(2023, 11, 14, 22, 13, 20, 123),
       );
 
   Future<List<MethodCall>> recordCalls(Future<void> Function() action) async {
@@ -42,6 +43,8 @@ void main() {
       'lat': 23.97,
       'lng': 120.97,
       'sos': false,
+      // 後端寫的是同一個時間，原生端不另取時鐘（ADR-0010）
+      'reportTimeMs': 1700000000123,
     });
   });
 

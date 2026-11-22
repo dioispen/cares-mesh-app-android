@@ -9,25 +9,24 @@ import 'support/in_memory_mutual_aid_task_store.dart';
 
 const _myHandle = 'aaaaaaaaaaaa';
 
-/// Health Report 的 Broadcast Tier（版本 2），格式見 `health_report_payload_test.dart` 的權威向量。
+/// Health Report 的 Broadcast Tier（版本 3），格式見 `health_report_payload_test.dart` 的權威向量。
+/// [location] 是線路上的座標（1e-7 度）；預設是台北 101 附近。
 List<int> _payload({
   required String handle,
   int status = 2,
   bool sos = false,
-  String? geohash = 'wsqqqm',
+  (int, int)? location = (250330000, 1215654000),
   int secs = 1700000000,
 }) => [
-  0x02,
+  0x03,
   for (var i = 0; i < 12; i += 2) int.parse(handle.substring(i, i + 2), radix: 16),
   status,
-  sos ? 0x01 : 0x00,
-  geohash?.length ?? 0,
-  ...?geohash?.codeUnits,
-  (secs >> 24) & 0xFF,
-  (secs >> 16) & 0xFF,
-  (secs >> 8) & 0xFF,
-  secs & 0xFF,
+  (sos ? 0x01 : 0x00) | (location != null ? 0x02 : 0x00),
+  if (location != null) ...[..._int32(location.$1), ..._int32(location.$2)],
+  ..._int32(secs),
 ];
+
+List<int> _int32(int value) => [for (final shift in const [24, 16, 8, 0]) (value >> shift) & 0xFF];
 
 /// 原生端轉給 Flutter 的封包事件。
 Map<String, dynamic> _packet(List<int> payload, {int type = BlePacketType.healthReport}) => {
@@ -151,6 +150,36 @@ void main() {
       expect(task.sos, isTrue);
       expect(task.distanceKm, isNotNull);
       expect(list().tasksNear().single.distanceKm, isNull, reason: '自己沒有定位時距離未知');
+    });
+
+    test('後端也收到的同一份 Health Report 只列後端那筆（ADR-0010）', () async {
+      board.startCollecting();
+      final list = await watch();
+
+      // Reporter 送出時後端存到毫秒；mesh 上是同一組座標，時間只到秒（1700000000 秒）。
+      store.pushReports([
+        (
+          id: 'alice',
+          data: {
+            'reporterId': 'alice',
+            'name': '名字alice',
+            'status': '重傷',
+            'sos': true,
+            'lat': 25.033,
+            'lng': 121.5654,
+            'reportTime': '2023-11-14T22:13:20.456Z',
+          },
+        ),
+      ]);
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb', status: 2, sos: true)));
+
+      final tasks = list().tasksNear(currentUserId: 'me');
+      expect(tasks.single.userId, 'alice');
+      expect(tasks.single.isBle, isFalse);
+
+      // 同一個 Handle 之後只經 mesh 送了不同的內容：是另一份 Health Report，兩筆都列。
+      await receive(_packet(_payload(handle: 'bbbbbbbbbbbb', status: 1, sos: true, secs: 1700000600)));
+      expect([for (final t in list().tasksNear(currentUserId: 'me')) t.isBle], unorderedEquals([false, true]));
     });
 
     test('自己的廣播、不是 Health Report 的封包、解不開的內容都不列', () async {

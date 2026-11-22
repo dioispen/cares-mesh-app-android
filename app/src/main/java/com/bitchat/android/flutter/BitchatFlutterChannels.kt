@@ -242,7 +242,7 @@ class BitchatFlutterChannels(
                         is Map<*, *> -> {
                             // 如果仍然是 Map（JSON），則轉換為 HealthReportPayload 進行二進制編碼
                             HealthReportBridgeMap
-                                .toPayload(call.arguments as Map<*, *>, System.currentTimeMillis())
+                                .toPayload(call.arguments as Map<*, *>)
                                 ?.encode()
                         }
                         else -> null

@@ -3,6 +3,7 @@ package com.bitchat.android.gateway
 import android.os.Build
 import com.bitchat.android.protocol.HealthReportPayload
 import com.bitchat.android.protocol.HealthStatus
+import com.bitchat.android.protocol.ReportLocation
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.FieldValue
@@ -35,16 +36,17 @@ class FirestoreMeshReportUploaderTest {
 
         assertEquals(
             setOf(
-                "schemaVersion", "reporterHandle", "status", "sos", "geohash", "reportTime",
+                "schemaVersion", "reporterHandle", "status", "sos", "lat", "lng", "reportTime",
                 "uploadedAt", "gatewayUid", "senderPeerId", "rawPacket", "announcement"
             ),
             document.keys
         )
-        assertEquals(1, document["schemaVersion"])
+        assertEquals(2, document["schemaVersion"])
         assertEquals("abcdef012345", document["reporterHandle"])
         assertEquals("重傷", document["status"])
         assertEquals(true, document["sos"])
-        assertEquals("wsqqqm", document["geohash"])
+        assertEquals(25.0330, document["lat"])
+        assertEquals(121.5654, document["lng"])
         assertEquals(Timestamp(1_700_000_000L, 0), document["reportTime"])
         assertEquals(FieldValue.serverTimestamp(), document["uploadedAt"])
         assertEquals("uid-gateway", document["gatewayUid"])
@@ -56,14 +58,15 @@ class FirestoreMeshReportUploaderTest {
     @Test
     fun `no location and no announcement are written as null`() {
         val document = meshReportDocument(
-            report(status = HealthStatus.UNDECLARED, geohash = "", announcement = null),
+            report(status = HealthStatus.UNDECLARED, location = null, announcement = null),
             "uid-gateway"
         )
 
         assertEquals("未宣告", document["status"])
-        assertNull(document["geohash"])
+        assertNull(document["lat"])
+        assertNull(document["lng"])
         assertNull(document["announcement"])
-        assertEquals(true, document.containsKey("geohash") && document.containsKey("announcement"))
+        assertEquals(true, document.keys.containsAll(listOf("lat", "lng", "announcement")))
     }
 
     @Test
@@ -90,10 +93,10 @@ class FirestoreMeshReportUploaderTest {
     private fun report(
         status: HealthStatus = HealthStatus.SEVERE,
         sos: Boolean = true,
-        geohash: String = "wsqqqm",
+        location: ReportLocation? = ReportLocation(250_330_000, 1_215_654_000),
         announcement: ByteArray? = announce
     ) = GatewayReport(
-        payload = HealthReportPayload("abcdef012345", status, geohash, 1_700_000_000_000L, sos),
+        payload = HealthReportPayload("abcdef012345", status, location, 1_700_000_000_000L, sos),
         senderPeerID = "0102030405060708",
         rawPacket = raw,
         announcement = announcement

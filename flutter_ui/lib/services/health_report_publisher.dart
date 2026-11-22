@@ -95,6 +95,7 @@ typedef HealthReportBroadcast =
       required double? lat,
       required double? lng,
       required bool sos,
+      required DateTime reportTime,
     });
 
 /// 自己目前的回報，以後端為準。[survey] 已把 Detail Tier 與 Sensitive Tier 兩份併回去（ADR-0007）。
@@ -270,7 +271,7 @@ class HealthReportPublisher {
       lng: lng,
       transition: (local) => healthReportTransition(local.sos, status, raise: raiseSos, now: _now()),
       subInjury: (_, _) => survey.injurySummary,
-      cloudWrite: (report, current) {
+      cloudWrite: (report, current, reportTime) {
         final full = HealthReport(
           reporterId: user.id,
           name: user.name,
@@ -279,7 +280,7 @@ class HealthReportPublisher {
           description: survey.injurySummary,
           lat: lat,
           lng: lng,
-          reportTime: _now(),
+          reportTime: reportTime,
           sos: report.sos,
           phone: user.phone,
           bloodType: user.bloodType,
@@ -318,7 +319,8 @@ class HealthReportPublisher {
     lng: lng,
     transition: (local) => sos_rules.raiseSos(local.sos, lastStatus: local.status, now: _now()),
     subInjury: _keepSubInjuryIfStatusUnchanged,
-    cloudWrite: (report, current) => _sosWrite(user, report, current, lat: lat, lng: lng),
+    cloudWrite: (report, current, reportTime) =>
+        _sosWrite(user, report, current, lat: lat, lng: lng, reportTime: reportTime),
   );
 
   /// 剛舉起的 SOS 送出時沒有位置，定位現在回來了：再送一份帶 SOS 的回報補上位置（#81）。
@@ -333,7 +335,8 @@ class HealthReportPublisher {
     lng: lng,
     transition: (_) => sos_rules.withdrawSos(),
     subInjury: _keepSubInjuryIfStatusUnchanged,
-    cloudWrite: (report, current) => _sosWrite(user, report, current, lat: lat, lng: lng),
+    cloudWrite: (report, current, reportTime) =>
+        _sosWrite(user, report, current, lat: lat, lng: lng, reportTime: reportTime),
   );
 
   /// SOS 的動作不帶調查：Status 沒變時傷勢細項照舊，變了（例如改成未宣告）就清掉。
@@ -347,6 +350,7 @@ class HealthReportPublisher {
     _Current current, {
     required double? lat,
     required double? lng,
+    required DateTime reportTime,
   }) => (
     detail: cloudSosFields(
       cloudSosWriteFor(
@@ -359,7 +363,7 @@ class HealthReportPublisher {
       report: report,
       lat: lat,
       lng: lng,
-      now: _now(),
+      now: reportTime,
     ),
     sensitive: cloudSosSensitiveFields(user),
     mergeSensitive: true,
@@ -371,7 +375,7 @@ class HealthReportPublisher {
     required double? lng,
     required SosTransition Function(_Local local) transition,
     required String? Function(_Local local, SosReport report) subInjury,
-    required _CloudWrite Function(SosReport report, _Current current) cloudWrite,
+    required _CloudWrite Function(SosReport report, _Current current, DateTime reportTime) cloudWrite,
   }) async {
     final uid = user.id;
     final actions = _actions.putIfAbsent(uid, _ReporterActions.new);
@@ -393,9 +397,11 @@ class HealthReportPublisher {
     try {
       final (:before, :next, :after) = await planned;
       final report = next.report;
+      // 後端與 mesh 用同一個回報時間：互助任務以座標與時間認出兩邊的同一份 Health Report（ADR-0010）。
+      final reportTime = _now();
 
-      final broadcast = _sendBroadcast(report, lat: lat, lng: lng);
-      final upload = _upload(uid, before, report, cloudWrite, previousCloudWrite, cloudIssued);
+      final broadcast = _sendBroadcast(report, lat: lat, lng: lng, reportTime: reportTime);
+      final upload = _upload(uid, before, report, reportTime, cloudWrite, previousCloudWrite, cloudIssued);
       final uploadResult = _awaitUpload(upload);
       final broadcastFailure = await broadcast;
       final (:queued, :failure) = await uploadResult;
@@ -440,16 +446,22 @@ class HealthReportPublisher {
   }
 
   /// 交給 mesh；沒有送出時回傳給使用者看的原因。不會拋錯。
-  Future<String?> _sendBroadcast(SosReport report, {required double? lat, required double? lng}) async {
+  Future<String?> _sendBroadcast(
+    SosReport report, {
+    required double? lat,
+    required double? lng,
+    required DateTime reportTime,
+  }) async {
     try {
       await _broadcast(
-        // BLE 只送 Broadcast Tier：不具識別性的 handle、Status，以及原始座標（由原生端就地降精度為
-        // geohash）。姓名／電話／血型／自由文字一律不進入廣播（ADR-0003）。
+        // BLE 只送 Broadcast Tier：隨機的 handle、Status、SOS、回報時間，以及與後端同一份的精確座標
+        // （ADR-0008）。姓名／電話／血型／自由文字一律不進入廣播（ADR-0003）。
         reporterHandle: await reporterHandle(),
         status: report.status,
         lat: lat,
         lng: lng,
         sos: report.sos,
+        reportTime: reportTime,
       );
       return null;
     } catch (e) {
@@ -464,7 +476,8 @@ class HealthReportPublisher {
     String uid,
     _Local before,
     SosReport report,
-    _CloudWrite Function(SosReport report, _Current current) cloudWrite,
+    DateTime reportTime,
+    _CloudWrite Function(SosReport report, _Current current, DateTime reportTime) cloudWrite,
     Future<void> previousCloudWrite,
     Completer<void> cloudIssued,
   ) async {
@@ -481,6 +494,7 @@ class HealthReportPublisher {
                 subInjury: doc['description'] as String?,
                 taskStatus: doc['taskStatus'] as String?,
               ),
+        reportTime,
       );
       ack = _store.write(uid, detail: write.detail, sensitive: write.sensitive, mergeSensitive: write.mergeSensitive);
     } finally {

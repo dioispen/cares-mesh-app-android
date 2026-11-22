@@ -68,7 +68,7 @@ object ExperimentTools {
         val tools = installed ?: return
         sender?.stop()
         sender = ExperimentSender(scope, keepAwake = WakeLockKeepAwake(tools.context)) { plan, pts ->
-            val payload = HealthReportPayload(plan.handle, plan.status, geohash = "", reportTimeMillis = pts).encode()
+            val payload = HealthReportPayload(plan.handle, plan.status, location = null, reportTimeMillis = pts).encode()
             HealthReportBroadcast.send(MeshServiceHolder.meshService, payload, plan.ttl.toUByte(), pts)
         }
     }
