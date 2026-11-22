@@ -5,7 +5,9 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import com.bitchat.android.flutter.AppNavigation
 import com.bitchat.android.flutter.FlutterChatActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -80,6 +82,30 @@ class SystemAdminNoticeNotifierTest {
             FlutterChatActivity::class.java.name,
             shadowOf(posted.contentIntent).savedIntent.component?.className
         )
+    }
+
+    @Test
+    fun `tapping a notice opens the Admin Notice list, bringing back the running entry`() {
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        notifier().notify(notice(AdminNoticeLevel.URGENT))
+
+        val posted = shadowOf(system).getNotification(MESSAGE_ID, SystemAdminNoticeNotifier.NOTIFICATION_ID)!!
+        val tap = shadowOf(posted.contentIntent).savedIntent
+        assertEquals(AppNavigation.AdminNotices, AppNavigation.fromNotification(tap))
+        // With launchMode singleTop the running Activity gets onNewIntent instead of a second one.
+        assertEquals(Intent.FLAG_ACTIVITY_SINGLE_TOP, tap.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        assertEquals(Intent.FLAG_ACTIVITY_CLEAR_TOP, tap.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+
+    @Test
+    fun `tapping a targeted notice on the lock screen opens the list too`() {
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        notifier().notify(notice(AdminNoticeLevel.IMPORTANT, kind = AdminNoticeKind.TARGETED))
+
+        val lockScreen = shadowOf(system).getNotification(MESSAGE_ID, SystemAdminNoticeNotifier.NOTIFICATION_ID)!!.publicVersion!!
+        assertEquals(AppNavigation.AdminNotices, AppNavigation.fromNotification(shadowOf(lockScreen.contentIntent).savedIntent))
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.bitchat.android.flutter
 
 import android.content.Intent
 import androidx.lifecycle.ViewModel
+import com.bitchat.android.adminnotice.SystemAdminNoticeNotifier
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.NotificationManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +40,19 @@ sealed interface AppNavigation {
     }
 
     /**
+     * An Admin Notice notification ([SystemAdminNoticeNotifier]): show the Admin Notice list, which
+     * marks the unread notices it shows read. Every notice's notification opens the list, not that
+     * one notice: the list shows them all in full.
+     */
+    data object AdminNotices : AppNavigation {
+        /**
+         * Nothing to drop: the tapped notification cancels itself (autoCancel), and the other
+         * notices' stay, each still an order the user may not have seen yet.
+         */
+        override fun clearNotifications(chatViewModel: ChatViewModel) = Unit
+    }
+
+    /**
      * What `MainActivity.handleNotificationIntent` does besides opening the chat: drop the
      * notifications of the chat the user is now going to (for a mention, of the public chat — what
      * upstream does when the user is back in it, `endPrivateChat`).
@@ -47,10 +61,11 @@ sealed interface AppNavigation {
 
     companion object {
         /**
-         * Where [intent] asks to go, if it is a tapped chat notification; null for every other
-         * launch (launcher, the mesh service's own notification, a summary notification) — those
-         * only bring the app to the front. A relaunch from recents is never one: its intent is the
-         * one that first started the task, possibly a notification long since dealt with.
+         * Where [intent] asks to go, if it is a tapped chat or Admin Notice notification; null for
+         * every other launch (launcher, the mesh service's own notification, a summary
+         * notification) — those only bring the app to the front. A relaunch from recents is never
+         * one: its intent is the one that first started the task, possibly a notification long
+         * since dealt with.
          */
         fun fromNotification(intent: Intent): AppNavigation? = fromNotification(
             launchedFromHistory = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0,
@@ -62,7 +77,7 @@ sealed interface AppNavigation {
          * [fromNotification] over the extras, read with [flag] and [text]. Same order as
          * `MainActivity.handleNotificationIntent`: a private chat first (with no peer ID nothing
          * opens), then the mesh chat. Geohash chats have no Flutter screen (P3), so theirs go
-         * nowhere.
+         * nowhere. An Admin Notice notification carries none of upstream's extras, only its own.
          */
         internal fun fromNotification(
             launchedFromHistory: Boolean,
@@ -75,6 +90,7 @@ sealed interface AppNavigation {
                 return PrivateChat(peerID, text(NotificationManager.EXTRA_SENDER_NICKNAME))
             }
             if (flag(NotificationManager.EXTRA_OPEN_MESH_CHAT)) return PublicChat
+            if (flag(SystemAdminNoticeNotifier.EXTRA_OPEN_ADMIN_NOTICES)) return AdminNotices
             return null
         }
     }

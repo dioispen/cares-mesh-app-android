@@ -296,8 +296,9 @@ object ChatSerialization {
 
     /**
      * Where a tapped notification asks to go: `{target: "privateChat", peerID, senderNickname}`
-     * (`senderNickname` may be null) or `{target: "publicChat"}`; null for nowhere. Answers
-     * `chat_takePendingNavigation`. Dart mirrors it in `flutter_ui/lib/models/app_navigation.dart`.
+     * (`senderNickname` may be null), `{target: "publicChat"}` or `{target: "adminNotices"}`; null
+     * for nowhere. Answers `chat_takePendingNavigation`. Dart mirrors it in
+     * `flutter_ui/lib/models/app_navigation.dart`.
      */
     fun navigation(navigation: AppNavigation?): Map<String, Any?>? = when (navigation) {
         null -> null
@@ -307,6 +308,7 @@ object ChatSerialization {
             "senderNickname" to navigation.senderNickname
         )
         AppNavigation.PublicChat -> mapOf("target" to "publicChat")
+        AppNavigation.AdminNotices -> mapOf("target" to "adminNotices")
     }
 
     /**

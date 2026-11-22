@@ -1,5 +1,6 @@
 package com.bitchat.android.flutter
 
+import com.bitchat.android.adminnotice.SystemAdminNoticeNotifier
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.NotificationManager
 import org.junit.Assert.assertEquals
@@ -11,10 +12,48 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoMoreInteractions
 
 /**
- * A tapped chat notification, as the Flutter entry reads it (#57): upstream's intent extras become
- * a [AppNavigation] that waits in [PendingAppNavigation] until Dart takes it.
+ * A tapped notification, as the Flutter entry reads it (#57): upstream's chat extras, and the Admin
+ * Notice one, become an [AppNavigation] that waits in [PendingAppNavigation] until Dart takes it.
  */
 class AppNavigationTest {
+
+    // --- Admin Notice notifications ------------------------------------------------------------
+
+    @Test
+    fun `an Admin Notice notification opens the Admin Notice list`() {
+        assertEquals(AppNavigation.AdminNotices, parse(SystemAdminNoticeNotifier.EXTRA_OPEN_ADMIN_NOTICES to true))
+    }
+
+    @Test
+    fun `reopening from recents does not replay an Admin Notice tap either`() {
+        assertNull(parse(SystemAdminNoticeNotifier.EXTRA_OPEN_ADMIN_NOTICES to true, launchedFromHistory = true))
+    }
+
+    @Test
+    fun `opening the Admin Notice list leaves the chat notifications alone`() {
+        // The tapped notification cancels itself (autoCancel); the other notices' stay until read.
+        val viewModel = mock<ChatViewModel>()
+
+        AppNavigation.AdminNotices.clearNotifications(viewModel)
+
+        verifyNoMoreInteractions(viewModel)
+    }
+
+    @Test
+    fun `an Admin Notice tap waits for Dart like a chat one, and a later tap replaces it`() {
+        val pending = PendingAppNavigation()
+        pending.offer(AppNavigation.PrivateChat(ALICE, "alice"))
+
+        pending.offer(AppNavigation.AdminNotices)
+
+        assertEquals(AppNavigation.AdminNotices, pending.take())
+        assertNull(pending.take())
+    }
+
+    @Test
+    fun `the Admin Notice list goes to Dart as its own target`() {
+        assertEquals(mapOf("target" to "adminNotices"), ChatSerialization.navigation(AppNavigation.AdminNotices))
+    }
 
     // --- reading upstream's notification extras ---------------------------------------------
 
