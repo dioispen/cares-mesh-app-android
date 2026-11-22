@@ -47,6 +47,12 @@ class _SupplyScreenState extends State<SupplyScreen>
   final _pendingRequestIds = PendingSubmissionIds();
   final _pendingPledgeIds = PendingSubmissionIds();
 
+  /// 自己的申請與捐贈紀錄，拿到使用者時建一次。若在 build 裡呼叫 `.snapshots()`，每次 setState
+  /// （型錄更新、網路變化、切換分類）都會換一個新 stream：StreamBuilder 退回「載入中…」、重新掛
+  /// Firestore listener，多算讀取次數。
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _myRequests;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _myPledges;
+
   @override
   void initState() {
     super.initState();
@@ -72,9 +78,17 @@ class _SupplyScreenState extends State<SupplyScreen>
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('app_user');
     if (raw != null && mounted) {
-      setState(() => _currentUser = AppUser.fromJson(jsonDecode(raw)));
+      final user = AppUser.fromJson(jsonDecode(raw));
+      setState(() {
+        _currentUser = user;
+        _myRequests = _mine('supply_requests', user.id);
+        _myPledges = _mine('supply_pledges', user.id);
+      });
     }
   }
+
+  static Stream<QuerySnapshot<Map<String, dynamic>>> _mine(String collection, String uid) =>
+      FirebaseFirestore.instance.collection(collection).where('userId', isEqualTo: uid).snapshots();
 
   Future<void> _initSupplyItems() async {
     final col = FirebaseFirestore.instance.collection('supply_items');
@@ -369,7 +383,6 @@ class _SupplyScreenState extends State<SupplyScreen>
   /// 下半是自己寫進雲端的申請與捐贈紀錄（`supply_requests`／`supply_pledges`，規則只讓本人讀，
   /// 離線時顯示 Firestore 的本機快取）。
   Widget _buildActivityTab() {
-    final uid = _currentUser?.id;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
@@ -403,14 +416,11 @@ class _SupplyScreenState extends State<SupplyScreen>
         ),
         const SizedBox(height: 20),
         _sectionTitle('我的申請', Icons.shopping_cart_outlined),
-        if (uid == null)
+        if (_myRequests == null)
           _emptyNote('讀不到你的帳號資料，無法顯示你的紀錄。')
         else
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('supply_requests')
-                .where('userId', isEqualTo: uid)
-                .snapshots(),
+            stream: _myRequests,
             builder: (context, snap) {
               if (snap.hasError) return _emptyNote('讀取失敗：${snap.error}');
               if (!snap.hasData) return _emptyNote('載入中…');
@@ -434,14 +444,11 @@ class _SupplyScreenState extends State<SupplyScreen>
           ),
         const SizedBox(height: 20),
         _sectionTitle('我的捐贈', Icons.volunteer_activism_outlined),
-        if (uid == null)
+        if (_myPledges == null)
           const SizedBox.shrink()
         else
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('supply_pledges')
-                .where('userId', isEqualTo: uid)
-                .snapshots(),
+            stream: _myPledges,
             builder: (context, snap) {
               if (snap.hasError) return _emptyNote('讀取失敗：${snap.error}');
               if (!snap.hasData) return _emptyNote('載入中…');
