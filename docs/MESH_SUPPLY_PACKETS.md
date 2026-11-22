@@ -51,7 +51,8 @@ Flutter 端 `SupplyExchangeFeed` 從 app 啟動就監聽，同一個 exchangeId 
 ## Gateway（Kotlin `gateway/MeshSupplyGateway`）
 
 與 Health Report 的 `MeshGateway` 同一個 `MeshGatewayRuntime`，共用登入、網路與開關事件。
-上傳條件：開關開啟、已登入、封包年齡 ≤ 2 小時、這個 Packet ID 還沒傳過。沒網路或暫時性錯誤時
+上傳條件：開關開啟、已登入、封包年齡 ≤ 2 小時且標頭時間不比現在晚 10 分鐘以上（與規則相同；
+遠在未來的封包若暫存會卡住補傳）、這個 Packet ID 還沒傳過。沒網路或暫時性錯誤時
 暫存在記憶體（不寫磁碟，最多 1000 筆），網路恢復、登入或下一筆上傳成功時補傳。
 
 去重以 Packet ID（`PacketIdUtil`：type、senderID、timestamp、payload 的 SHA-256 前 16 bytes）為單位，

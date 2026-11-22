@@ -118,6 +118,33 @@ class MeshSupplyGatewayTest {
     }
 
     @Test
+    fun `packets dated past the clock-skew tolerance are dropped and never block held packets`() = runTest {
+        // 標頭時間是發送者的時鐘；遠在未來的（例如超過西元 9999 年）連 Firestore Timestamp 都建不出來。
+        val gateway = gateway(online = false)
+        val future = heard(packetId = "f".repeat(32), createdAtMs = now + TEN_MINUTES_MS + 1)
+        val fresh = heard(packetId = "a".repeat(32))
+
+        gateway.onPacket(future)
+        gateway.onPacket(fresh)
+        runCurrent()
+        gateway.onNetworkChanged(true)
+        runCurrent()
+
+        assertEquals(listOf(fresh to GATEWAY_UID), uploader.uploads)
+    }
+
+    @Test
+    fun `packets within the clock-skew tolerance are uploaded`() = runTest {
+        val gateway = gateway()
+        val packet = heard(createdAtMs = now + TEN_MINUTES_MS)
+
+        gateway.onPacket(packet)
+        runCurrent()
+
+        assertEquals(listOf(packet to GATEWAY_UID), uploader.uploads)
+    }
+
+    @Test
     fun `held packets are not charged to another account`() = runTest {
         val gateway = gateway(online = false)
         gateway.onPacket(heard())
@@ -169,5 +196,6 @@ class MeshSupplyGatewayTest {
     private companion object {
         const val GATEWAY_UID = "uid-gateway"
         const val TWO_HOURS_MS = 2 * 60 * 60 * 1000L
+        const val TEN_MINUTES_MS = 10 * 60 * 1000L
     }
 }

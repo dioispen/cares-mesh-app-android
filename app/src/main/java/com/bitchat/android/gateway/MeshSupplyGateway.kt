@@ -18,8 +18,9 @@ import kotlinx.coroutines.launch
  * Packet ID 為單位，每筆只傳一次；規則不允許 update，別的 Gateway 先寫到就得到 PERMISSION_DENIED，
  * 視同已上傳。
  *
- * 上傳條件：開關開啟、已登入、封包年齡不超過 [retentionMs]、這個 Packet ID 還沒傳過。沒網路或
- * 暫時性錯誤時暫存在記憶體（不寫磁碟），網路恢復、登入或下一筆即時上傳成功時補傳。
+ * 上傳條件：開關開啟、已登入、封包年齡不超過 [retentionMs] 且標頭時間不比現在晚 10 分鐘以上、
+ * 這個 Packet ID 還沒傳過。沒網路或暫時性錯誤時暫存在記憶體（不寫磁碟），網路恢復、登入或下一筆
+ * 即時上傳成功時補傳。
  */
 class MeshSupplyGateway(
     private val uploader: MeshSupplyUploader,
@@ -143,7 +144,15 @@ class MeshSupplyGateway(
         }
     }
 
-    private fun isFresh(packet: GatewaySupplyPacket): Boolean = nowMs() - packet.createdAtMs <= retentionMs
+    /**
+     * 標頭時間是發送者的時鐘。比現在晚超過 [MAX_FUTURE_SKEW_MS] 的封包 firestore.rules 也不收，
+     * 遠在未來的連 Firestore Timestamp 都建不出來；若暫存起來，[forgetExpired] 永遠清不掉它，
+     * 每次 [catchUp] 都會卡在它前面。
+     */
+    private fun isFresh(packet: GatewaySupplyPacket): Boolean {
+        val ageMs = nowMs() - packet.createdAtMs
+        return ageMs >= -MAX_FUTURE_SKEW_MS && ageMs <= retentionMs
+    }
 
     private fun markUploaded(packet: GatewaySupplyPacket) {
         uploaded[packet.packetId] = packet.createdAtMs
@@ -159,5 +168,8 @@ class MeshSupplyGateway(
     private companion object {
         const val TAG = "MeshSupplyGateway"
         const val MAX_HELD_PACKETS = 1_000
+
+        /** 與 firestore.rules 的 `createdAt <= request.time + 10m` 相同。 */
+        const val MAX_FUTURE_SKEW_MS = 10 * 60 * 1000L
     }
 }
