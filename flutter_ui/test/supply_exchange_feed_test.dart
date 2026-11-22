@@ -13,6 +13,8 @@ void main() {
   Map<String, dynamic> packetEvent({
     String exchangeId = '0123456789abcdef0123456789abcdef',
     String action = 'request',
+    String senderId = '0102030405060708',
+    int quantity = 12,
     int? timestamp,
     int packetType = 0x32,
     List<int>? payload,
@@ -20,7 +22,7 @@ void main() {
       {
         'type': 'packet',
         'packetType': packetType,
-        'senderId': '0102030405060708',
+        'senderId': senderId,
         'timestamp': timestamp ?? now.millisecondsSinceEpoch,
         'payload': payload ??
             SupplyExchangePacket(
@@ -28,7 +30,7 @@ void main() {
               exchangeId: exchangeId,
               itemId: 'water',
               itemName: '礦泉水',
-              quantity: 12,
+              quantity: quantity,
               unit: '瓶',
             ).encode(),
       };
@@ -67,6 +69,28 @@ void main() {
     feed.onEvent(packetEvent());
 
     expect(feed.entries.length, 1);
+  });
+
+  test('another peer reusing an exchangeId does not replace the original entry', () {
+    feed.onEvent(packetEvent());
+    feed.onEvent(packetEvent(senderId: '1111111111111111', quantity: 999));
+
+    final original = feed.entries.singleWhere((e) => e.senderPeerId == '0102030405060708');
+    expect(original.packet.quantity, 12);
+    expect(feed.entries.length, 2);
+  });
+
+  test('packets dated past the clock-skew tolerance are ignored', () {
+    feed.onEvent(packetEvent(
+      exchangeId: 'a' * 32,
+      timestamp: now.add(const Duration(minutes: 10, seconds: 1)).millisecondsSinceEpoch,
+    ));
+    feed.onEvent(packetEvent(
+      exchangeId: 'b' * 32,
+      timestamp: now.add(const Duration(minutes: 10)).millisecondsSinceEpoch,
+    ));
+
+    expect(feed.entries.map((e) => e.exchangeId), ['b' * 32]);
   });
 
   test('newer packets win even when they arrive at the same receive time', () {

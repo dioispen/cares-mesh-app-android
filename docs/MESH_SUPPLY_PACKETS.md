@@ -42,7 +42,8 @@ TTL 與 Health Report 相同（`HealthReportBroadcast.DEFAULT_TTL`）：物資�
 
 `MessageHandler.handleSupplyExchange`：只收已驗證 peer 的封包（簽章由 `SecurityManager` 驗過）、
 解碼成功後交給 `InboundPacketBridge`（Flutter）與 `VerifiedSupplyExchangeBridge`（Gateway）。
-Flutter 端 `SupplyExchangeFeed` 從 app 啟動就監聽，同一個 exchangeId 只留一筆，保留 2 小時、
+Flutter 端 `SupplyExchangeFeed` 從 app 啟動就監聽，同一個發送者的同一個 exchangeId 只留一筆
+（別的 peer 重送同一個 exchangeId 蓋不掉它），保留 2 小時、標頭時間比現在晚超過 10 分鐘的不收，
 最多 200 筆，物資頁「附近與我的」分頁顯示。
 
 **已知限制**：ADR-0006 的驗簽 key 快取只給 `HEALTH_REPORT`。物資封包納入 gossip sync，但發送者離開
