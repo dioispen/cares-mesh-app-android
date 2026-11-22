@@ -1,13 +1,13 @@
 # Mesh Gateway 規格
 
 > 狀態：已實作（#108–#113），待實機驗收（第 10 節）。實作與草案不同之處已併入本文。
-> 決策紀錄：[ADR-0008](adr/0008-broadcast-tier-carries-precise-location.md)（Broadcast Tier 帶精確座標；本文件的 geohash-6 格式待實作時改寫）、[ADR-0009](adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)（Gateway 只代傳 Broadcast Tier、由 Kotlin 寫 Firestore）。
+> 決策紀錄：[ADR-0008](adr/0008-broadcast-tier-carries-precise-location.md)（Broadcast Tier 帶精確座標，取代 geohash-6）、[ADR-0009](adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)（Gateway 只代傳 Broadcast Tier、由 Kotlin 寫 Firestore）。
 > 前提：ADR-0003（分層揭露）、ADR-0004（SOS 是 Health Report 上的標記，實作見 #105，須先合併）、ADR-0005（Detail／Sensitive Tier）、ADR-0006（驗簽 key 快取）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Gateway** 與 **Administrator**。
 
 ## 1. 目標與範圍
 
-**目標**：整段期間都沒有網路的 Reporter，其 Health Report 經 mesh 到達任何一支已登入、有網路的手機後，被寫進 Firestore，讓管理後台能以**村里、收容避難所的層級**統計各區有多少人需要協助。
+**目標**：整段期間都沒有網路的 Reporter，其 Health Report 經 mesh 到達任何一支已登入、有網路的手機後，被寫進 Firestore，讓管理後台能以**村里、收容避難所的層級**統計各區有多少人需要協助，並派人前往個別的 Reporter（ADR-0008）。
 
 **消費端**：另一組開發的 Flutter Web 管理後台，以 Administrator 帳號讀 Firestore。介面契約見[第 8 節](#8-給管理後台的介面契約)。
 
@@ -24,7 +24,7 @@
 
 ```
 Reporter A（無網路）
-  │  HEALTH_REPORT（簽章明文，Broadcast Tier，geohash-6）
+  │  HEALTH_REPORT（簽章明文，Broadcast Tier，精確座標）
   ▼
 mesh：flood（TTL 7，ADR-0014）或 gossip sync 補送（TTL 0，2 小時內）
       成立中的回報另由 A 的裝置每 30 分鐘重發，reportTime 不變（ADR-0012）
@@ -43,19 +43,19 @@ Reporter（曾經有網路、已登入）
   └─ 讀 mesh_reports、reporter_handles、health_reports，統計與去重
 ```
 
-## 3. 線路格式變更（ADR-0008）
+## 3. 線路格式（ADR-0008）
 
-| 項目 | 現在 | 改後 |
+Gateway 最初上線時，Broadcast Tier 帶的是 geohash-6（payload 版本 2）。ADR-0008 改為精確座標：
+
+| 項目 | 版本 2 | 版本 3 |
 |---|---|---|
-| Kotlin `DisasterReportPacket.GEOHASH_PRECISION` | 5 | 6 |
-| Dart `HealthReportPayload.geohashPrecision`（`ble_packet_decoder.dart`） | 5 | 6 |
-| 解碼端接受的 `geohashLen` | 0 或 5 | **0 或 6** |
-| `MAX_ENCODED_SIZE` | 19 | 20 |
-| payload 版本 | 不變 | 不變 |
+| 位置 | `geohashLen`（0 或 6）＋ ASCII geohash | flags bit1 表示有位置；有的話是兩個 big-endian int32（緯度、經度，單位 1e-7 度） |
+| 解碼端接受的版本 | 1、2 | **只有 3** |
+| `MAX_ENCODED_SIZE` | 20 | 21（沒有位置時 13） |
+| `mesh_reports.schemaVersion` | 1（`geohash`） | **2**（`lat`／`lng`） |
 
 - 兩端的權威向量（`DisasterReportTest`、`health_report_payload_test.dart`）同步更新。
-- 舊版裝置與新版互相拒收；所有裝置一起更新，實機實驗期間不混用。
-- `DisasterReportPacket.kt` 中「geohash-5 ≈ 數公里見方」的說明改寫。
+- 舊版裝置與新版互相拒收；所有裝置一起更新，實機實驗期間不混用。舊版 Gateway 寫的 `schemaVersion` 1 文件會被新規則擋下。
 
 ## 4. 名詞
 
@@ -74,11 +74,12 @@ Reporter（曾經有網路、已登入）
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
-| `schemaVersion` | int | 固定為 `1` |
+| `schemaVersion` | int | 固定為 `2`（`1` 是 geohash-6 的舊格式） |
 | `reporterHandle` | string | 與文件 ID 相同 |
 | `status` | string | `安全`／`輕傷`／`重傷`／`未宣告`，與 `health_reports.status` 同一組值 |
 | `sos` | bool | Reporter 正舉著 SOS |
-| `geohash` | string 或 null | 6 碼；Reporter 沒有位置時為 null |
+| `lat` | number 或 null | Reporter 的精確緯度（payload 的 1e-7 度換成度）；沒有位置時為 null |
+| `lng` | number 或 null | 精確經度；與 `lat` 同時為 null 或同時有值 |
 | `reportTime` | timestamp | payload 的回報時間（Reporter 手機的時鐘，精度到秒） |
 | `uploadedAt` | timestamp | 伺服器時間（寫入時的 `request.time`） |
 | `gatewayUid` | string | 寫入者的 uid |
@@ -88,7 +89,7 @@ Reporter（曾經有網路、已登入）
 
 - `rawPacket` 與 `announcement` 是日後驗簽的材料（ADR-0009），現在沒有人驗。`rawPacket` 必須是**收到時的編碼**，而不是 `MessageHandler` 剝掉 content tag 之後的版本。重新編碼時要保留收到時的壓縮狀態（見 `BinaryProtocol` 對 preimage 的說明）。
 - `announcement` 取自 `HealthReportSigningKeyCache.announcementFor`：每份通過驗證的 ANNOUNCE 都會記進這份快取，保留 2 小時（ADR-0006），與 gateway 的暫存期限相同。Gateway 在**收到回報的當下**取這份 ANNOUNCE，連同回報一起暫存。
-- 11 個欄位每次都要寫：`geohash` 與 `announcement` 沒有值時寫 null，不能省略（規則以 `hasAll` 檢查）。
+- 12 個欄位每次都要寫：`lat`、`lng` 與 `announcement` 沒有值時寫 null，不能省略（規則以 `hasAll` 檢查）。
 - 一份文件約 500 bytes 以內。
 
 ### 5.3 `reporter_handles/{uid}/installations/{reporterHandle}`
@@ -143,10 +144,10 @@ match /{path=**}/installations/{handle} {
 `validMeshReport(handle)` 必須全部成立：
 
 - `request.auth != null`，且 `gatewayUid == request.auth.uid`。
-- 鍵**恰好**是 5.2 列出的 11 個（`hasAll` 與 `hasOnly`），`geohash` 與 `announcement` 即使為 null 也要在；`schemaVersion == 1`。
+- 鍵**恰好**是 5.2 列出的 12 個（`hasAll` 與 `hasOnly`），`lat`、`lng` 與 `announcement` 即使為 null 也要在；`schemaVersion == 2`。
 - `handle` 符合 `^[0-9a-f]{12}$`，且等於 `reporterHandle`。
 - `status` 屬於四個值之一；`sos` 是 bool；合法組合依 ADR-0004：`安全` 不可帶 SOS，`未宣告` 必須帶 SOS。
-- `geohash` 為 null，或長度 6 的 string。
+- `lat`、`lng` 同時為 null，或同時是 number 且在 ±90°、±180° 以內。
 - `senderPeerId` 符合 `^[0-9a-f]{16}$`。
 - `uploadedAt == request.time`。
 - `reportTime` 是 timestamp，且 `<= request.time + 10 分鐘`（容忍時鐘誤差，並防止用未來時間鎖住文件）。
@@ -237,8 +238,8 @@ match /{path=**}/installations/{handle} {
 
 **`mesh_reports`**：經由 mesh 代傳上來的回報，每個 Reporter Handle 一份，欄位見 [5.2](#52-mesh_reportsreporterhandle)。
 
-- 這些 Reporter **在上傳當時沒有自己連上網路**，所以沒有姓名、電話、精確座標。
-- `geohash` 是 6 碼，一格約 0.6 × 1.1 km。用任何 geohash 函式庫解出格子的邊界或中心點。null 代表 Reporter 沒有提供位置。
+- 這些 Reporter **在上傳當時沒有自己連上網路**，所以沒有姓名、電話。
+- `lat`／`lng` 是 Reporter 的精確座標，與 `health_reports` 的 `lat`／`lng` 同一種形式，可以直接派人前往（ADR-0008）。null 代表 Reporter 沒有提供位置。
 - 「需要協助」的判斷與 App 的互助任務一致：`sos == true`，或 `status` 為 `輕傷`、`重傷`。`sos == true` 的優先。
 - `reportTime` 來自 Reporter 手機的時鐘，可能不準；`uploadedAt` 是伺服器時間。判斷「回報還有效」的時間窗由後台決定，建議同時參考兩者。
 - 同一份文件被更新時，代表同一個 Reporter 發了新回報。SOS 撤回或改報「安全」也是一次更新（`sos` 變 false）。
@@ -249,13 +250,14 @@ match /{path=**}/installations/{handle} {
 1. 以 collection group 查詢 `installations` 中 `reporterHandle == handle` 的文件，路徑上層就是 uid。這需要在 console 為 `installations.reporterHandle` 建立 collection group 範圍的單一欄位索引。
 2. 若有多個 uid 宣稱同一個 Handle，以 `registeredAt` 最新的為準；若其中一份的 `signingPublicKey` 與 `mesh_reports` 原始封包的簽章 key 不符，那一份是冒領（見第 9 節）。
 3. 找到 uid 後，兩份回報取時間較新的那一份。`health_reports.reportTime` 是 ISO-8601 字串，`mesh_reports.reportTime` 是 timestamp，比較前先轉換。
+   - 兩邊的 `lat`／`lng`（四捨五入到 1e-7 度）、`reportTime`（比到秒）、`status` 與 `sos` 都相同時，是同一份 Health Report，App 的互助任務也這樣合併（ADR-0010）。
 4. 找不到 uid 的 Handle，代表 Reporter 從未在有網路時登入過，只能當作一個匿名的人計算。
 
 **信任程度**：這些資料**沒有經過伺服器驗證**。任何登入帳號都能直接寫 `mesh_reports`，包括偽造 SOS，或用真實 Handle 寫一份「安全」蓋掉真的 SOS。異常時可以用 `gatewayUid` 追查寫入者。
 
 **刪除**：App 不會刪除任何 `mesh_reports`。災害結束後由 Administrator 清空，規則只允許 Administrator 刪除。
 
-**計數的限制**：一個 Handle 代表一次 App 安裝，不是一個人。共用手機的人會算成一人，沒有手機的人不會出現，重裝 App 的人會算成兩人。格子邊界也不對應行政區，跨村里的格子只能依中心點歸屬。
+**計數的限制**：一個 Handle 代表一次 App 安裝，不是一個人。共用手機的人會算成一人，沒有手機的人不會出現，重裝 App 的人會算成兩人。座標是精確位置，可以直接對應到村里與收容所。
 
 ## 9. 已知限制
 
@@ -275,7 +277,7 @@ match /{path=**}/installations/{handle} {
 
 **Kotlin 單元測試**
 
-- 精度 6 的編解碼向量；長度 5 的 geohash 被拒收。
+- 版本 3 的編解碼向量（含負座標）；版本 1、2 的 geohash 回報、長度與 flags 不符、座標超出範圍都被拒收。
 - 掛載點：交給 hook 的是含 content tag 的原始封包；未驗證 peer、解碼失敗、實驗 Handle 都不會交出。
 - `MeshGateway`（以假的上傳介面測試）：
   - 7.3 的每一個條件各自擋得住。
@@ -286,7 +288,7 @@ match /{path=**}/installations/{handle} {
 
 **Dart 測試**
 
-- `ble_packet_decoder` 的精度 6 向量。
+- `ble_packet_decoder` 的版本 3 向量，與 Kotlin 共用。
 - `reporter_handles` 登記：只在已登入時寫入，欄位正確。
 
 **規則測試**（`firestore-tests/rules.test.mjs`）
@@ -295,7 +297,7 @@ match /{path=**}/installations/{handle} {
 - `mesh_reports`：
   - 只有 Administrator 能讀、能刪。
   - 登入者可建立格式正確的文件；`gatewayUid` 不是自己時被擋。
-  - 多餘欄位、`status` 非法、`安全` 帶 SOS、`未宣告` 不帶 SOS、geohash 長度不是 6、`reportTime` 太新或太舊，都被擋。
+  - 多餘欄位、`status` 非法、`安全` 帶 SOS、`未宣告` 不帶 SOS、只有一個座標或座標超出範圍、`schemaVersion` 不是 2、`reportTime` 太新或太舊，都被擋。
   - update 時 `reportTime` 沒有嚴格遞增被擋。
 - `reporter_handles`：只有本人能寫自己 uid 底下的文件；Administrator 與本人可讀，其他人不可讀；`signingPublicKey` 長度不對被擋；Administrator 能以 collection group 查詢 `installations`，其他人不能。
 
@@ -313,7 +315,7 @@ match /{path=**}/installations/{handle} {
 
 建議拆成四個 PR，依序合併：
 
-1. **geohash 精度 6**（ADR-0008）：Kotlin、Dart、權威向量。這個 PR 本身就讓所有裝置必須一起更新。
+1. **geohash 精度 6**：Kotlin、Dart、權威向量。這個 PR 本身就讓所有裝置必須一起更新。之後 ADR-0008 改為精確座標（#150），見第 3 節。
 2. **Firestore 規則**：`admins`、`mesh_reports`、`reporter_handles`，以及規則測試。
 3. **`reporter_handles` 登記**：Flutter 端與取得簽章公鑰的 bridge 方法。
 4. **Kotlin gateway**：`MeshGateway`、掛載點、設定開關、Firebase 依賴、`PRIVACY_POLICY.md`、CLAUDE.md 第 5 條。

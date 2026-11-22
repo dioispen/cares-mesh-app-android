@@ -6,7 +6,7 @@ Broadcast Tier 改帶精確座標之後（ADR-0008），兩邊帶的是同一組
 
 - 後端的一筆與 mesh 的一筆，**精確座標、`reportTime`、Status 與 SOS 全部相同**時，就是同一份 Health Report，清單上只列一筆。座標以線路的解析度（1e-7 度）比較；`reportTime` 比到秒，因為 mesh 只帶到秒。
 - 合併後的那筆顯示後端的內容（姓名、傷勢細項、狀況調查），進度跟著後端那筆的 `taskStatus`／`helperId`，其他 Rescuer 才看得到已經有人接了。
-- 四項中只要有一項不同，就是不同的 Health Report，照舊兩筆都列出。
+- 四項中只要有一項不同，就是不同的 Health Report，照舊兩筆都列出。任一邊沒有位置也不合併：只剩時間與 Status 可比，不足以斷定是同一個人。
 - 不記住 Handle 屬於哪個帳號，每次只比對清單上當下的兩筆。
 
 ## Considered Options
