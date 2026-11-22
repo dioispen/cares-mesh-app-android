@@ -1,6 +1,6 @@
 # Health Report 封包與路由機制的修改整理
 
-> 專題總審報告素材，整理於 2026-11-22。
+> 專題總審報告素材，整理於 2026-11-22；2026-11-23 更新 TTL（ADR-0014）。
 >
 > **範圍**：`HEALTH_REPORT`（0x30）封包的格式、送出端、中繼（Relay Decision）、anti-entropy 同步、把回報帶出 mesh 的 Gateway，以及直接決定回報送不送得到的連線層修正。不含 Flutter 畫面、Firestore 的 Detail／Sensitive Tier 與 Mutual-aid Task 的介面邏輯。
 >
@@ -25,7 +25,7 @@
 
 1. **格式**：從約 150 bytes、含姓名、電話、血型與公尺級座標的明文，改為 ≤ 20 bytes 的 **Broadcast Tier**，不含任何可識別個人的欄位（ADR-0003、ADR-0008）。隱私修正同時縮小了封包。
 2. **SOS 併入 Health Report**：SOS 成為 payload 上的一個旗標，不是另一種封包（ADR-0004）。撤回 SOS 就是送一份不帶旗標的新回報。
-3. **送達從一層變成三層**：原本只有即時 flood（TTL 3）。現在加上：
+3. **送達從一層變成三層**：原本只有即時 flood（當時 TTL 3，現為 7）。現在加上：
    - anti-entropy 同步：一跳一跳補送，不受 TTL 限制，每份保留 2 小時；
    - Reporter 的裝置重發仍舉著 SOS 或受傷的回報（本分支）；
    - Reporter 自己最新的回報跨 app 重啟保存（本分支）。
@@ -35,6 +35,7 @@
 7. **Relay Decision 參數化，Severity 尚未啟用**：
    - 「TTL ≥ 4 一律轉發」的門檻改由建構子注入（#1 R13），為模擬器與 Severity-aware Relay 鋪路。
    - Severity 欄位在線路格式上已有槽位，但目前沒有程式設定或讀取（#2）。
+8. **TTL 改回 bitchat 的 7**（ADR-0014）：同步讓 TTL 只影響延遲，不影響送達；TTL 3 想保有的轉發衰減，在可實測的規模內沒有作用。Health Report、物資封包與 Admin Notice 現在都是 TTL 7。
 
 ---
 
@@ -63,6 +64,7 @@
 | 2026-11-21 | P1-4：成立中的回報每 30 分鐘重發 | `82c01127`、`c9b7317f` | ADR-0012 | 分支、待驗 |
 | 2026-11-21 | P1-5、P1-6：連線門檻、背景掃描與廣播 | `89ad4b6a`、`52d0ef09`、`76170b1d` | ADR-0013 | 分支、待驗 |
 | 2026-11-21 | P1-7：TTL 門檻參數化；Health Report 的 TTL 改為具名常數 | `365f2529`、`518272f0` | #1 R13、#14 | 分支 |
+| 2026-11-23 | Health Report 與物資封包的 TTL 從 3 改為 7，與上游 bitchat 相同 | — | ADR-0014、#14 | `feat/broadcast-ttl-upstream-default` |
 
 ---
 
@@ -136,27 +138,36 @@ signature     64 bytes，Ed25519；計算時 TTL 以 0 代入，中繼可以改 
   - 原本兩個畫面各寫一份送出流程，已經分歧出 bug：從調查表舉起 SOS 時，任務不會重開。
 - **senderID 修正**（2026-09-20）：原本用 Noise 靜態公鑰的前綴當 senderID，與 mesh 的 peerID 不一致，導致「自己的封包不轉發」與 relay 的判斷都失效。改為 `myPeerID`。
 
-### 4.2 TTL 為什麼是 3（#14，`518272f0`）
+### 4.2 TTL 為什麼是 7（ADR-0014）
 
-TTL 3 原本是沒有說明的寫死值（2026-03）。試跑後改為具名常數 `AppConstants.HEALTH_REPORT_TTL_HOPS`，並把理由寫在常數的 KDoc 裡：
+TTL 3 原本是沒有說明的寫死值（2026-03）。試跑後先改為具名常數 `AppConstants.HEALTH_REPORT_TTL_HOPS`，理由是「TTL ≤ 4 才能讓每一跳都保有轉發衰減」（#14，`518272f0`）。但這個理由只推得出上限 4，推不出 3。所以 2026-11-23 改為與上游 bitchat 相同的 7（ADR-0014），理由寫在常數的 KDoc 裡：
 
 1. **TTL 只決定快的那條路，不決定到不到。**
-   - 同步會把回報一跳一跳帶到 TTL 範圍外（第 6 節）。
+   - 同步會把回報一跳一跳帶到整個連通的網路（第 6 節）。
    - TTL 決定的是「幾跳內能在約 1 秒內收到」。所以 TTL 也不能拿來當隱私半徑。
-2. **TTL ≤ 4 才能讓每一跳都保有轉發衰減。**
-   - 中繼先把 TTL 減 1；減完仍 ≥ 4 的封包一律轉發，跳過依網路規模的轉發機率（5.3 節）。
-   - TTL 3 第一次轉發就降到 2，每一跳都走機率；TTL 7 會讓前 3 代轉發一律送出。
-   - `HealthReportBroadcastTest` 鎖住這兩個常數的關係，只改其中一個測試就會失敗。
+2. **提高 TTL 的代價只是 flood 的重複副本，在可實測的規模內分不出來。**
+   - 收得到的節點本來就一樣多，差別只在經 flood 還是經同步收到。
+   - 網路規模 ≤ 10 時每一跳都 100% 轉發（5.3 節），TTL 3 與 7 的成本相同。試跑每筆全網送出 2.41 次，每節點收到 1.6–3.1 份（9.1 節）。
+   - Health Report 的頻率很低：使用者主動送出，加上成立中的回報每 30 分鐘重發一次（4.4 節）。
+   - 沒有證據，就不偏離上游預設。
+3. **三種封包用同一個 TTL。**
+   - 物資封包（`SUPPLY_EXCHANGE`）沿用 Health Report 的值，Admin Notice 注入時本來就是 7。
+   - `HealthReportBroadcastTest` 鎖住「Health Report 的 TTL 等於 `MESSAGE_TTL_HOPS`」。
 
 | TTL | flood 最遠 | 直線距離上限 \* | 最後一跳 p50 \* | 每一跳都有轉發衰減 |
 |---|---|---|---|---|
-| 3（現行） | 4 跳 | ≈ 560 m | ≈ 0.22 s | 是 |
+| 3（2026-11-23 以前） | 4 跳 | ≈ 560 m | ≈ 0.22 s | 是 |
 | 4 | 5 跳 | ≈ 700 m | ≈ 0.27 s | 是（能保有衰減的上限） |
-| 7（一般封包） | 8 跳 | ≈ 1120 m | ≈ 0.42 s | 否：前 3 代一律轉發 |
+| 7（現行，與一般封包相同） | 8 跳 | ≈ 1120 m | ≈ 0.42 s | 否：網路規模超過 10 時，前 3 代一律轉發 |
 
 \* 以試跑的單跳可靠距離 140 m、每跳 +50 ms 外推；試跑最多只量到 3 跳。
 
-SOS 暫時不另設 TTL，等 E1-C（7 機比較 TTL 3 與 7）與模擬的結果再決定。
+- **代價**：網路規模超過 10 時，前 3 代轉發跳過依網路規模的轉發機率，成立中的回報重發也一樣。這部分的負載交給 policy-level 模擬（ADR-0001）。
+- **SOS 不另設 TTL**：SOS 是 Health Report 上的標記（ADR-0004）；7 也已經是這個 app 送出任何封包時用的最大 TTL。
+- **考慮過、未採用**：
+  - 維持 3：唯一的理由推不出 3。
+  - 改為 4：這個值與一律轉發的門檻綁在一起，而大型 mesh 該不該保有每跳衰減，正是模擬要回答的問題。
+  - 等 E1-C 再決定：7 支手機的轉發機率仍是 100%，量得到延遲，量不到大型 mesh 的成本。
 
 ### 4.3 保存 Reporter 自己最新的回報（P0-3，`89314845`，分支）
 
@@ -179,7 +190,7 @@ SOS 暫時不另設 TTL，等 E1-C（7 機比較 TTL 3 與 7）與模擬的結�
   - 最需要救援的人，正是最可能無法再操作手機的人。
 - **做法**：
   - 最新一筆舉著 SOS，或 Status 為輕傷、重傷時，`MeshForegroundService` 每 30 分鐘以**新的時間戳重新簽章**發送一次。
-  - 每次照常以 TTL 3 flood，並進入同步暫存。
+  - 每次照常以 Health Report 的 TTL flood（現為 7），並進入同步暫存。
 - **payload 原封不動**：`reportTime` 與位置都不更新，Rescuer 看到的仍是 Reporter 實際做出陳述的時間。
 - **排程**：
   - 下一次排在「上一次的封包時間戳 + 30 分鐘」，重啟不會連發，也不會漏掉。
@@ -322,7 +333,7 @@ flowchart TD
 
 | 機制 | 誰送 | 範圍 | 延遲 | 回報存活多久 |
 |---|---|---|---|---|
-| 即時 flood | Reporter 與中繼 | TTL 3，最遠 4 跳，每跳依網路規模擲骰 | 每跳約 +50 ms（試跑中位數） | 只在送出當下 |
+| 即時 flood | Reporter 與中繼 | TTL 7，最遠 8 跳；網路規模超過 10 時前 3 代一律轉發，之後依網路規模擲骰 | 每跳約 +50 ms（試跑中位數） | 只在送出當下 |
 | anti-entropy 同步 | 每一跳的鄰居 | 不受 TTL 限制，一跳一跳往外 | 新連線約 1 s；已連著的鏈路每跳最多 30 s | 從封包時間戳起 2 小時 |
 | 保存自己的回報（分支） | Reporter 的裝置 | app 重啟後重新提供給同步 | 下一個鄰居連上時 | 同一封包，到期時間不變 |
 | 成立中的回報重發（分支） | Reporter 的裝置 | 同 flood，並重新進入同步 | 每 30 分鐘 | 只要 SOS 或受傷仍成立就延續 |
@@ -404,7 +415,7 @@ flowchart TD
 | E5-C | −115 與舊的 −85 dBm 下，Rescuer 走進來多遠會連上（前景、背景各一次） | P1-5、P1-6 |
 | E4 | 0、2、4 條連線的每小時耗電；背景較長的掃描與較強的廣播多耗多少電；安靜但正常的連線會不會被誤斷 | P0-2、P1-5、P1-6 |
 | E3 | 人多時名額會不會被弱連線塞滿、會不會反覆替換 | P1-5 |
-| E1-C | 7 機線性鏈，比較 TTL 3 與 7 的可達跳數、PDR(h) 與傳輸成本 | TTL（#14）、SOS 是否另設 TTL |
+| E1-C、E2-C | 以 TTL 3 為對照：flood 最遠 4 跳，第 5 跳以後經同步補到最後一筆的延遲；驗證「TTL 只影響延遲」 | ADR-0014 |
 
 ---
 
@@ -426,6 +437,7 @@ flowchart TD
 | 時鐘快超過 10 分鐘的手機 | 回報仍即時 flood，但不進任何同步暫存，晚到的 Rescuer 收不到 | ADR-0012 |
 | 版本不相容 | payload 升版本、改 geohash 精度，新舊版裝置都會互相拒收全部 Health Report | ADR-0004、ADR-0008 |
 | 每跳補送最多等 30 秒 | 跨多跳的分區重新連上時，回報抵達遠端約需「跳數 × 30 秒」 | 機制概覽第 4 節 |
+| 大型 mesh 的 flood 負載 | 網路規模超過 10 時，TTL 7 的前 3 代轉發跳過轉發機率，成立中的回報重發也一樣；實機量不到，交給模擬 | ADR-0014 |
 | iOS 節點 | 能轉發 0x30 封包；iOS 的廣播沒有 service data，不會觸發以強換弱 | ADR-0013 |
 
 ---
@@ -438,8 +450,8 @@ flowchart TD
 | #2 Severity-aware Relay（F1 × F2） | 未開始；Severity 欄位未使用 |
 | #91、#95 | 程式已合併 main，issue 保持 open，等實機驗收 |
 | #111、#112 Gateway | 程式已合併 main，issue 保持 open |
-| #14 TTL 3 寫死 | 本分支已改為具名常數並寫明理由，合併後可關閉 |
-| SOS 是否提高 TTL | 等 E1-C 與模擬 |
+| #14 TTL 3 寫死 | 已改為具名常數，再改為 TTL 7（ADR-0014），可關閉 |
+| SOS 是否提高 TTL | 已定：與一般 Health Report 相同，TTL 7（ADR-0014） |
 | 自我認證的 Reporter Handle | 能同時處理 TOFU 與暱稱連結的問題，改動最大，未排程（ADR-0006） |
 | 文件同步 | 試跑報告第 13 節已補上實作狀態（13.5）；`MESH_GATEWAY.md` 已對上 SOS 重發。「BLE mesh 網路機制概覽」仍只在 `docs/experiment-field-records` 分支上，要不要併入 main 另行決定 |
 
@@ -478,4 +490,4 @@ flowchart TD
 | 同步 | [GossipSyncManager.kt](../../app/src/main/java/com/bitchat/android/sync/GossipSyncManager.kt)、[OwnHealthReportKeeper.kt](../../app/src/main/java/com/bitchat/android/sync/OwnHealthReportKeeper.kt) |
 | 重發 | [StandingReportRebroadcaster.kt](../../app/src/main/java/com/bitchat/android/service/StandingReportRebroadcaster.kt) |
 | Gateway | [MeshGateway.kt](../../app/src/main/java/com/bitchat/android/gateway/MeshGateway.kt)、[VerifiedHealthReportBridge.kt](../../app/src/main/java/com/bitchat/android/mesh/VerifiedHealthReportBridge.kt)、[MESH_GATEWAY.md](../MESH_GATEWAY.md) |
-| ADR | [0002](../adr/0002-severity-is-a-derived-transport-hint.md)、[0003](../adr/0003-tiered-disclosure-for-health-reports.md)、[0004](../adr/0004-sos-is-a-mark-on-health-report.md)、[0006](../adr/0006-health-report-signing-keys-outlive-peers.md)、[0008](../adr/0008-broadcast-tier-geohash-precision-6.md)、[0009](../adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)、[0012](../adr/0012-standing-sos-is-rebroadcast-by-reporter-device.md)、[0013](../adr/0013-connection-policy-favours-sparse-networks.md) |
+| ADR | [0002](../adr/0002-severity-is-a-derived-transport-hint.md)、[0003](../adr/0003-tiered-disclosure-for-health-reports.md)、[0004](../adr/0004-sos-is-a-mark-on-health-report.md)、[0006](../adr/0006-health-report-signing-keys-outlive-peers.md)、[0008](../adr/0008-broadcast-tier-geohash-precision-6.md)、[0009](../adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)、[0012](../adr/0012-standing-sos-is-rebroadcast-by-reporter-device.md)、[0013](../adr/0013-connection-policy-favours-sparse-networks.md)、[0014](../adr/0014-broadcast-reports-use-upstream-ttl.md) |

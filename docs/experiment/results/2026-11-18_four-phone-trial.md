@@ -639,6 +639,7 @@ CARES Mesh 的使用場景：
 - **一併留意**：#95（從沒見過發送者的人，經補送收到回報後驗不了簽）與同步補送走同一條路徑。程式已由 [ADR-0006](../../adr/0006-health-report-signing-keys-outlive-peers.md) 處理，但這次四支手機一開始都同處一地（10.2），每個接收端都見過發送者，沒有驗到這個情境；實機驗收（E5-D 的 D2）仍未進行。
 - **相關程式**：[PacketRelayManager.kt](../../../app/src/main/java/com/bitchat/android/mesh/PacketRelayManager.kt)、[HealthReportBroadcast.kt](../../../app/src/main/java/com/bitchat/android/service/HealthReportBroadcast.kt)
 - **驗證**：E1-C（7 機，比較 TTL 3 與 7 的可達跳數、PDR(h) 與 C_tx）；大規模下的成本用模擬評估。
+- **後續（2026-11-23）**：「維持 TTL 3」與「SOS 等 E1-C 再決定」兩點已由 [ADR-0014](../../adr/0014-broadcast-reports-use-upstream-ttl.md) 取代。Health Report 與物資封包改為 TTL 7，與上游 bitchat 相同。理由是上面的機制一：TTL 只影響延遲；而 TTL 3 想保有的轉發衰減只在網路規模超過 10 時才有作用，E1-C 的 7 支手機量不到。E1-C 改以 TTL 3 當對照組，驗證機制一。本節的分析與表格保留試跑時的版本。
 
 ### 13.4 建議的執行順序
 
@@ -658,7 +659,7 @@ CARES Mesh 的使用場景：
 | P1-4 | `82c01127`、`c9b7317f` | 採定期重發（ADR-0012）：最新一筆舉著 SOS、或 Status 為輕傷／重傷時，`MeshForegroundService` 每 30 分鐘以新的時間戳重新簽章發送，payload（含 `reportTime`）不變；不採「依 Severity 延長保留期限」。一併處理時鐘：同步暫存拒收時間戳比本機快超過 10 分鐘的 Health Report | E5-D 延伸：Rescuer 在 SOS 送出 2 小時以上才入網 |
 | P1-5 | `89ad4b6a` | **比建議更寬**（ADR-0013）：孤立（直連的 peer 少於 2 個）時 −115 dBm，聽得到就連；其他情況也是 −115，只有電量極低且已有直連時 −95；名額快滿時維持原門檻。**不保留遲滯**，改以邊緣連線保護處理遲滯原本要防的事：每個位址同時只有一個連線嘗試、弱候選 10 s 逾時、失敗後退避。名額滿時以強換弱（強 10 dB 以上），淘汰時先淘汰最弱的 | E5-C 比較 −115 與 −85 dBm 下走入多遠會連上；E3 確認人多時名額不會塞滿；E4 量多出來的連線耗電 |
 | P1-6 | `52d0ef09`、`76170b1d` | 背景、沒有直連時每 30 s 掃 4 s，改用 `SCAN_MODE_BALANCED`；沒有直連時提高廣播功率；前景服務沒在跑時，首頁顯示原因與一鍵修正 | E4：熄屏背景下的連線建立時間、同步間隔與耗電 |
-| P1-7 | `365f2529`、`518272f0` | 「TTL ≥ 4 一律轉發」的門檻改由 `PacketRelayManager` 的建構子注入（#1 R13）；Health Report 的 TTL 3 改為具名常數 `HEALTH_REPORT_TTL_HOPS` 並寫明理由（#14）。不改線上格式：Severity 仍未使用，severity-aware relay 留給 #2 | E1-C：7 機比較 TTL 3 與 7 |
+| P1-7 | `365f2529`、`518272f0` | 「TTL ≥ 4 一律轉發」的門檻改由 `PacketRelayManager` 的建構子注入（#1 R13）；Health Report 的 TTL 3 改為具名常數 `HEALTH_REPORT_TTL_HOPS` 並寫明理由（#14）。不改線上格式：Severity 仍未使用，severity-aware relay 留給 #2。**之後 TTL 改為 7（ADR-0014）** | E1-C：以 TTL 3 為對照，驗證 TTL 只影響延遲 |
 
 ## 14. 對校準表的參考值
 

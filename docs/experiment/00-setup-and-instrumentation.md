@@ -144,7 +144,7 @@ Debug 限定的畫面，可設定的參數：
 |---|---|
 | 筆數 N | 要送幾筆 |
 | 間隔（ms） | 兩筆之間的間隔，允許 0（突發測試用） |
-| TTL | 0～7（滑桿）。TTL n 最遠到第 n + 1 跳：0 只到直連鄰居；3 = 現行 Health Report；7 = `MESSAGE_TTL_HOPS` |
+| TTL | 0～7（滑桿，預設 7）。TTL n 最遠到第 n + 1 跳：0 只到直連鄰居；3 = ADR-0014 之前的 Health Report，E1-C、E2-C 的對照組；7 = `MESSAGE_TTL_HOPS` = 現行 Health Report |
 | 開始時間 | 牆鐘 `HH:mm:ss`，讓多支手機在同一時刻開始 |
 | Status | 預設「安全」 |
 | 保持喚醒 | 預設開：run 期間持有 wake lock，螢幕關閉也照排程送。**E4 要關掉**，否則手機無法休眠，背景存活與耗電會偏樂觀。關掉時 CPU 休眠會讓排程延後，醒來後不補送錯過的筆數 |
@@ -154,7 +154,7 @@ Debug 限定的畫面，可設定的參數：
 - 發送迴圈跑在 `MeshForegroundService` 的 scope 裡，app 進背景、離開實驗畫面都會繼續送。
 - 只走 mesh，不寫入 Firestore。
 
-**為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 3（[AppConstants.kt](../../app/src/main/java/com/bitchat/android/util/AppConstants.kt) 的 `HEALTH_REPORT_TTL_HOPS`），依程式碼推算最遠只到第 4 跳。要量 7 支手機線性鏈（6 跳）的物理極限，必須用 TTL 7。
+**為什麼要能設 TTL**：現行 Health Report 送出時固定 TTL 7（[AppConstants.kt](../../app/src/main/java/com/bitchat/android/util/AppConstants.kt) 的 `HEALTH_REPORT_TTL_HOPS`，[ADR-0014](../adr/0014-broadcast-reports-use-upstream-ttl.md)），可以涵蓋 7 支手機線性鏈的 6 跳。E1-C、E2-C 另以 TTL 3 對照：flood 最遠到第 4 跳，更遠的節點只能經同步收到，用來驗證 ADR-0014 的前提「TTL 只影響延遲、不影響送達」。
 
 **(c) 現場即時計數**
 
@@ -162,7 +162,7 @@ Debug 限定的畫面，可設定的參數：
 
 **(d) 分辨 flood 與同步送達**
 
-[#91](https://github.com/dioispen/cares-mesh-app-android/issues/91) 之後，Health Report 也會經 anti-entropy 同步補送：鄰居連上 1 s 後、以及之後每 30 s，會向對方要它缺的封包。接收端分不出一筆 `RX` 是 flood 還是同步送來的：兩者是同一個已簽章封包，同步送來的 TTL 為 0，但 TTL 3 的 Health Report 經 3 次轉發也是 0。因此改在**送出端**記 `SYNC`，分析時對照：
+[#91](https://github.com/dioispen/cares-mesh-app-android/issues/91) 之後，Health Report 也會經 anti-entropy 同步補送：鄰居連上 1 s 後、以及之後每 30 s，會向對方要它缺的封包。接收端分不出一筆 `RX` 是 flood 還是同步送來的：兩者是同一個已簽章封包，同步送來的 TTL 為 0，但 flood 的副本到了最後一跳也是 0（TTL 7 的 Health Report 在第 8 跳，TTL 3 的對照組在第 4 跳）。因此改在**送出端**記 `SYNC`，分析時對照：
 
 > 接收端 Q 的一筆 `RX`（`src`、`pts`、`peer` = P），若 P 的 `exp.csv` 有同一個 `(src, pts)`、`peer` = Q 的 `SYNC` 列，就是同步送達；否則是 flood。
 
