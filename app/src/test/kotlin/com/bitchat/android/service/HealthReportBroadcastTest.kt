@@ -2,13 +2,12 @@ package com.bitchat.android.service
 
 import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.mesh.MeshPacketUtils
-import com.bitchat.android.mesh.RelayPolicy
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.util.AppConstants
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doReturn
@@ -22,11 +21,11 @@ class HealthReportBroadcastTest {
     private val payload = byteArrayOf(0x01, 0x0A, 0x0B)
 
     @Test
-    fun `a Health Report goes out tagged, from us, with the current TTL of 3`() {
+    fun `a Health Report goes out tagged, from us, with the upstream TTL of 7`() {
         val packet = HealthReportBroadcast.packet(sender, payload, timestamp = 1_700_000_000_500L)
 
         assertEquals(MessageType.HEALTH_REPORT.value, packet.type)
-        assertEquals(3, packet.ttl.toInt())
+        assertEquals(7, packet.ttl.toInt())
         assertArrayEquals(MeshPacketUtils.hexStringToByteArray(sender), packet.senderID)
         assertEquals(null, packet.recipientID)
         assertEquals(1_700_000_000_500uL, packet.timestamp)
@@ -34,16 +33,10 @@ class HealthReportBroadcastTest {
     }
 
     @Test
-    fun `a Health Report relayed once stays below the unconditional relay threshold`() {
-        // AppConstants.HEALTH_REPORT_TTL_HOPS 與 RelayPolicy 的預設門檻一起讓 Health Report 每一跳都保有
-        // 轉發衰減（取捨見 HEALTH_REPORT_TTL_HOPS）。只改其中一個常數，這裡就會失敗。
-        val relayedTtl = HealthReportBroadcast.packet(sender, payload).ttl - 1u
-        val threshold = RelayPolicy().unconditionalRelayTtl
-
-        assertTrue(
-            "a Health Report relayed with TTL $relayedTtl would skip the relay probability (threshold $threshold)",
-            relayedTtl < threshold
-        )
+    fun `a Health Report goes out with the same TTL as any other bitchat broadcast`() {
+        // ADR-0014：Health Report 不另設 TTL，沿用上游 bitchat 的 MESSAGE_TTL_HOPS。要偏離它，
+        // 先推翻 ADR-0014，再改 HEALTH_REPORT_TTL_HOPS 與這個測試。
+        assertEquals(AppConstants.MESSAGE_TTL_HOPS, HealthReportBroadcast.DEFAULT_TTL)
     }
 
     @Test
@@ -57,11 +50,11 @@ class HealthReportBroadcastTest {
 
     @Test
     fun `only the TTL can be overridden`() {
-        val packet = HealthReportBroadcast.packet(sender, payload, ttl = 7u, timestamp = 1L)
+        val packet = HealthReportBroadcast.packet(sender, payload, ttl = 3u, timestamp = 1L)
 
-        assertEquals(7, packet.ttl.toInt())
+        assertEquals(3, packet.ttl.toInt())
         assertEquals(
-            HealthReportBroadcast.packet(sender, payload, timestamp = 1L).copy(ttl = 7u),
+            HealthReportBroadcast.packet(sender, payload, timestamp = 1L).copy(ttl = 3u),
             packet
         )
     }

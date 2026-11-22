@@ -11,8 +11,8 @@ import com.bitchat.android.protocol.MessageType
 object SupplyExchangeBroadcast {
 
     /**
-     * 與 Health Report 相同的 TTL：物資需求不該比求救傳得更遠、更積極（`ttl >= 4` 的前幾跳會無條件轉傳，
-     * 見 PacketRelayManager）。要改屬於 #14，不在這裡改。
+     * 與 Health Report 相同的 TTL：物資需求不該比求救傳得更遠。值與取捨寫在
+     * `AppConstants.HEALTH_REPORT_TTL_HOPS`（ADR-0014），要改就改那裡，不在這裡改。
      */
     val DEFAULT_TTL: UByte = HealthReportBroadcast.DEFAULT_TTL
 

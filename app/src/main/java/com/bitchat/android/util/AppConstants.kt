@@ -11,23 +11,24 @@ object AppConstants {
     val SYNC_TTL_HOPS: UByte = 0u        // TTL for neighbor-only sync packets
 
     /**
-     * Health Report（包括帶 SOS 的）送出時的 TTL：flood 最遠到第 4 跳。刻意低於 [MESSAGE_TTL_HOPS]
-     * （#14），依據是 2026-11-18 四機實地試跑報告的 §11.1 與 §13.3 P1-7：
+     * Health Report（包括帶 SOS 的）送出時的 TTL，等於上游 bitchat 的 [MESSAGE_TTL_HOPS]：flood 最遠到
+     * 第 8 跳。物資封包（`SUPPLY_EXCHANGE`）沿用同一個值，Admin Notice 注入時本來就用
+     * [MESSAGE_TTL_HOPS]。理由見 ADR-0014（推翻 #14 原本的 TTL 3）：
      *
      * - **TTL 只決定快的那條路，不決定到不到。** 每台裝置都把各 Reporter 最新的 Health Report 留在同步
-     *   暫存，anti-entropy 同步（[SYNC_TTL_HOPS]）會一跳一跳把它帶到 TTL 範圍外。flood 每跳約 +50 ms；
-     *   同步在新連線約 1 s 後補送，已連著的鏈路每跳最多 30 s。所以 TTL 決定的是「幾跳內能在約 1 秒內
-     *   收到」。也因此 TTL 不是 Health Report 擴散範圍的上限，拿來當隱私半徑並不成立。
-     * - **TTL ≤ 4 才能讓每一跳都保有轉發衰減。** 轉發前 TTL 先扣 1，扣完若仍 ≥
-     *   [com.bitchat.android.mesh.RelayPolicy.unconditionalRelayTtl]（預設 4），Relay Decision 就跳過依
-     *   網路規模的轉發機率。TTL 3 第一次轉發就降到 2，每一跳都走機率；TTL 7 會讓前 3 代轉發一律送出，
-     *   大型 mesh 的 flood 成本跟著放大。`HealthReportBroadcastTest` 鎖住這個關係，只改一邊就會失敗。
-     * - **SOS 暫不另設 TTL**（ADR-0004）：要不要提高，等 E1-C（7 機比較 TTL 3 與 7）與 policy-level
-     *   模擬（ADR-0001）的結果再決定。
+     *   暫存，anti-entropy 同步（[SYNC_TTL_HOPS]）會一跳一跳把它帶到整個連通的網路。flood 每跳約
+     *   +50 ms；同步在新連線約 1 s 後補送，已連著的鏈路每跳最多 30 s。所以 TTL 決定的是「幾跳內能在約
+     *   1 秒內收到」，也不能拿來當隱私半徑。
+     * - **代價只是 flood 的重複副本，在可實測的規模內分不出來。** 網路規模 ≤ 10 時每一跳都 100% 轉發
+     *   （2026-11-18 四機試跑每節點每筆收到 1.6–3.1 份），TTL 3 與 7 的成本沒有差別，沒有證據支持偏離
+     *   上游預設。大型 mesh 中，遞減後 TTL ≥
+     *   [com.bitchat.android.mesh.RelayPolicy.unconditionalRelayTtl]（預設 4）的前 3 代轉發會跳過依網路
+     *   規模的轉發機率，這部分的負載交給 policy-level 模擬（ADR-0001）評估。
+     * - **SOS 不另設 TTL**（ADR-0004）：7 已經是這個 app 送出任何封包時用的最大 TTL（`MAX_TTL`）。
      *
-     * 只有實驗發送器（#70）經 `HealthReportBroadcast.send(ttl = …)` 覆寫。
+     * 只有實驗發送器（#70）經 `HealthReportBroadcast.send(ttl = …)` 覆寫，E1-C、E2-C 用 TTL 3 對照。
      */
-    val HEALTH_REPORT_TTL_HOPS: UByte = 3u
+    val HEALTH_REPORT_TTL_HOPS: UByte = MESSAGE_TTL_HOPS
 
     object Mesh {
         // Peer lifecycle
