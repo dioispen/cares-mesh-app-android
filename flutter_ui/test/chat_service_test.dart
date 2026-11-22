@@ -2,9 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_ui/models/app_navigation.dart';
 import 'package:flutter_ui/models/chat_conversation.dart';
 import 'package:flutter_ui/models/chat_message.dart';
-import 'package:flutter_ui/models/chat_navigation.dart';
 import 'package:flutter_ui/models/chat_suggestions.dart';
 import 'package:flutter_ui/services/chat_service.dart';
 

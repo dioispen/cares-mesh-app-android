@@ -60,7 +60,7 @@ import kotlinx.coroutines.withContext
  * chat upstream would route it to (see [sendMessage]), because Dart sees the focus a debounce late.
  *
  * Notification taps (#57) reach Dart the same way: the Activity leaves the tapped notification's
- * destination in [PendingChatNavigation], projected as `chat_pending_navigation`; Dart takes it with
+ * destination in [PendingAppNavigation], projected as `chat_pending_navigation`; Dart takes it with
  * [METHOD_TAKE_PENDING_NAVIGATION] once it can navigate and opens its screens as usual.
  *
  * Favourites and blocking (#58) are upstream's too: [METHOD_TOGGLE_FAVORITE] runs
@@ -101,7 +101,7 @@ class ChatBridge(
     /** Peers linked over Wi-Fi Aware (peer ID → address), as the native peer list reads them. */
     private val wifiAwarePeers: StateFlow<Map<String, String>> = WifiAwareController.connectedPeers,
     /** The Activity's notification tap waiting for Dart (#57); it outlives this engine. */
-    private val pendingNavigation: PendingChatNavigation = PendingChatNavigation(),
+    private val pendingNavigation: PendingAppNavigation = PendingAppNavigation(),
     /** Upstream's favourites store and block list (#58). */
     private val records: ChatRecords = UpstreamChatRecords(chatViewModel),
     /** Upstream's contact records for a private chat ID (`ContactDirectory`, favourites). */

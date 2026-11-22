@@ -2,6 +2,9 @@ package com.bitchat.android.mesh
 
 import android.content.Context
 import android.util.Log
+import com.bitchat.android.adminnotice.AdminNoticeBridge
+import com.bitchat.android.adminnotice.AdminNoticeSyncSet
+import com.bitchat.android.adminnotice.AdminNoticeInjector
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.model.BitchatMessage
@@ -134,6 +137,27 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     
     // Service state management
     private var isActive = false
+
+    /**
+     * Gateway injection (#137): while this service runs, the Admin Notice Inbox hands it the
+     * normalized 0x31 packets this device injects. Broadcast as given, never signed: the packet
+     * must be the same whichever Gateway injects it (ADR-0011).
+     */
+    private val adminNoticeInjector = AdminNoticeInjector { packet ->
+        isActive && broadcastRoutedPacket(RoutedPacket(packet))
+    }
+
+    /**
+     * Gossip sync of Admin Notices (#138): attached with the injector, the Inbox hands this
+     * service's sync set every verified notice in the mesh, so late arrivals still get it. The set
+     * is shared with Wi-Fi Aware (MeshServiceHolder), so its peers are offered them too.
+     */
+    private val adminNoticeSyncSet = object : AdminNoticeSyncSet {
+        override fun add(packet: BitchatPacket, expiresAtMs: Long) =
+            gossipSyncManager.onAdminNoticeSeen(packet, expiresAtMs)
+
+        override fun remove(messageId: String) = gossipSyncManager.removeAdminNotice(messageId)
+    }
     
     // Delegate for message callbacks (maintains same interface)
     var delegate: BluetoothMeshDelegate? = null
@@ -645,6 +669,9 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
 
             override fun handleVoiceFrame(routed: RoutedPacket): Boolean =
                 messageHandler.handlePublicVoiceFrame(routed)
+
+            override fun handleAdminNotice(routed: RoutedPacket): Boolean =
+                AdminNoticeBridge.deliverFromMesh(routed.packet)
             
             override fun handleLeave(routed: RoutedPacket) {
                 serviceScope.launch { messageHandler.handleLeave(routed) }
@@ -805,6 +832,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
         if (connectionManager.startServices()) {
             isActive = true
             TransportBridgeService.register("BLE", this)
+            AdminNoticeBridge.attachMesh(adminNoticeInjector, adminNoticeSyncSet)
             
             // Start periodic syncs
             com.bitchat.android.service.MeshServiceHolder.startSharedGossip("BLE")
@@ -827,6 +855,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
     private fun pauseServicesForTransportDisable() {
         Log.i(TAG, "Disabling BLE mesh transport")
         isActive = false
+        AdminNoticeBridge.detachMesh(adminNoticeInjector, adminNoticeSyncSet)
         com.bitchat.android.service.MeshServiceHolder.stopSharedGossip("BLE")
         TransportBridgeService.unregister("BLE")
         try { com.bitchat.android.services.AppStateStore.clearTransportPeers("BLE") } catch (_: Exception) { }
@@ -846,6 +875,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
         
         Log.i(TAG, "Stopping Bluetooth mesh service")
         isActive = false
+        AdminNoticeBridge.detachMesh(adminNoticeInjector, adminNoticeSyncSet)
         TransportBridgeService.unregister("BLE")
         try { com.bitchat.android.services.AppStateStore.clearTransportPeers("BLE") } catch (_: Exception) { }
         try { com.bitchat.android.services.AppStateStore.clearTransportDirectPeers("BLE") } catch (_: Exception) { }

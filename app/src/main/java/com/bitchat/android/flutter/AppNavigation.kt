@@ -2,6 +2,7 @@ package com.bitchat.android.flutter
 
 import android.content.Intent
 import androidx.lifecycle.ViewModel
+import com.bitchat.android.adminnotice.SystemAdminNoticeNotifier
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.NotificationManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,30 +11,45 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 
 /**
- * The chat screen a tapped notification asks the Flutter UI to show (#57).
+ * The screen a tapped notification asks the Flutter UI to show (#57). One type for every
+ * notification the App posts, so the latest tap wins whichever screen it is for.
  *
  * Upstream's notifications (`ui.NotificationManager`) name their destination in intent extras, read
  * by `MainActivity.handleNotificationIntent`. Their taps now open [FlutterChatActivity], which reads
  * the same extras ([fromNotification]). It cannot open the screen itself as `MainActivity` does —
  * only Dart knows when it may navigate (after its own setup and sign-in) — so the request waits in
- * [PendingChatNavigation] until Dart takes it (`chat_takePendingNavigation`).
+ * [PendingAppNavigation] until Dart takes it (`chat_takePendingNavigation`). The method and its
+ * event keep the `chat_` names #57 gave them: [ChatBridge] carries every tap.
  */
-sealed interface ChatNavigation {
+sealed interface AppNavigation {
 
     /**
      * A private message notification (or a verification one about a peer): open the private chat
      * with [peerID], upstream's conversation ID for the sender. [senderNickname] is the name the
      * notification showed, kept as upstream passes it.
      */
-    data class PrivateChat(val peerID: String, val senderNickname: String?) : ChatNavigation {
+    data class PrivateChat(val peerID: String, val senderNickname: String?) : AppNavigation {
         override fun clearNotifications(chatViewModel: ChatViewModel) =
             chatViewModel.clearNotificationsForSender(peerID)
     }
 
     /** A mesh @mention notification: show the public chat. */
-    data object PublicChat : ChatNavigation {
+    data object PublicChat : AppNavigation {
         override fun clearNotifications(chatViewModel: ChatViewModel) =
             chatViewModel.clearMeshMentionNotifications()
+    }
+
+    /**
+     * An Admin Notice notification ([SystemAdminNoticeNotifier]): show the Admin Notice list, which
+     * marks the unread notices it shows read. Every notice's notification opens the list, not that
+     * one notice: the list shows them all in full.
+     */
+    data object AdminNotices : AppNavigation {
+        /**
+         * Nothing to drop: the tapped notification cancels itself (autoCancel), and the other
+         * notices' stay, each still an order the user may not have seen yet.
+         */
+        override fun clearNotifications(chatViewModel: ChatViewModel) = Unit
     }
 
     /**
@@ -45,12 +61,13 @@ sealed interface ChatNavigation {
 
     companion object {
         /**
-         * Where [intent] asks to go, if it is a tapped chat notification; null for every other
-         * launch (launcher, the mesh service's own notification, a summary notification) — those
-         * only bring the app to the front. A relaunch from recents is never one: its intent is the
-         * one that first started the task, possibly a notification long since dealt with.
+         * Where [intent] asks to go, if it is a tapped chat or Admin Notice notification; null for
+         * every other launch (launcher, the mesh service's own notification, a summary
+         * notification) — those only bring the app to the front. A relaunch from recents is never
+         * one: its intent is the one that first started the task, possibly a notification long
+         * since dealt with.
          */
-        fun fromNotification(intent: Intent): ChatNavigation? = fromNotification(
+        fun fromNotification(intent: Intent): AppNavigation? = fromNotification(
             launchedFromHistory = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0,
             flag = { intent.getBooleanExtra(it, false) },
             text = intent::getStringExtra
@@ -60,19 +77,20 @@ sealed interface ChatNavigation {
          * [fromNotification] over the extras, read with [flag] and [text]. Same order as
          * `MainActivity.handleNotificationIntent`: a private chat first (with no peer ID nothing
          * opens), then the mesh chat. Geohash chats have no Flutter screen (P3), so theirs go
-         * nowhere.
+         * nowhere. An Admin Notice notification carries none of upstream's extras, only its own.
          */
         internal fun fromNotification(
             launchedFromHistory: Boolean,
             flag: (String) -> Boolean,
             text: (String) -> String?
-        ): ChatNavigation? {
+        ): AppNavigation? {
             if (launchedFromHistory) return null
             if (flag(NotificationManager.EXTRA_OPEN_PRIVATE_CHAT)) {
                 val peerID = text(NotificationManager.EXTRA_PEER_ID)?.takeIf { it.isNotBlank() } ?: return null
                 return PrivateChat(peerID, text(NotificationManager.EXTRA_SENDER_NICKNAME))
             }
             if (flag(NotificationManager.EXTRA_OPEN_MESH_CHAT)) return PublicChat
+            if (flag(SystemAdminNoticeNotifier.EXTRA_OPEN_ADMIN_NOTICES)) return AdminNotices
             return null
         }
     }
@@ -86,14 +104,14 @@ sealed interface ChatNavigation {
  * Dart is still on its setup or sign-in screens, which recreates the engine too) and goes away with
  * the Activity, so a tap is never replayed into a later launch.
  */
-class PendingChatNavigation : ViewModel() {
-    private val _pending = MutableStateFlow<ChatNavigation?>(null)
-    val pending: StateFlow<ChatNavigation?> = _pending.asStateFlow()
+class PendingAppNavigation : ViewModel() {
+    private val _pending = MutableStateFlow<AppNavigation?>(null)
+    val pending: StateFlow<AppNavigation?> = _pending.asStateFlow()
 
-    fun offer(navigation: ChatNavigation) {
+    fun offer(navigation: AppNavigation) {
         _pending.value = navigation
     }
 
     /** The pending request, now no longer pending; null if there is none. */
-    fun take(): ChatNavigation? = _pending.getAndUpdate { null }
+    fun take(): AppNavigation? = _pending.getAndUpdate { null }
 }

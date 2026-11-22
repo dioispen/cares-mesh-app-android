@@ -113,6 +113,17 @@
   </plurals>
   <string name="mesh_service_channel_name">Mesh 背景服務</string>
   <string name="mesh_service_channel_desc">讓藍牙 mesh 網路在背景持續運作</string>
+  <string name="admin_notice_channel_group">管理端公告</string>
+  <string name="admin_notice_channel_urgent">緊急公告</string>
+  <string name="admin_notice_channel_urgent_desc">管理端發布的撤離令等緊急指示。會響鈴並震動；開啟勿擾模式時不會響。</string>
+  <string name="admin_notice_channel_important">重要公告</string>
+  <string name="admin_notice_channel_important_desc">管理端發布的重要消息，例如收容所開放。</string>
+  <string name="admin_notice_channel_info">資訊公告</string>
+  <string name="admin_notice_channel_info_desc">管理端發布的一般資訊，不出聲。</string>
+  <string name="admin_notice_title_urgent">緊急公告</string>
+  <string name="admin_notice_title_important">重要公告</string>
+  <string name="admin_notice_title_info">公告</string>
+  <string name="admin_notice_targeted_hidden">有一則給你的公告，解鎖後查看。</string>
   <string name="cd_add_favorite">加入最愛</string>
   <string name="cd_remove_favorite">從最愛移除</string>
   <string name="cd_add_bookmark">新增書籤</string>

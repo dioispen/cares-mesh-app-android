@@ -95,3 +95,7 @@ ui-debug.log
 
 #expriments ble通訊實驗記錄
 docs/experiment/raw
+
+# Admin Notice 的管理端 Ed25519 私鑰（tools/admin-notice/README.md）。預設放在 repo 外面的
+# ~/.config/cares-mesh/admin-notice/，這條只是防止有人把它複製進 repo 後 commit。
+admin-ed25519-*.key

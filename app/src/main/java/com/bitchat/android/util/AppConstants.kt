@@ -79,6 +79,9 @@ object AppConstants {
         // Upper bound on senders whose signing key is remembered, after they leave, for verifying
         // their synced Health Reports (#95). Well above the sync set's per-sender capacity.
         const val MAX_HEALTH_REPORT_SIGNING_KEYS: Int = 1_000
+        // sync 集合上限 for Admin Notices (docs/ADMIN_NOTICE_V1.md「參數」): past it, the one with the
+        // earliest expiresAt goes. Also bounds what the Inbox keeps to hand a new mesh service (#138).
+        const val ADMIN_NOTICE_CAPACITY: Int = 50
     }
 
     object Fragmentation {

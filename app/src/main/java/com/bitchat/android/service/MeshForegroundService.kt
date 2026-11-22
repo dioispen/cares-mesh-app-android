@@ -19,6 +19,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.bitchat.android.experiment.ExperimentTools
 import com.bitchat.android.flutter.FlutterChatActivity
+import com.bitchat.android.gateway.AdminNoticeListenerRuntime
 import com.bitchat.android.gateway.MeshGatewayRuntime
 import com.bitchat.android.R
 import com.bitchat.android.mesh.BluetoothMeshService
@@ -134,6 +135,7 @@ class MeshForegroundService : Service() {
     private var isShuttingDown: Boolean = false
     private var lastNotifiedPeerCount: Int? = null
     private var gateway: MeshGatewayRuntime? = null
+    private var adminNoticeListener: AdminNoticeListenerRuntime? = null
     private var standingReportResender: Job? = null
 
     /**
@@ -183,6 +185,9 @@ class MeshForegroundService : Service() {
         // The Gateway (#111) writes verified Health Reports to Firestore for as long as the mesh
         // service runs, so it keeps working with the App's screens closed.
         gateway = MeshGatewayRuntime.start(applicationContext)
+        // The Gateway's inbound direction (#136): Admin Notices from Firestore reach the Inbox, and
+        // are notified, while the App's screens are closed.
+        adminNoticeListener = AdminNoticeListenerRuntime.start()
 
         // A raised SOS or an injury report is sent again every 30 min while it stands, so it
         // does not expire from the mesh after 2 h, screens closed or not (ADR-0012).
@@ -472,6 +477,8 @@ class MeshForegroundService : Service() {
         ExperimentTools.onMeshServiceDestroyed()
         gateway?.stop()
         gateway = null
+        adminNoticeListener?.stop()
+        adminNoticeListener = null
         standingReportResender?.cancel()
         standingReportResender = null
         // Cancel the service coroutine scope to prevent leaks

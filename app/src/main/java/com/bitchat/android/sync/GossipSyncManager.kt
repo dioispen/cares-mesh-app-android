@@ -13,8 +13,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Gossip-based synchronization manager using on-demand GCS filters.
- * Tracks seen public packets (ANNOUNCE, broadcast MESSAGE, broadcast HEALTH_REPORT) and
- * periodically requests sync from neighbors. Responds to REQUEST_SYNC by sending missing packets.
+ * Tracks seen public packets (ANNOUNCE, broadcast MESSAGE, broadcast HEALTH_REPORT), and the
+ * Admin Notices (0x31) the Inbox verified, and periodically requests sync from neighbors.
+ * Responds to REQUEST_SYNC by sending missing packets.
  */
 class GossipSyncManager(
     private val myPeerID: String,
@@ -64,6 +65,12 @@ class GossipSyncManager(
     //   (HEALTH_REPORT_RETENTION_MS), not with the sender's announcement: a Reporter whose phone
     //   died or who walked out of range is exactly when the report still needs relaying.
     private val latestHealthReportBySender = ConcurrentHashMap<String, Pair<String, BitchatPacket>>()
+    // - admin notices (0x31): one per messageId (the senderID), kept until the expiresAt the Inbox
+    //   handed in with it. Only notices whose Administrators' signature the Inbox verified get
+    //   here (onAdminNoticeSeen); onPublicPacketSeen never takes a 0x31.
+    private val adminNoticesByMessageId = ConcurrentHashMap<String, HeldAdminNotice>()
+
+    private class HeldAdminNotice(val id: String, val packet: BitchatPacket, val expiresAtMs: Long)
 
     private var periodicJob: Job? = null
     private var cleanupJob: Job? = null
@@ -87,6 +94,7 @@ class GossipSyncManager(
                     delay(com.bitchat.android.util.AppConstants.Sync.CLEANUP_INTERVAL_MS)
                     pruneStaleAnnouncements()
                     pruneExpiredHealthReports()
+                    pruneExpiredAdminNotices()
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { Log.e(TAG, "Periodic cleanup error: ${e.message}") }
             }
@@ -105,7 +113,8 @@ class GossipSyncManager(
         }
         latestAnnouncementByPeer.clear()
         latestHealthReportBySender.clear()
-        Log.d(TAG, "Cleared all gossip sync messages, announcements and health reports")
+        adminNoticesByMessageId.clear()
+        Log.d(TAG, "Cleared all gossip sync messages, announcements, health reports and admin notices")
     }
 
     fun scheduleInitialSync(delayMs: Long = 5_000L) {
@@ -186,6 +195,35 @@ class GossipSyncManager(
         }
     }
 
+    /**
+     * An Admin Notice (0x31) the Inbox verified, as its normalized outer packet: offered to
+     * neighbors that lack it until [expiresAtMs] (docs/ADMIN_NOTICE_V1.md「Gossip sync」). The
+     * timestamp is the issuedAt, so the expiry comes from the caller; this layer never parses the
+     * payload. Targeted notices come here too: relays cannot read them, but late recipients need them.
+     */
+    fun onAdminNoticeSeen(packet: BitchatPacket, expiresAtMs: Long) {
+        if (packet.type != MessageType.ADMIN_NOTICE.value) return
+        if (expiresAtMs <= nowMs()) return
+        val messageId = packet.senderID.joinToString("") { b -> "%02x".format(b) }
+        val id = PacketIdUtil.computeIdHex(packet)
+        adminNoticesByMessageId[messageId] = HeldAdminNotice(id, packet, expiresAtMs)
+        // Enforce capacity (drop the notice expiring first, which may be this one)
+        while (adminNoticesByMessageId.size > AppConstants.Sync.ADMIN_NOTICE_CAPACITY) {
+            val first = adminNoticesByMessageId.entries.minByOrNull { it.value.expiresAtMs } ?: break
+            adminNoticesByMessageId.remove(first.key, first.value)
+        }
+    }
+
+    /**
+     * Stops offering the Admin Notice [messageId] (16 hex characters): one a later notice replaced
+     * or withdrew is removed at once (「被取代的公告立即移除」, #139).
+     */
+    fun removeAdminNotice(messageId: String) {
+        if (adminNoticesByMessageId.remove(messageId.lowercase()) != null) {
+            Log.d(TAG, "Removed admin notice $messageId from the sync set")
+        }
+    }
+
     private fun sendRequestSync() {
         val payload = buildGcsPayload()
 
@@ -259,7 +297,17 @@ class GossipSyncManager(
             }
         }
 
-        // 3) Broadcast messages: send all they lack
+        // 3) Admin notices: the packet alone. Its senderID is a messageId, not a peer, so there is
+        //    no ANNOUNCE to send ahead of it (ADR-0006, ADR-0011)
+        for (held in heldAdminNotices()) {
+            val idBytes = hexToBytes(held.id)
+            if (!mightContain(idBytes)) {
+                sendSyncReply(fromPeerID, held.packet.copy(ttl = AppConstants.SYNC_TTL_HOPS))
+                Log.d(TAG, "Sent sync admin notice ${held.packet.senderID.toHexString()} to $fromPeerID")
+            }
+        }
+
+        // 4) Broadcast messages: send all they lack
         val toSendMsgs = synchronized(messages) { messages.values.toList() }
         for (pkt in toSendMsgs) {
             val idBytes = PacketIdUtil.computeIdBytes(pkt)
@@ -313,7 +361,8 @@ class GossipSyncManager(
     }
 
     internal fun buildGcsPayload(): ByteArray {
-        // Collect candidates: latest announcement and health report per peer + recent broadcast messages
+        // Collect candidates: latest announcement and health report per peer, held admin notices
+        // + recent broadcast messages
         val list = ArrayList<BitchatPacket>()
         // announcements
         for ((_, pair) in latestAnnouncementByPeer) {
@@ -325,6 +374,8 @@ class GossipSyncManager(
             list.add(pair.second)
             cachedAnnouncementOfHeldReport(sender)?.let(list::add)
         }
+        // admin notices
+        heldAdminNotices().mapTo(list) { it.packet }
         // messages
         synchronized(messages) {
             list.addAll(messages.values)
@@ -396,6 +447,22 @@ class GossipSyncManager(
             }
         }
         if (pruned > 0) Log.d(TAG, "Pruned $pruned expired health reports")
+    }
+
+    // Periodically remove admin notices whose expiresAt has come
+    internal fun pruneExpiredAdminNotices() {
+        val now = nowMs()
+        var pruned = 0
+        for ((messageId, held) in adminNoticesByMessageId.entries) {
+            if (held.expiresAtMs <= now && adminNoticesByMessageId.remove(messageId, held)) pruned++
+        }
+        if (pruned > 0) Log.d(TAG, "Pruned $pruned expired admin notices")
+    }
+
+    // Until the next cleanup, an expired notice is still stored: never send or advertise it
+    private fun heldAdminNotices(): List<HeldAdminNotice> {
+        val now = nowMs()
+        return adminNoticesByMessageId.values.filter { it.expiresAtMs > now }
     }
 
     // The checks above test for a held Health Report and then remove the announcement in two

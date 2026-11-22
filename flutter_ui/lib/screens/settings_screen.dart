@@ -301,6 +301,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             PlatformException(code: SettingsErrors.panicIncomplete) =>
               '無法確認聊天紀錄已刪除，Mesh 已暫停運作。帳號與本機個人資料沒有清除，請再試一次。',
             PlatformException(code: SettingsErrors.panicInProgress) => '已經有一次清除正在進行，請稍候。',
+            PlatformException(code: AdminNoticeErrors.keyStoreUnavailable) =>
+              '無法刪除管理員公告的收件金鑰。帳號與本機個人資料沒有清除，請再試一次。',
+            PlatformException(code: AdminNoticeErrors.noticeStoreUnavailable) =>
+              '無法刪除這支手機上給你的管理員公告。帳號與本機個人資料沒有清除，請再試一次。',
             _ => '清除時發生錯誤：${_describe(e)}\n請再試一次。',
           }),
           actions: [

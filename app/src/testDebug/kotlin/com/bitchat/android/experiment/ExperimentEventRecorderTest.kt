@@ -235,6 +235,31 @@ class ExperimentEventRecorderTest {
     }
 
     @Test
+    fun `Admin Notices, whole or in fragments, never become rows`() {
+        // senderID is the notice's messageId, not a phone in the experiment (ADR-0011, #137).
+        val notice = BitchatPacket(
+            type = MessageType.ADMIN_NOTICE.value,
+            ttl = 7u,
+            senderID = "a1b2c3d4e5f60718",
+            payload = ByteArray(600) { (it % 251).toByte() }
+        )
+        val fragments = com.bitchat.android.mesh.FragmentManager().createFragments(notice)
+        val events = listOf(notice) + fragments
+
+        events.forEach { packet ->
+            recorder.onReceived(packet, LINK_A)
+            recorder.onDuplicate(packet, LINK_B)
+            recorder.onBroadcastWritten(packet, wireBytes = 256, fanout = 2)
+            recorder.onBroadcastDropped(packet)
+            recorder.onSyncSent(packet, NEIGHBOUR)
+            recorder.onSendQueueFull(LINK_A, packet.toBinaryData(padding = false)!!)
+        }
+
+        assertEquals(2, fragments.size)
+        assertEquals(emptyList<String>(), rows)
+    }
+
+    @Test
     fun `our experiment Health Report writes are reported with their fanout`() {
         val written = mutableListOf<Pair<Long, Int>>()
         val reporting = ExperimentEventRecorder(
