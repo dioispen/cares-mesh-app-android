@@ -5,7 +5,7 @@ ADR-0003 把 Health Report 分成 Broadcast Tier 與 Detail Tier，後端則由 
 - **Detail Tier**（`health_reports/{uid}`）：姓名、居住區域、Status 與傷勢細項、**精確座標**、回報時間，以及互助任務的 `taskStatus`／`helperId`。**任何登入帳號都能讀**。
 - **Sensitive Tier**（`health_report_sensitive/{uid}`）：電話、血型、病史、緊急聯絡人。只有 Reporter 本人，以及**此刻正擔任這筆 Mutual-aid Task 之 Helper 的 Verified Rescuer** 讀得到；放棄或完成任務後就讀不到。只解鎖自己接的那幾筆。
 
-Verified Rescuer 沿用 #33 的 `rescuers/{uid}` 名單，只能由後台授予。任何人都能接任務成為 Helper，認證只是讀 Sensitive Tier 的必要條件。BLE 的 Broadcast Tier 不變。
+Verified Rescuer 沿用 #33 的 `rescuers/{uid}` 名單，只能由後台授予。任何人都能接任務成為 Helper，認證只是讀 Sensitive Tier 的必要條件。BLE 的 Broadcast Tier 與 Detail Tier 共用同一份精確座標（ADR-0008），其餘欄位不在 mesh 上。
 
 ## Considered Options
 
@@ -17,7 +17,7 @@ Verified Rescuer 沿用 #33 的 `rescuers/{uid}` 名單，只能由後台授予�
 
 ## Consequences
 
-- **姓名與精確座標對任何登入帳號公開，而註冊是開放的。** 任何人註冊後都能知道誰在哪裡受傷——這是為了讓附近的人能趕過去而刻意接受的取捨，隱私政策需寫明。
+- **姓名與精確座標對任何登入帳號公開，而註冊是開放的。** 任何人註冊後都能知道誰在哪裡受傷——這是為了讓附近的人能趕過去而刻意接受的取捨，隱私政策需寫明。精確座標在 mesh 上也公開，不需要帳號；同一份 Health Report 兩邊都看得到的人，能把 Reporter Handle 對到這裡的姓名（ADR-0008）。
 - **#33 對 `health_reports` 的讀取限制被取代**，`rescuers` 名單的意義從「整批讀取全部回報」變成「讀 Sensitive Tier 的必要條件」。
 - **規則擋得了之後的讀取，收不回已讀到的內容**：Helper 放棄或完成任務後，先前讀到手機上的電話等資料仍在對方裝置上。
 - **Detail Tier 文件用 `keys().hasOnly()` 鎖住欄位**，避免日後有人把敏感欄位加回這份大家都讀得到的文件。現有的舊文件都含有 `phone`／`bloodType`：#60 之前以 `add()` 寫的隨機 ID 文件，在新規則下會對所有登入帳號公開；#60 版本寫的 `{uid}` 文件除此之外，還會讓 Reporter 再回報時被規則擋下。這些舊資料**不遷移，部署新規則前要從後台清掉整個 `health_reports`**。

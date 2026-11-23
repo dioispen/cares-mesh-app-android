@@ -20,5 +20,5 @@
 - **規則鎖住巢狀 map 的鍵**：最外層的 `keys().hasOnly()` 擋不到 `survey` 裡的內容，所以 `firestore.rules` 另以 `mapFieldHasOnly()` 限制 `survey` 只能有 `detailSurveyKeys()`、`surveySensitive` 只能有 `sensitiveSurveyKeys()`。日後要新增題目，必須先決定它屬於哪一層，再同時改模型（`HealthSurvey.toDetailMap`／`toSensitiveMap`）與規則。
 - **兩份文件的調查欄位刻意不同名**（`survey`／`surveySensitive`），維持「兩份文件除了 `reporterId` 不共用任何欄位」的不變式（`health_report_test`）。
 - **只改調查、不改 Status 與傷勢時不重置互助任務**：`taskStatus`／`helperId` 的重置條件仍是 Status 或傷勢改變（`contentChanged`），更新「需要的協助」不會讓已經在路上的 Helper 丟掉任務。
-- **調查內容不進 BLE 廣播**：Broadcast Tier 仍只有 handle、Status、geohash 與時間（ADR-0003）。
+- **調查內容不進 BLE 廣播**：Broadcast Tier 仍只有 handle、Status、SOS、精確座標與時間（ADR-0003、ADR-0008）。
 - 隱私政策第 2 節同步列出新增的項目與其所屬的層級。

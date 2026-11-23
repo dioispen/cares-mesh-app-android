@@ -1,7 +1,7 @@
 # Mesh Gateway 規格
 
 > 狀態：已實作（#108–#113），待實機驗收（第 10 節）。實作與草案不同之處已併入本文。
-> 決策紀錄：[ADR-0008](adr/0008-broadcast-tier-geohash-precision-6.md)（geohash 精度 6）、[ADR-0009](adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)（Gateway 只代傳 Broadcast Tier、由 Kotlin 寫 Firestore）。
+> 決策紀錄：[ADR-0008](adr/0008-broadcast-tier-carries-precise-location.md)（Broadcast Tier 帶精確座標；本文件的 geohash-6 格式待實作時改寫）、[ADR-0009](adr/0009-gateway-uploads-broadcast-tier-from-kotlin.md)（Gateway 只代傳 Broadcast Tier、由 Kotlin 寫 Firestore）。
 > 前提：ADR-0003（分層揭露）、ADR-0004（SOS 是 Health Report 上的標記，實作見 #105，須先合併）、ADR-0005（Detail／Sensitive Tier）、ADR-0006（驗簽 key 快取）。
 > 領域語彙見 [CONTEXT.md](../CONTEXT.md)；本文新增 **Gateway** 與 **Administrator**。
 

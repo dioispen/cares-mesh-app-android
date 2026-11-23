@@ -1,6 +1,6 @@
 # SOS 是 Health Report 上的標記，不是獨立的廣播內容
 
-SOS 原本是另一條路徑：只寫入 Firestore 的 `sos_requests`，斷網時送不出去，App 內也沒有任何畫面讀取。我們把 SOS 改定為 **Health Report 上的標記**：與 Health Report 共用 `HEALTH_REPORT` 封包與 `HealthReportPayload`，在 payload 加一個 SOS 欄位並把 `VERSION` 升為 2；Firestore 端同樣改為 `health_reports` 文件上的欄位。理由是 SOS 要廣播的內容（reporter handle、geohash、時間）與 Broadcast Tier 完全相同，兩者只差「是否請求救援」——這是同一份回報的屬性，不是另一種結構的內容。
+SOS 原本是另一條路徑：只寫入 Firestore 的 `sos_requests`，斷網時送不出去，App 內也沒有任何畫面讀取。我們把 SOS 改定為 **Health Report 上的標記**：與 Health Report 共用 `HEALTH_REPORT` 封包與 `HealthReportPayload`，在 payload 加一個 SOS 欄位並把 `VERSION` 升為 2；Firestore 端同樣改為 `health_reports` 文件上的欄位。理由是 SOS 要廣播的內容（reporter handle、位置、時間）與 Broadcast Tier 完全相同，兩者只差「是否請求救援」——這是同一份回報的屬性，不是另一種結構的內容。
 
 ## Considered Options
 
