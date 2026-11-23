@@ -1067,11 +1067,12 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
   const minutesFromNow = (m) =>
     Timestamp.fromMillis(Math.floor((Date.now() + m * 60_000) / 1000) * 1000);
   const meshReport = (extra = {}) => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     reporterHandle: HANDLE,
     status: '未宣告',
     sos: true,
-    geohash: 'wsqqqq',
+    lat: 25.033,
+    lng: 121.5654,
     reportTime: minutesFromNow(-1),
     uploadedAt: serverTimestamp(),
     gatewayUid: GATEWAY,
@@ -1124,8 +1125,14 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
       await assertSucceeds(upload(meshReport()));
     });
 
-    it('geohash 與 announcement 可以是 null', async () => {
-      await assertSucceeds(upload(meshReport({ geohash: null, announcement: null })));
+    it('沒有位置時 lat、lng 都是 null；announcement 可以是 null', async () => {
+      await assertSucceeds(upload(meshReport({ lat: null, lng: null, announcement: null })));
+    });
+
+    it('座標是整數也可以，地球的邊界也合法', async () => {
+      await assertSucceeds(upload(meshReport({ lat: 25, lng: 121 })));
+      await assertSucceeds(upload(meshReport({ reporterHandle: 'a1b2c3d4e5f0', lat: -90, lng: 180 }), GATEWAY, 'a1b2c3d4e5f0'));
+      await assertSucceeds(upload(meshReport({ reporterHandle: 'a1b2c3d4e5f1', lat: 90, lng: -180 }), GATEWAY, 'a1b2c3d4e5f1'));
     });
 
     it('Status 與 SOS 的其他合法組合都可以建立（ADR-0004）', async () => {
@@ -1151,11 +1158,12 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
 
     it('多餘欄位被擋', async () => {
       await uploadFails({ name: 'Alice' });
-      await uploadFails({ lat: 25.0339, lng: 121.5645 });
+      // schemaVersion 1 的 geohash 欄位已經換成 lat／lng（ADR-0008）
+      await uploadFails({ geohash: 'wsqqqm' });
     });
 
-    it('缺欄位被擋（geohash、announcement 沒有值也要寫 null）', async () => {
-      for (const field of ['geohash', 'announcement', 'senderPeerId', 'rawPacket', 'schemaVersion']) {
+    it('缺欄位被擋（lat、lng、announcement 沒有值也要寫 null）', async () => {
+      for (const field of ['lat', 'lng', 'announcement', 'senderPeerId', 'rawPacket', 'schemaVersion']) {
         const { [field]: _, ...rest } = meshReport();
         await assertFails(upload(rest));
       }
@@ -1180,10 +1188,15 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
       await uploadFails({ sos: null });
     });
 
-    it('geohash 不是 null 也不是 6 碼被擋', async () => {
-      await uploadFails({ geohash: 'wsqqq' });
-      await uploadFails({ geohash: 'wsqqqqq' });
-      await uploadFails({ geohash: 123456 });
+    it('★ 只有一個座標、座標不是數字或超出地球範圍被擋', async () => {
+      await uploadFails({ lat: null });
+      await uploadFails({ lng: null });
+      await uploadFails({ lat: '25.033' });
+      await uploadFails({ lng: true });
+      await uploadFails({ lat: 90.0000001 });
+      await uploadFails({ lat: -90.0000001 });
+      await uploadFails({ lng: 180.0000001 });
+      await uploadFails({ lng: -180.0000001 });
     });
 
     it('★ Handle 格式錯誤或不等於文件 ID 被擋', async () => {
@@ -1193,9 +1206,12 @@ describe('mesh_reports（#111：Gateway 代傳的 Health Report，只給 Adminis
       await uploadFails({ reporterHandle: '0123456789ab' });
     });
 
-    it('schemaVersion 必須是 1', async () => {
-      await uploadFails({ schemaVersion: 2 });
-      await uploadFails({ schemaVersion: '1' });
+    it('schemaVersion 必須是 2（舊版 Gateway 的 geohash 文件被擋）', async () => {
+      await uploadFails({ schemaVersion: 1 });
+      await uploadFails({ schemaVersion: 3 });
+      await uploadFails({ schemaVersion: '2' });
+      const { lat: _lat, lng: _lng, ...withoutLocation } = meshReport();
+      await assertFails(upload({ ...withoutLocation, schemaVersion: 1, geohash: 'wsqqqm' }));
     });
 
     it('uploadedAt 必須是伺服器時間', async () => {

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:geolocator/geolocator.dart';
 
 import '../models/health_report.dart' show BroadcastHealthReport, statusUndeclared;
+import '../protocol/ble_packet_decoder.dart' show coordinateToE7;
 
 /// 互救任務的進度。Firestore 上以 [TaskStatus.name] 存放（waiting / accepted / done）。
 enum TaskStatus { waiting, accepted, done }
@@ -27,8 +28,8 @@ class MutualAidTask {
   /// 對方的居住區域（Detail Tier）。BLE 任務與沒填的回報為 null。
   final String? area;
 
-  /// 對方的座標。沒有回報位置時為 null —— 導航按鈕要據此決定能不能按。
-  /// BLE 任務放的是 geohash 還原的概略中心，不是精確位置（ADR-0003）。
+  /// 對方的精確座標。沒有回報位置時為 null —— 導航按鈕要據此決定能不能按。
+  /// BLE 任務與後端任務一樣是精確座標（ADR-0008）。
   final double? lat;
   final double? lng;
 
@@ -146,8 +147,9 @@ typedef ReportEntry = ({String id, Map<String, dynamic> data});
 ///   都列出（[isMutualAidTask]）。
 /// * 排除自己的回報——自己的狀態在「我的狀態」頁，不該出現在待救援清單。
 ///   [currentUserId] 還沒讀到時一律不顯示任何 Firestore 任務，否則會閃出自己那筆。
-/// * Firestore 與 BLE 的任務不合併：一邊以 uid、一邊以 Reporter Handle 識別，系統刻意無從得知
-///   兩者是不是同一人，同一位 Reporter 可能出現兩筆（ADR-0010）。
+/// * 後端與 BLE 上的同一份 Health Report 只列一筆（[sameHealthReport]，ADR-0010）：列後端那筆，
+///   它有姓名，進度也是其他 Rescuer 看得到的那一份。BLE 那筆在本機的進度不再使用。兩邊是不同的
+///   Health Report 時（例如 Reporter 上傳後只能經 mesh 更新），同一位 Reporter 仍是兩筆。
 /// * SOS 排最前面；同一組內近的排前面，距離未知的排最後——未知不等於 0 公里，
 ///   不該插隊到最前面。
 List<MutualAidTask> buildMutualAidTasks({
@@ -181,9 +183,7 @@ List<MutualAidTask> buildMutualAidTasks({
             : '未知',
         userId: reporterId,
         injury: injury,
-        location: hasLocation
-            ? '緯度 ${lat.toStringAsFixed(4)}, 經度 ${lng.toStringAsFixed(4)}'
-            : '位置未提供',
+        location: hasLocation ? _locationLabel(lat, lng) : '位置未提供',
         area: (data['area'] as String?)?.trim().isNotEmpty == true
             ? data['area'] as String
             : null,
@@ -201,8 +201,10 @@ List<MutualAidTask> buildMutualAidTasks({
     }
   }
 
+  final backendTasks = [...tasks];
   for (final bleTask in bleTasks) {
     if (!isMutualAidTask(bleTask.injury, sos: bleTask.sos)) continue;
+    if (backendTasks.any((backend) => sameHealthReport(backend, bleTask))) continue;
     tasks.add(bleTask.copyWith(
       status: bleStatusOverrides[bleTask.id] ?? bleTask.status,
     ));
@@ -219,6 +221,31 @@ List<MutualAidTask> buildMutualAidTasks({
   });
   return tasks;
 }
+
+/// 後端的一筆與 BLE 的一筆是不是同一份 Health Report（ADR-0010）：精確座標、`reportTime`、Status
+/// 與 SOS 全部相同。
+///
+/// * 座標以線路的解析度比較：後端的 `lat`／`lng` 用與原生端相同的規則換成 1e-7 度的整數
+///   （[coordinateToE7]）。
+/// * `reportTime` 比到秒：mesh 上只帶到秒，後端存到毫秒。兩邊是 Reporter 送出時的同一個時間。
+/// * Status 與 SOS 也要相同：座標與時間相同、內容卻不同，代表其中一份不是 Reporter 送的。
+/// * 任一邊沒有位置或時間就不算同一份：只剩 Status 與時間可比，不足以斷定是同一個人，寧可兩筆
+///   都列，也不藏掉一個真實的求救。
+bool sameHealthReport(MutualAidTask backend, MutualAidTask ble) {
+  final (bLat, bLng, mLat, mLng) = (backend.lat, backend.lng, ble.lat, ble.lng);
+  final (bTime, mTime) = (backend.reportTime, ble.reportTime);
+  if (bLat == null || bLng == null || mLat == null || mLng == null) return false;
+  if (bTime == null || mTime == null) return false;
+  return coordinateToE7(bLat) == coordinateToE7(mLat) &&
+      coordinateToE7(bLng) == coordinateToE7(mLng) &&
+      bTime.millisecondsSinceEpoch ~/ 1000 == mTime.millisecondsSinceEpoch ~/ 1000 &&
+      backend.injury == ble.injury &&
+      backend.sos == ble.sos;
+}
+
+/// 任務清單上的座標，後端與 BLE 任務同一個格式。
+String _locationLabel(double lat, double lng) =>
+    '緯度 ${lat.toStringAsFixed(4)}, 經度 ${lng.toStringAsFixed(4)}';
 
 /// 這份回報是不是互救任務：帶 SOS 的不論 Status 都是，否則只有 [mutualAidInjuries]。
 bool isMutualAidTask(String status, {required bool sos}) =>
@@ -293,21 +320,19 @@ List<BroadcastHealthReport> mergeBleReport(
   return [...current]..[index] = incoming;
 }
 
-/// 一份 BLE 收到的回報在清單上的樣子。只有 Broadcast Tier：沒有名字、聯絡方式，位置是 geohash
-/// 還原的概略中心（ADR-0003）。距離用 [myLat]／[myLng] 現算，所以會跟著自己的位置更新。
+/// 一份 BLE 收到的回報在清單上的樣子。只有 Broadcast Tier：沒有名字、聯絡方式，位置是精確座標
+/// （ADR-0008）。距離用 [myLat]／[myLng] 現算，所以會跟著自己的位置更新。
 MutualAidTask bleTaskFrom(BroadcastHealthReport report, {required double? myLat, required double? myLng}) {
-  final hasLocation = report.approxLat != null && report.approxLng != null;
+  final (lat, lng) = (report.lat, report.lng);
   return MutualAidTask(
     id: 'ble_${report.reporterHandle}',
     name: '匿名回報 ${report.reporterHandle.substring(0, 4)}',
     userId: report.reporterHandle,
     injury: report.status,
-    location: hasLocation
-        ? '概略位置 ${report.approxLat!.toStringAsFixed(2)}, ${report.approxLng!.toStringAsFixed(2)}'
-        : '位置未提供',
-    lat: report.approxLat,
-    lng: report.approxLng,
-    distanceKm: distanceKmBetween(myLat, myLng, report.approxLat, report.approxLng),
+    location: lat != null && lng != null ? _locationLabel(lat, lng) : '位置未提供',
+    lat: lat,
+    lng: lng,
+    distanceKm: distanceKmBetween(myLat, myLng, lat, lng),
     note: '來自 BLE 廣播・聯絡資訊需另行請求',
     isBle: true,
     sos: report.sos,

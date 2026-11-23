@@ -26,7 +26,7 @@ class ExperimentEventRecorderTest {
     )
 
     private fun healthReport(sender: String, handle: String = "abcdef012345", ttl: UByte = 6u): BitchatPacket {
-        val payload = HealthReportPayload(handle, HealthStatus.SAFE, "", 1_700_000_000_000L).encode()
+        val payload = HealthReportPayload(handle, HealthStatus.SAFE, null, 1_700_000_000_000L).encode()
         return HealthReportBroadcast.packet(sender, payload, ttl, timestamp = 1_700_000_000_123L)
     }
 

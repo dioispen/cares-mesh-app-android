@@ -23,7 +23,7 @@
 
 ## 1. 摘要
 
-1. **格式**：從約 150 bytes、含姓名、電話、血型與公尺級座標的明文，改為 ≤ 20 bytes 的 **Broadcast Tier**，不含任何可識別個人的欄位（ADR-0003、ADR-0008）。隱私修正同時縮小了封包。
+1. **格式**：從約 150 bytes、含姓名、電話、血型與公尺級座標的明文，改為 ≤ 21 bytes 的 **Broadcast Tier**，不含姓名與聯絡方式（ADR-0003）。隱私修正同時縮小了封包。位置一度降為 geohash，後來改回精確座標，與後端共用同一份（ADR-0008）。
 2. **SOS 併入 Health Report**：SOS 成為 payload 上的一個旗標，不是另一種封包（ADR-0004）。撤回 SOS 就是送一份不帶旗標的新回報。
 3. **送達從一層變成三層**：原本只有即時 flood（當時 TTL 3，現為 7）。現在加上：
    - anti-entropy 同步：一跳一跳補送，不受 TTL 限制，每份保留 2 小時；
@@ -65,6 +65,7 @@
 | 2026-11-21 | P1-5、P1-6：連線門檻、背景掃描與廣播 | `89ad4b6a`、`52d0ef09`、`76170b1d` | ADR-0013 | 分支、待驗 |
 | 2026-11-21 | P1-7：TTL 門檻參數化；Health Report 的 TTL 改為具名常數 | `365f2529`、`518272f0` | #1 R13、#14 | 分支 |
 | 2026-11-23 | Health Report 與物資封包的 TTL 從 3 改為 7，與上游 bitchat 相同 | — | ADR-0014、#14 | `feat/broadcast-ttl-upstream-default` |
+| 2026-11-23 | Broadcast Tier 改帶精確座標，payload 升為 v3；`mesh_reports` 改為 `lat`／`lng`；互助任務合併後端與 mesh 上的同一份 Health Report | — | ADR-0008、ADR-0010、#150 | `feat/broadcast-precise-location` |
 
 ---
 
@@ -77,11 +78,11 @@ Health Report 走 bitchat 原有的 `BitchatPacket`，只新增一個訊息類�
 ```
 header        version 1 | type 0x30 | TTL 1 | timestamp 8 | flags 1 | payloadLength 2   (14 bytes)
 senderID      8 bytes，發送裝置的 peerID
-payload       ContentTag 0x01 (1 byte) + Broadcast Tier (≤ 20 bytes)
+payload       ContentTag 0x01 (1 byte) + Broadcast Tier (≤ 21 bytes)
 signature     64 bytes，Ed25519；計算時 TTL 以 0 代入，中繼可以改 TTL，改不了其他欄位
 ```
 
-- 試跑時的實際大小：不帶 geohash 的實驗封包是 101 bytes，帶 geohash-6 時推算為 107 bytes。遠小於 512 bytes 的分片門檻，所以 Health Report 不會被分片，不受「分片逐片擲骰」影響（機制概覽第 1 節）。
+- 試跑時的實際大小：不帶 geohash 的實驗封包是 101 bytes，帶 geohash-6 時推算為 107 bytes。v3 沒有位置時少 1 byte，帶精確座標時比 geohash-6 多 1 byte。遠小於 512 bytes 的分片門檻，所以 Health Report 不會被分片，不受「分片逐片擲骰」影響（機制概覽第 1 節）。
 - `ContentTag` 的作用是讓同一個 0x30 類型將來能承載不同結構的內容。`MessageHandler.handleTaggedBroadcast()` 會在交給 Flutter 前剝掉它。
   - 2026-05 引入時，沒有 tag 的封包會退回舊解碼。
   - 2026-10（#11）改為未知或缺少 tag 一律丟棄。否則一個新 tag 是否被誤當成 Health Report，只取決於第一個 byte 剛好不是合法的 payload 版本。
@@ -93,27 +94,27 @@ signature     64 bytes，Ed25519；計算時 TTL 以 0 代入，中繼可以改 
 | 原始（2026-03～08） | reporterId、姓名、電話、血型、Status 中文字串、自由文字、經緯度（double）、ISO-8601 時間字串；明文，沒有版本位元組 | 約 150 bytes | — |
 | v1（2026-08） | 版本位元組、6-byte Reporter Handle、Status enum、geohash-5、Unix 秒 | ≤ 18 bytes | ADR-0003 |
 | v2（2026-10-22） | 加 flags byte（bit0 = SOS）；Status 多一個值「未宣告」 | ≤ 19 bytes | ADR-0004 |
-| v2 + geohash-6（2026-10-26） | geohash 精度 5 → 6，版本不變 | ≤ 20 bytes | ADR-0008 |
+| v2 + geohash-6（2026-10-26） | geohash 精度 5 → 6，版本不變 | ≤ 20 bytes | ADR-0008 原本的決定 |
+| v3（2026-11-23） | geohash 換成精確座標：flags bit1 = 有位置，兩個 int32（1e-7 度）；只接受 v3 | ≤ 21 bytes（沒有位置時 13） | ADR-0008 |
 
-### 3.3 現行的 Broadcast Tier（v2）
+### 3.3 現行的 Broadcast Tier（v3）
 
 | 位置 | 欄位 | 大小 | 說明 |
 |---|---|---|---|
-| 0 | version | 1 | 目前為 2；版本 1 仍可解碼，視為沒有 SOS |
+| 0 | version | 1 | 目前為 3；版本 1、2（geohash）一律拒收 |
 | 1–6 | reporterHandle | 6 | 隨機產生，不可由帳號、電話、姓名反推 |
 | 7 | status | 1 | 0 安全、1 輕傷、2 重傷、3 未宣告（`HealthStatus` 是唯一的對照表） |
-| 8 | flags | 1 | bit0 = SOS；其他位元送出填 0、接收忽略 |
-| 9 | geohashLen | 1 | 只能是 0 或 6 |
-| 10–15 | geohash | 0 或 6 | ASCII base32；geohash-6 在台灣約 0.6 × 1.1 km，對應村里層級 |
-| 末 4 | reportTime | 4 | Unix 秒，Reporter 做出這個陳述的時間 |
+| 8 | flags | 1 | bit0 = SOS，bit1 = 有位置；其他位元送出填 0、接收忽略 |
+| 9–16 | lat、lng | 0 或 8 | 兩個 big-endian int32，單位 1e-7 度（約 1.1 cm）；與後端 `health_reports` 是同一組座標 |
+| 末 4 | reportTime | 4 | Unix 秒，Reporter 做出這個陳述的時間；與後端是同一個時間 |
 
-**解碼端一律拒收、不做盡力解析**：未知版本、geohash 長度不是 0 或 6、「未宣告」沒帶 SOS、「安全」帶了 SOS。
+**解碼端一律拒收、不做盡力解析**：未知版本、長度與 flags 不符、座標超出 ±90°／±180°、「未宣告」沒帶 SOS、「安全」帶了 SOS。
 
 **單一真相來源**：Kotlin（`DisasterReportTest`）與 Dart（`health_report_payload_test.dart`）讀同一組權威向量，任一端格式走樣，測試就會失敗（PLAN R6）。
 
 ### 3.4 格式變更的相容性代價
 
-- v1 → v2、geohash 5 → 6 之後，新舊版裝置互相解不開對方的**所有** Health Report：不顯示、不上傳。
+- v1 → v2、geohash 5 → 6、v2 → v3（精確座標）之後，新舊版裝置互相解不開對方的**所有** Health Report：不顯示、不上傳。
   - 簽章正確的封包仍會照常轉發與同步，因為 Relay Decision 不讀 payload（5.1 節）。
   - 原型階段所有裝置一起更新，可以接受；實機實驗期間不能混用版本。
 - 外層 bitchat 格式完全沒改，iOS bitchat 節點照樣能轉發 0x30 封包。
@@ -435,7 +436,7 @@ flowchart TD
 | 重發的位置會過時 | Reporter 移動後，Rescuer 要以 `reportTime` 判斷陳述與位置有多舊 | ADR-0012 |
 | 藍牙關閉時 mesh 仍算在執行 | 這時送出的 Health Report 沒有鄰居直接收到，要等連上後經同步補送 | P0-1 |
 | 時鐘快超過 10 分鐘的手機 | 回報仍即時 flood，但不進任何同步暫存，晚到的 Rescuer 收不到 | ADR-0012 |
-| 版本不相容 | payload 升版本、改 geohash 精度，新舊版裝置都會互相拒收全部 Health Report | ADR-0004、ADR-0008 |
+| 版本不相容 | payload 升版本、改位置格式，新舊版裝置都會互相拒收全部 Health Report | ADR-0004、ADR-0008 |
 | 每跳補送最多等 30 秒 | 跨多跳的分區重新連上時，回報抵達遠端約需「跳數 × 30 秒」 | 機制概覽第 4 節 |
 | 大型 mesh 的 flood 負載 | 網路規模超過 10 時，TTL 7 的前 3 代轉發跳過轉發機率，成立中的回報重發也一樣；實機量不到，交給模擬 | ADR-0014 |
 | iOS 節點 | 能轉發 0x30 封包；iOS 的廣播沒有 service data，不會觸發以強換弱 | ADR-0013 |

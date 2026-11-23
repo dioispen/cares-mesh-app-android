@@ -646,14 +646,15 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         // 實機實驗（#70）的封包照常轉發與量測，但不是真的有人回報：聊天與 Health 畫面都不顯示。
         if (ExperimentHandles.isExperimentHandle(report.reporterHandle)) return
 
-        // 1. Notify UI —— 只帶 Broadcast Tier：Status 與近似位置，不含任何 PII。
+        // 1. Notify UI —— 只帶 Broadcast Tier：Status 與精確座標（ADR-0008），沒有姓名與聯絡方式。
         //    同一則陳述（Reporter Handle、reportTime 都相同）只交一次：Reporter 的裝置會以新的封包
         //    重發成立中的回報（ADR-0012）。聊天列本來就依 id 去重，但每交一次就會再震動一次。
         if (chatHealthReports.isNew(report)) {
-            val approx = report.approximateLatLng()
-            val locationText = if (approx != null) {
-                // Locale.US 固定用小數點，避免逗號小數的地區把座標對格式化成四個數字
-                String.format(java.util.Locale.US, "約 %.3f, %.3f", approx.first, approx.second)
+            val location = report.location
+            val locationText = if (location != null) {
+                // Locale.US 固定用小數點，避免逗號小數的地區把座標對格式化成四個數字。
+                // 小數 6 位約 0.1 m，已經比手機 GPS 準。
+                String.format(java.util.Locale.US, "%.6f, %.6f", location.lat, location.lng)
             } else {
                 "位置未提供"
             }

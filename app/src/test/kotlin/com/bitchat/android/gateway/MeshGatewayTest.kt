@@ -2,6 +2,7 @@ package com.bitchat.android.gateway
 
 import android.os.Build
 import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.protocol.ReportLocation
 import com.bitchat.android.protocol.HealthStatus
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -484,7 +485,7 @@ class MeshGatewayTest {
         sos: Boolean = true,
         rawPacket: ByteArray = byteArrayOf(0x01, 0x30)
     ) = GatewayReport(
-        payload = HealthReportPayload(handle, HealthStatus.SEVERE, "wsqqqm", reportTimeMs, sos),
+        payload = HealthReportPayload(handle, HealthStatus.SEVERE, ReportLocation(250_330_000, 1_215_654_000), reportTimeMs, sos),
         senderPeerID = "0102030405060708",
         rawPacket = rawPacket,
         announcement = null

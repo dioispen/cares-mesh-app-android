@@ -9,6 +9,7 @@ import com.bitchat.android.mesh.VerifiedHealthReportBridge
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.BroadcastContentTag
 import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.protocol.ReportLocation
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.service.MeshServicePreferences
@@ -186,7 +187,7 @@ class MeshGatewayRuntimeTest {
         senderID = ByteArray(8) { (it + 1).toByte() },
         timestamp = reportTimeMs.toULong(),
         payload = byteArrayOf(BroadcastContentTag.HEALTH_REPORT.value) +
-            HealthReportPayload("abcdef012345", HealthStatus.SEVERE, "wsqqqm", reportTimeMs, sos = true).encode(),
+            HealthReportPayload("abcdef012345", HealthStatus.SEVERE, ReportLocation(250_330_000, 1_215_654_000), reportTimeMs, sos = true).encode(),
         signature = ByteArray(64) { 7 },
         ttl = 3u
     )

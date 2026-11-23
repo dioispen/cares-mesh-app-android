@@ -25,7 +25,7 @@ final _user = AppUser(
 );
 
 /// 一份交給 mesh 的 Broadcast Tier。
-typedef _Broadcast = ({String handle, String status, double? lat, double? lng, bool sos});
+typedef _Broadcast = ({String handle, String status, double? lat, double? lng, bool sos, DateTime reportTime});
 
 void main() {
   late InMemoryHealthReportStore store;
@@ -38,8 +38,9 @@ void main() {
   /// 依序卡住接下來的廣播，直到測試放行；用來重現先發動的動作晚完成。
   late List<Completer<void>> broadcastGates;
 
-  HealthReportPublisher newPublisher() => HealthReportPublisher(
+  HealthReportPublisher newPublisher({DateTime Function() now = DateTime.now}) => HealthReportPublisher(
     store: store,
+    now: now,
     // 離線的寫入不會完成；測試不必真的等 8 秒。
     uploadTimeout: const Duration(milliseconds: 20),
     broadcast:
@@ -49,11 +50,12 @@ void main() {
           required double? lat,
           required double? lng,
           required bool sos,
+          required DateTime reportTime,
         }) async {
           final error = broadcastError;
           if (error != null) throw error;
           if (broadcastGates.isNotEmpty) await broadcastGates.removeAt(0).future;
-          broadcasts.add((handle: reporterHandle, status: status, lat: lat, lng: lng, sos: sos));
+          broadcasts.add((handle: reporterHandle, status: status, lat: lat, lng: lng, sos: sos, reportTime: reportTime));
         },
   );
 
@@ -477,7 +479,11 @@ void main() {
 
       await existing.raiseSos(_user, lat: 25.0, lng: 121.5);
 
-      expect(broadcasts.single, (handle: 'abcdef012345', status: '未宣告', lat: 25.0, lng: 121.5, sos: true));
+      final sent = broadcasts.single;
+      expect(
+        (sent.handle, sent.status, sent.lat, sent.lng, sent.sos),
+        ('abcdef012345', '未宣告', 25.0, 121.5, true),
+      );
     });
   });
 
@@ -644,6 +650,42 @@ void main() {
 
       await publisher.withdrawSos(_user);
       expect(store.detail.keys.toSet().difference(detailKeys), isEmpty);
+    });
+  });
+  group('後端與 mesh 用同一份位置與回報時間（ADR-0008、ADR-0010）', () {
+    /// 每問一次就往後走一秒：只要哪一條路另外取時間，兩邊就會差上一秒以上。
+    DateTime Function() ticking() {
+      var t = DateTime.utc(2026, 11, 23, 8);
+      return () => t = t.add(const Duration(seconds: 1));
+    }
+
+    test('調查表', () async {
+      publisher = newPublisher(now: ticking());
+
+      await publisher.submitSurvey(_user, status: '重傷', survey: const HealthSurvey(), lat: 25.033, lng: 121.5654);
+
+      final sent = broadcasts.single;
+      expect(DateTime.parse(store.detail['reportTime'] as String), sent.reportTime);
+      expect((store.detail['lat'], store.detail['lng']), (sent.lat, sent.lng));
+    });
+
+    test('舉起 SOS', () async {
+      publisher = newPublisher(now: ticking());
+
+      await publisher.raiseSos(_user, lat: 25.033, lng: 121.5654);
+
+      final sent = broadcasts.single;
+      expect(DateTime.parse(store.detail['reportTime'] as String), sent.reportTime);
+      expect((store.detail['lat'], store.detail['lng']), (sent.lat, sent.lng));
+    });
+
+    test('撤回 SOS', () async {
+      publisher = newPublisher(now: ticking());
+      await publisher.raiseSos(_user, lat: 25.033, lng: 121.5654);
+
+      await publisher.withdrawSos(_user, lat: 25.033, lng: 121.5654);
+
+      expect(DateTime.parse(store.detail['reportTime'] as String), broadcasts.last.reportTime);
     });
   });
 }

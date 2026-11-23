@@ -3,6 +3,7 @@ package com.bitchat.android.service
 import android.os.Build
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.protocol.ReportLocation
 import com.bitchat.android.protocol.HealthStatus
 import com.bitchat.android.util.AppConstants
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -248,7 +249,7 @@ class StandingReportRebroadcasterTest {
         reporterHandle: String = handle
     ): BitchatPacket {
         // reportTime is when the Reporter made the statement; re-sends never change it
-        val payload = HealthReportPayload(reporterHandle, status, "wsqqqm", reportTimeMillis = at, sos = sos).encode()
+        val payload = HealthReportPayload(reporterHandle, status, ReportLocation(250_330_000, 1_215_654_000), reportTimeMillis = at, sos = sos).encode()
         return HealthReportBroadcast.packet(myPeerID, payload, timestamp = at).copy(signature = SIGNATURE)
     }
 

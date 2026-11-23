@@ -50,7 +50,7 @@ MutualAidTask _bleTask({
       name: '匿名回報 ${handle.substring(0, 4)}',
       userId: handle,
       injury: injury,
-      location: '概略位置',
+      location: '位置未提供',
       distanceKm: distanceKm,
       note: '來自 BLE 廣播',
       isBle: true,
@@ -225,18 +225,108 @@ void main() {
       expect(tasks.single.isBle, isTrue);
     });
 
-    test('Firestore 與 BLE 的任務不合併，同一位 Reporter 可能出現兩筆（ADR-0010）', () {
-      // Firestore 以 uid、BLE 以 Reporter Handle 識別，系統刻意無從得知兩者是不是同一人。
-      // 就算值剛好相同也不能拿來合併。
-      final tasks = buildMutualAidTasks(
-        reports: [_report(id: 'aaaaaaaaaaaa', status: '重傷')],
-        bleTasks: [_bleTask(handle: 'aaaaaaaaaaaa')],
-        currentUserId: 'me',
-        myLat: null,
-        myLng: null,
-      );
+    group('後端與 BLE 上的同一份 Health Report 只列一筆（ADR-0010）', () {
+      // 同一份 Health Report：Reporter 送出時，後端存到毫秒，mesh 只帶到秒；座標是同一組。
+      const backendTime = '2026-11-23T08:00:00.123Z';
+      final meshTime = DateTime.utc(2026, 11, 23, 8);
 
-      expect([for (final t in tasks) t.isBle], unorderedEquals([false, true]));
+      // mesh 上的座標是 1e-7 度的整數，解碼後就是這個值。
+      MutualAidTask heard({
+        double? lat = 250330000 / 10000000,
+        double? lng = 1215654000 / 10000000,
+        String status = '重傷',
+        bool sos = true,
+        DateTime? at,
+      }) =>
+          bleTaskFrom(
+            BroadcastHealthReport(
+              reporterHandle: 'abcdef012345',
+              status: status,
+              sos: sos,
+              lat: lat,
+              lng: lng,
+              reportTime: at ?? meshTime,
+            ),
+            myLat: null,
+            myLng: null,
+          );
+
+      ReportEntry uploaded({
+        double? lat = 25.033,
+        double? lng = 121.5654,
+        String status = '重傷',
+        bool sos = true,
+        String reportTime = backendTime,
+      }) =>
+          _report(
+            id: 'alice',
+            status: status,
+            sos: sos,
+            lat: lat,
+            lng: lng,
+            reportTime: reportTime,
+            taskStatus: 'accepted',
+            helperId: 'bob',
+          );
+
+      List<MutualAidTask> build(ReportEntry report, MutualAidTask ble) => buildMutualAidTasks(
+            reports: [report],
+            bleTasks: [ble],
+            currentUserId: 'me',
+            myLat: null,
+            myLng: null,
+            bleStatusOverrides: {ble.id: TaskStatus.done},
+          );
+
+      test('只列後端那筆：有姓名，進度是其他 Rescuer 看得到的那一份，本機在 BLE 那筆的進度不用', () {
+        final tasks = build(uploaded(), heard());
+
+        expect(tasks, hasLength(1));
+        expect(tasks.single.isBle, isFalse);
+        expect(tasks.single.name, '小明');
+        expect(tasks.single.status, TaskStatus.accepted);
+        expect(tasks.single.helperId, 'bob');
+      });
+
+      test('座標以 1e-7 度比較：後端的座標照原生端的規則四捨五入', () {
+        expect(build(uploaded(lat: 25.03300004), heard()), hasLength(1));
+        expect(build(uploaded(lat: 25.03300006), heard()), hasLength(2));
+        expect(build(uploaded(lng: 121.5654001), heard()), hasLength(2));
+      });
+
+      test('回報時間比到秒', () {
+        expect(build(uploaded(reportTime: '2026-11-23T08:00:00.999Z'), heard()), hasLength(1));
+        expect(build(uploaded(reportTime: '2026-11-23T08:00:01Z'), heard()), hasLength(2));
+      });
+
+      test('Status 或 SOS 不同就是不同的 Health Report，兩筆都列', () {
+        expect(build(uploaded(status: '輕傷'), heard()), hasLength(2));
+        expect(build(uploaded(sos: false), heard()), hasLength(2));
+      });
+
+      test('兩邊不同步時仍是兩筆：Reporter 上傳之後只經 mesh 送了較新的一份', () {
+        final tasks = build(uploaded(), heard(at: meshTime.add(const Duration(minutes: 20))));
+
+        expect([for (final t in tasks) t.isBle], unorderedEquals([false, true]));
+      });
+
+      test('任一邊沒有位置就不合併：只剩時間與 Status，不足以斷定是同一個人', () {
+        expect(build(uploaded(lat: null, lng: null), heard(lat: null, lng: null)), hasLength(2));
+        expect(build(uploaded(), heard(lat: null, lng: null)), hasLength(2));
+        expect(build(uploaded(lat: null, lng: null), heard()), hasLength(2));
+      });
+
+      test('看不到後端那筆（還沒登入）時，BLE 那筆照列', () {
+        final tasks = buildMutualAidTasks(
+          reports: [uploaded()],
+          bleTasks: [heard()],
+          currentUserId: null,
+          myLat: null,
+          myLng: null,
+        );
+
+        expect(tasks.single.isBle, isTrue);
+      });
     });
 
     test('組任務不會就地改動傳進來的 BLE 任務物件', () {
@@ -510,13 +600,13 @@ void main() {
   });
 
   group('bleTaskFrom', () {
-    test('只有 Broadcast Tier：匿名、概略位置，距離隨自己的位置現算', () {
+    test('只有 Broadcast Tier：匿名、精確座標，距離隨自己的位置現算', () {
       final report = BroadcastHealthReport(
         reporterHandle: 'abcdef012345',
         status: '重傷',
         sos: true,
-        approxLat: 25.0478,
-        approxLng: 121.5170,
+        lat: 25.0478,
+        lng: 121.5170,
         reportTime: DateTime.utc(2026, 11, 14),
       );
 
@@ -526,7 +616,9 @@ void main() {
       expect(near.name, '匿名回報 abcd');
       expect(near.isBle, isTrue);
       expect(near.sos, isTrue);
-      expect(near.location, '概略位置 25.05, 121.52');
+      // 與後端任務同一個格式（ADR-0008）
+      expect(near.location, '緯度 25.0478, 經度 121.5170');
+      expect((near.lat, near.lng), (25.0478, 121.5170));
       expect(near.distanceKm, lessThan(far.distanceKm!));
       expect(bleTaskFrom(report, myLat: null, myLng: null).distanceKm, isNull);
     });

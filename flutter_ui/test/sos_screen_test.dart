@@ -92,7 +92,7 @@ void main() {
       final store = InMemoryHealthReportStore();
       final publisher = HealthReportPublisher(
         store: store,
-        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos}) async {},
+        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos, required reportTime}) async {},
       );
       // 測試裡沒有定位外掛，所以這次沒有位置。
       await openSosScreen(tester, publisher: publisher);
@@ -154,7 +154,7 @@ void main() {
       final sent = <String>[];
       final publisher = HealthReportPublisher(
         store: store,
-        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos}) async {
+        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos, required reportTime}) async {
           sent.add(status);
         },
       );
@@ -172,7 +172,7 @@ void main() {
     testWidgets('誰都沒收到撤回時要說出來，SOS 仍在', (tester) async {
       final publisher = HealthReportPublisher(
         store: InMemoryHealthReportStore()..writeError = StateError('denied'),
-        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos}) async {
+        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos, required reportTime}) async {
           throw StateError('mesh');
         },
       );
@@ -190,7 +190,7 @@ void main() {
       final publisher = HealthReportPublisher(
         store: store,
         uploadTimeout: const Duration(milliseconds: 1),
-        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos}) async {},
+        broadcast: ({required reporterHandle, required status, required lat, required lng, required sos, required reportTime}) async {},
       );
       await openSosScreen(tester, raisedAt: DateTime.now(), publisher: publisher);
 

@@ -379,10 +379,13 @@ class BitchatBridge {
 
   /// 經 BLE mesh 廣播一份 Health Report 的 Broadcast Tier。
   ///
-  /// 只帶不具識別性的欄位：[reporterHandle]、[status]（中文 label）、[sos]，以及原始
-  /// [lat]/[lng]（由原生端就地降精度為 geohash）。姓名、電話、血型、自由文字等 Detail Tier
-  /// 欄位不會、也不該進入廣播（見 ADR-0003）。「未宣告」只能和 [sos] 一起送，「安全」不能帶
-  /// [sos]（ADR-0004），否則原生回 [HealthReportErrors.invalidFormat]。
+  /// 只帶 Broadcast Tier 的欄位：[reporterHandle]、[status]（中文 label）、[sos]、[reportTime]，
+  /// 以及精確的 [lat]/[lng]（與 Detail Tier 同一份，ADR-0008）。姓名、電話、血型、自由文字等
+  /// Detail Tier 欄位不會、也不該進入廣播（見 ADR-0003）。「未宣告」只能和 [sos] 一起送，「安全」
+  /// 不能帶 [sos]（ADR-0004），否則原生回 [HealthReportErrors.invalidFormat]。
+  ///
+  /// [reportTime] 必須是寫進後端的同一個時間：互助任務以座標與時間比對後端與 mesh 上的同一份
+  /// Health Report（ADR-0010）。線路上只留到秒。
   ///
   /// 正常完成才表示原生已把它交給 mesh 廣播。沒有送出時往上拋，呼叫端必須讓使用者知道附近的人
   /// 收不到：[PlatformException] 是原生回報的原因（錯誤碼見 [HealthReportErrors]）；
@@ -393,6 +396,7 @@ class BitchatBridge {
     required double? lat,
     required double? lng,
     required bool sos,
+    required DateTime reportTime,
   }) =>
       _method.invokeMethod<void>('sendHealthReport', <String, dynamic>{
         'reporterHandle': reporterHandle,
@@ -400,6 +404,7 @@ class BitchatBridge {
         'lat': lat,
         'lng': lng,
         'sos': sos,
+        'reportTimeMs': reportTime.millisecondsSinceEpoch,
       });
 
   /// 經 BLE mesh 廣播一筆物資需求（[action] 為 `request`）或捐贈（`offer`）。
