@@ -110,13 +110,16 @@ git log 632ee88..main          # 修改的逐筆紀錄與日期
 | [Firebase Android SDK](https://firebase.google.com/) / `firebase_core`、`firebase_auth`、`cloud_firestore` | 使用者驗證與資料儲存 |
 | `flutter_map`、`flutter_map_cache`、`dio_cache_interceptor_hive_store` | 離線地圖 |
 | `geolocator`、`connectivity_plus`、`shared_preferences`、`path_provider`、`url_launcher` | 平台功能 |
-| `video_player`、`flutter_inappwebview`、`flutter_tts`、`uuid`、`http`、`cupertino_icons` | UI 與工具 |
+| `video_player`、`flutter_tts`、`uuid`、`http`、`cupertino_icons` | UI 與工具 |
+| `sqflite` | 讀取離線瓦片包（MBTiles） |
 
 Dart 套件的完整清單與版本見 [`flutter_ui/pubspec.yaml`](flutter_ui/pubspec.yaml)。
 
 ### 素材
 
 `flutter_ui/assets/` 下的吉祥物圖片、防災知識圖片與影片為本組自行製作或取得授權使用。**若其中有任何素材來自第三方，必須在此逐項補上來源與授權。**
+
+`flutter_ui/assets/data/` 的避難所、公共設施與公車站資料來自第三方開放資料，來源與授權**尚待確認**，見 [docs/offline-map-tiles.md](docs/offline-map-tiles.md#避難所與公共設施資料來源待確認)。
 
 ---
 
