@@ -58,9 +58,9 @@ updates:
         exclude-patterns: [gradle-wrapper]
 
   # Flutter itself is pinned in TOOLCHAIN.env and is not managed here. A bump
-  # that pulls in a new flutter_inappwebview_android has to redo its patch in
-  # tools/reproducible-builds/apply-pub-cache-patches.sh, which is keyed to
-  # the 1.1.3 file checksums. Plugins with Android code can also add Gradle
+  # that touches a package patched in
+  # tools/reproducible-builds/apply-pub-cache-patches.sh (none today) has to
+  # redo that patch's checksums. Plugins with Android code can also add Gradle
   # artifacts, which then need the same lock and verification refresh as above.
   - package-ecosystem: pub
     directory: /flutter_ui

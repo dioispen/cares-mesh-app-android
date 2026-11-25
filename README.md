@@ -63,11 +63,7 @@ cd cares-mesh-app-android
 # 1. 取得 Flutter 相依套件
 cd flutter_ui && flutter pub get --enforce-lockfile && cd ..
 
-# 2. 修補 PUB_CACHE 中的第三方套件（每台機器做一次；清除 pub cache 後要重做）
-tools/reproducible-builds/apply-pub-cache-patches.sh                                 # macOS / Linux
-PUB_CACHE="$LOCALAPPDATA/Pub/Cache" tools/reproducible-builds/apply-pub-cache-patches.sh   # Windows（Git Bash）
-
-# 3. 建置
+# 2. 建置
 ./gradlew assembleDebug        # per-ABI + universal APK
 ./gradlew :app:installDebug    # 安裝到已連接的裝置（加 :app: 前綴，見下方說明）
 
@@ -75,15 +71,6 @@ PUB_CACHE="$LOCALAPPDATA/Pub/Cache" tools/reproducible-builds/apply-pub-cache-pa
 ./gradlew test                 # Kotlin 單元測試
 cd flutter_ui && flutter test  # Dart 測試
 ```
-
-**為什麼要做第 2 步**：`flutter_inappwebview_android` 1.1.3 呼叫了 AGP 9 已移除的 `getDefaultProguardFile('proguard-android.txt')`。沒修補的話，連 debug 建置都會在 Gradle 設定階段失敗：
-
-```
-A problem occurred evaluating project ':flutter_inappwebview_android'.
-> `getDefaultProguardFile('proguard-android.txt')` is no longer supported ...
-```
-
-pub 沒有 patch 機制，只能改 PUB_CACHE 裡的副本。腳本會比對修補前後的 SHA-256，重複執行不會重複修補，套件改版時也會直接報錯，不會默默套錯。容器建置會自動執行這一步。細節見 [docs/reproducible-builds.md](docs/reproducible-builds.md#patching-third-party-dart-packages)。
 
 `assembleDebug` / `assembleRelease` 會產生分 ABI 的 APK（arm64、x86_64、armeabi-v7a、x86）加上一個 universal APK；`bundleRelease` 會關閉 split（由 Play Store 處理 ABI 分發）。
 

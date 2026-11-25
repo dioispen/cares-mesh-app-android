@@ -60,19 +60,6 @@ patch_package_file() {
   echo "patched $package/$relative_path"
 }
 
-# flutter_inappwebview_android 1.1.3 is the newest stable release and still
-# calls getDefaultProguardFile('proguard-android.txt'). AGP 9 removed that file
-# outright because it carries -dontoptimize, and offers no compatibility flag,
-# so configuring :flutter_inappwebview_android aborts the whole build. The
-# optimize variant is what every current template uses.
-#
-# These proguardFiles sit in the plugin's own buildTypes block. An Android
-# library contributes rules to a consuming app through consumerProguardFiles,
-# not through these, so the substitution does not change the rules that reach
-# this app's release build.
-patch_package_file \
-  flutter_inappwebview_android-1.1.3 \
-  android/build.gradle \
-  82b483da0a2885adb5b5a5601bdad16289a0a68631b596ffb1001b6016fc0690 \
-  25661c285c7e2204b595849e5b6cc92380765820e7f91567e26bc2a771e9627e \
-  "s/getDefaultProguardFile('proguard-android.txt')/getDefaultProguardFile('proguard-android-optimize.txt')/g"
+# No patches are currently needed. The flutter_inappwebview_android patch
+# (getDefaultProguardFile under AGP 9) went away with that dependency; add new
+# patch_package_file calls here when another package needs one.

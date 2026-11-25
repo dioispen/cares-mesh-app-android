@@ -236,13 +236,16 @@ Gradle invocation. Each patch pins **both** checksums — the pristine file and 
 patched result — so an upstream release that changes the file fails loudly
 instead of being silently re-patched, and an already-patched cache is left alone.
 
-Exactly one patch remains: `flutter_inappwebview_android` 1.1.3 calls
-`getDefaultProguardFile('proguard-android.txt')`, which AGP 9 removed outright
-with no compatibility flag. There is no configuration-side alternative. Four of
-the original five edits were replaced by the root `build.gradle.kts` hook
-described above, which is the strongly preferred route: a checksum-pinned patch
-has to be re-reviewed and re-checksummed on every package upgrade, whereas the
-hook names no package and no package version and survives upgrades untouched.
+No patches remain. The last one, for `flutter_inappwebview_android` 1.1.3
+(`getDefaultProguardFile('proguard-android.txt')`, which AGP 9 removed), went
+away when the shelter map dropped its WebView and with it that dependency. Four
+of the original five edits had already been replaced by the root
+`build.gradle.kts` hook described above, which is the strongly preferred route:
+a checksum-pinned patch has to be re-reviewed and re-checksummed on every
+package upgrade, whereas the hook names no package and no package version and
+survives upgrades untouched. The script stays in place, still run by
+`prepare-flutter-module.sh`, for the next package that has no
+configuration-side alternative.
 
 ## Firebase configuration
 
