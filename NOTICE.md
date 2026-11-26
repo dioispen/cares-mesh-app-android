@@ -119,7 +119,7 @@ Dart 套件的完整清單與版本見 [`flutter_ui/pubspec.yaml`](flutter_ui/pu
 
 `flutter_ui/assets/` 下的吉祥物圖片、防災知識圖片與影片為本組自行製作或取得授權使用。**若其中有任何素材來自第三方，必須在此逐項補上來源與授權。**
 
-`flutter_ui/assets/data/` 的避難所、公共設施與公車站資料來自第三方開放資料，來源與授權**尚待確認**，見 [docs/offline-map-tiles.md](docs/offline-map-tiles.md#避難所與公共設施資料來源待確認)。
+`flutter_ui/assets/data/` 的避難所、公共設施與公車站資料來自第三方開放資料：警察局、消防局依政府資料開放授權條款第 1 版；公車站來自交通部 TDX，須標示原資料提供機關；防空避難所的原始資料授權**尚未確認**。各資料集的來源、日期與授權見 [docs/offline-map-tiles.md](docs/offline-map-tiles.md#地圖設施資料來源授權與更新日期)，App 內則由離線地圖的「資料來源與授權」對話框標示。
 
 ---
 

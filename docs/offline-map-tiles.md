@@ -24,7 +24,7 @@
 
 ## 地圖設施資料來源、授權與更新日期
 
-地圖使用的三份 JSON 由下列來源整理。資料更新日期、下載日期與目錄頁面的 metadata 更新日期是不同概念，請勿互相替代：
+地圖使用的三份 JSON（`flutter_ui/assets/data/` 的 `shelters_tw.json`、`public_facilities_tw.json`、`bus_stops_tw.json`）隨 APK 打包，由 `OfflineShelterService`／`OfflinePublicFacilityService` 在背景 isolate 解析，APK 內經 deflate 壓縮後合計約 3.7 MB。資料由下列來源整理。資料更新日期、下載日期與目錄頁面的 metadata 更新日期是不同概念，請勿互相替代：
 
 | 資料 | 來源與資料日期 | 授權／署名 |
 |---|---|---|
@@ -83,22 +83,6 @@ adb version
 - 拖曳時以合成平移已載入的瓦片與標記，放開後才更新地圖中心並載入新瓦片，避免每個移動事件都重建瓦片元件。
 - `flutter_ui/lib/screens/shelter_screen.dart` 進入整合離線地圖並保留 RouteObserver 設定，不顯示地圖專用小助理選項。
 - 此階段不提供路線規劃或導航。瓦片底圖已整合原有避難所與公共設施資料；正式授權與資料新鮮度確認後再發布。
-
-## 避難所與公共設施資料（來源待確認）
-
-下列資料隨 APK 打包（`pubspec.yaml` 的 `assets/data/`），由 `OfflineShelterService`／`OfflinePublicFacilityService` 在背景 isolate 解析。APK 內經 deflate 壓縮後合計約 3.7 MB。
-
-| 檔案 | 筆數 | 格式 | 推測來源（**待作者確認**） |
-|---|---|---|---|
-| `shelters_tw.json` | 78,947 | `[lat, lng, 名稱]` | 名稱多帶 `(D902000001)`、`(WMA…)` 等編號，疑為警政署防空疏散避難設施 |
-| `public_facilities_tw.json` | 2,718 | `[id, type, lat, lng, 名稱, 地址]` | 消防局 764、警察局 1,687、車站 267；來源未記錄 |
-| `bus_stops_tw.json` | 131,140 | 同上，`type` 皆為 `busStop` | ID 為 `bus:TPE…`、`bus:TAO…` 等縣市代碼，疑為交通部 TDX 公車站位 |
-
-待補事項：
-
-- 各檔的實際來源、資料日期與授權條款；若授權要求署名，需在地圖畫面補回資料來源標示（原 WebView 地圖下方的 `ShelterSourceFooter`，#79，已隨 WebView 移除）。
-- 產生這三個 JSON 的腳本（建議放在 `tools/offline_maps/`），讓資料可重現與更新。
-- 資料清理：部分避難所名稱帶有 `(255.0)` 這類浮點數殘留；`PublicFacilityType.hospital` 目前沒有任何資料。
 
 ## 產生與驗證資料包
 
